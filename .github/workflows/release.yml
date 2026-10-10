@@ -1,18 +1,25 @@
-name: Build and Release
+name: Build Linux Release
 
 on:
   push:
     branches:
       - main
       - master
+
   workflow_dispatch:
 
+# Der Workflow darf Releases erstellen.
 permissions:
   contents: write
 
+# Niemals zwei Releases für denselben Branch gleichzeitig bauen.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  BUILD_TYPE: Release
+  QT_VERSION: "6.8.3"
 
 jobs:
   build:
@@ -20,59 +27,119 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
 
-      - name: Install build dependencies
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # System dependencies
+      # ------------------------------------------------------------
+
+      - name: Install system dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
             cmake \
             ninja-build \
             pkg-config \
+            file \
+            wget \
+            curl \
+            ca-certificates \
+            fuse3 \
+            libfuse2t64 \
             libgl1-mesa-dev \
             libxkbcommon-dev \
-            libxcb-cursor0 \
-            libxcb-xinerama0 \
-            libxcb-xkb1 \
             libxkbcommon-x11-0 \
+            libxcb1 \
+            libxcb-cursor0 \
+            libxcb-glx0 \
             libxcb-icccm4 \
             libxcb-image0 \
             libxcb-keysyms1 \
+            libxcb-randr0 \
             libxcb-render-util0 \
             libxcb-shape0 \
-            libxcb-xinerama0 \
-            libxcb-xkb1 \
-            libxcb-randr0 \
+            libxcb-shm0 \
             libxcb-sync1 \
             libxcb-util1 \
-            libxcb1 \
-            qrencode \
-            file \
-            wget
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libx11-xcb1 \
+            libdbus-1-3 \
+            libfontconfig1 \
+            libfreetype6 \
+            libx11-6 \
+            libxext6 \
+            libxi6 \
+            libxrender1 \
+            libxtst6 \
+            libglib2.0-0 \
+            libegl1 \
+            libopengl0 \
+            libqrencode-dev
+
+      # ------------------------------------------------------------
+      # Qt
+      # ------------------------------------------------------------
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.8.3"
+          version: ${{ env.QT_VERSION }}
           host: linux
           target: desktop
           arch: linux_gcc_64
           cache: true
 
+      - name: Verify Qt
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "QT_ROOT_DIR=$QT_ROOT_DIR"
+
+          echo "PATH=$PATH"
+
+          echo "Searching for qmake..."
+
+          QMAKE_PATH="$(find "$QT_ROOT_DIR" -type f -name qmake -print -quit)"
+
+          if [ -z "$QMAKE_PATH" ]; then
+            echo "::error::qmake was not found in $QT_ROOT_DIR"
+            exit 1
+          fi
+
+          echo "Found qmake:"
+          echo "$QMAKE_PATH"
+
+          "$QMAKE_PATH" --version
+
+          echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------
+      # Rust
+      # ------------------------------------------------------------
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.75.0"
 
-      - name: Show toolchain versions
+      - name: Verify Rust
         run: |
-          cmake --version
-          gcc --version
-          cargo --version
           rustc --version
-          qmake --version || true
+          cargo --version
+
+      # ------------------------------------------------------------
+      # Rust tests
+      # ------------------------------------------------------------
 
       - name: Run Rust tests
         run: |
@@ -81,133 +148,189 @@ jobs:
             --locked \
             --manifest-path history-store/Cargo.toml
 
+      # ------------------------------------------------------------
+      # CMake configure
+      # ------------------------------------------------------------
+
       - name: Configure CMake
         run: |
           cmake \
             -S . \
             -B build \
             -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+
+      # ------------------------------------------------------------
+      # Build
+      # ------------------------------------------------------------
 
       - name: Build
         run: |
           cmake \
             --build build \
-            --config Release \
-            --parallel
-
-      - name: Verify binary
-        run: |
-          test -f build/signal-cli-qt
-          file build/signal-cli-qt
-          chmod +x build/signal-cli-qt
+            --config ${{ env.BUILD_TYPE }} \
+            --parallel "$(nproc)"
 
       # ------------------------------------------------------------
-      # Plain binary
+      # Find and verify executable
       # ------------------------------------------------------------
 
-      - name: Package plain binary
+      - name: Find executable
+        shell: bash
         run: |
-          SHA="${GITHUB_SHA::7}"
+          set -euo pipefail
 
+          echo "Build output:"
+          find build -maxdepth 3 -type f -executable -print
+
+          if [ -f "build/signal-cli-qt" ]; then
+            BINARY="build/signal-cli-qt"
+          elif [ -f "build/bin/signal-cli-qt" ]; then
+            BINARY="build/bin/signal-cli-qt"
+          else
+            echo "::error::Could not find signal-cli-qt binary"
+            exit 1
+          fi
+
+          echo "BINARY=$BINARY" >> "$GITHUB_ENV"
+
+          echo "Using binary:"
+          echo "$BINARY"
+
+          file "$BINARY"
+
+          chmod +x "$BINARY"
+
+      # ------------------------------------------------------------
+      # Prepare distribution directory
+      # ------------------------------------------------------------
+
+      - name: Prepare dist
+        run: |
+          rm -rf dist
           mkdir -p dist
 
-          cp build/signal-cli-qt \
-            "dist/signal-cli-qt-${SHA}-linux-x86_64"
+      # ------------------------------------------------------------
+      # Plain Linux binary
+      # ------------------------------------------------------------
+
+      - name: Package Linux binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          cp "$BINARY" \
+            "dist/signal-cli-qt-${SHORT_SHA}-linux-x86_64"
 
           chmod +x \
-            "dist/signal-cli-qt-${SHA}-linux-x86_64"
+            "dist/signal-cli-qt-${SHORT_SHA}-linux-x86_64"
+
+          file \
+            "dist/signal-cli-qt-${SHORT_SHA}-linux-x86_64"
 
       # ------------------------------------------------------------
-      # AppImage
+      # Download linuxdeploy
       # ------------------------------------------------------------
 
       - name: Download linuxdeploy
+        shell: bash
         run: |
-          wget -q \
-            -O linuxdeploy-x86_64.AppImage \
+          set -euo pipefail
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-all-errors \
+            --output linuxdeploy-x86_64.AppImage \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
 
           chmod +x linuxdeploy-x86_64.AppImage
 
+          ./linuxdeploy-x86_64.AppImage --version || true
+
+      # ------------------------------------------------------------
+      # Download Qt linuxdeploy plugin
+      # ------------------------------------------------------------
+
       - name: Download linuxdeploy Qt plugin
+        shell: bash
         run: |
-          wget -q \
-            -O linuxdeploy-plugin-qt-x86_64.AppImage \
+          set -euo pipefail
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-all-errors \
+            --output linuxdeploy-plugin-qt-x86_64.AppImage \
             https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
 
           chmod +x linuxdeploy-plugin-qt-x86_64.AppImage
 
-      - name: Prepare AppImage
+      # ------------------------------------------------------------
+      # AppDir
+      # ------------------------------------------------------------
+
+      - name: Prepare AppDir
+        shell: bash
         run: |
+          set -euo pipefail
+
           rm -rf AppDir
-          mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/share/applications
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
 
-          cp build/signal-cli-qt AppDir/usr/bin/signal-cli-qt
-          chmod +x AppDir/usr/bin/signal-cli-qt
+          mkdir -p \
+            AppDir/usr/bin \
+            AppDir/usr/share/applications \
+            AppDir/usr/share/icons/hicolor/256x256/apps
 
-          # Create desktop entry if the repository does not provide one.
+          cp "$BINARY" \
+            AppDir/usr/bin/signal-cli-qt
+
+          chmod +x \
+            AppDir/usr/bin/signal-cli-qt
+
           cat > AppDir/usr/share/applications/signal-cli-qt.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
           Name=signal-cli Qt
-          Comment=Native Qt GUI for signal-cli
+          Comment=Qt GUI for signal-cli
           Exec=signal-cli-qt
           Terminal=false
           Categories=Network;InstantMessaging;
           EOF
 
-      - name: Verify Qt installation
-  run: |
-    echo "QT_ROOT_DIR=$QT_ROOT_DIR"
-    echo "PATH=$PATH"
+          echo "AppDir:"
+          find AppDir -type f -print
 
-    which qmake || true
-    which qmake6 || true
+      # ------------------------------------------------------------
+      # Build AppImage
+      # ------------------------------------------------------------
 
-    find "$QT_ROOT_DIR" -type f \( -name qmake -o -name qmake6 \) -print
+      - name: Build AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
 
-    qmake --version || true
-    qmake6 --version || true
+          SHORT_SHA="${GITHUB_SHA::7}"
 
-- name: Build AppImage
-  run: |
-    SHA="${GITHUB_SHA::7}"
+          echo "Qt root:"
+          echo "$QT_ROOT_DIR"
 
-    QMAKE_PATH="$(find "$QT_ROOT_DIR" -type f -name qmake -print -quit)"
+          echo "QMake:"
+          echo "$QMAKE"
 
-    if [ -z "$QMAKE_PATH" ]; then
-      echo "ERROR: qmake was not found in QT_ROOT_DIR=$QT_ROOT_DIR"
-      exit 1
-    fi
+          if [ ! -x "$QMAKE" ]; then
+            echo "::error::QMAKE does not exist or is not executable"
+            exit 1
+          fi
 
-    echo "Using qmake: $QMAKE_PATH"
+          "$QMAKE" --version
 
-    export QMAKE="$QMAKE_PATH"
-
-    "$QMAKE" --version
-
-    ./linuxdeploy-x86_64.AppImage \
-      --appdir AppDir \
-      --desktop-file AppDir/usr/share/applications/signal-cli-qt.desktop \
-      --plugin qt \
-      --output appimage
-
-    APPIMAGE="$(find . -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
-
-    if [ -z "$APPIMAGE" ]; then
-      echo "ERROR: AppImage was not created"
-      exit 1
-    fi
-
-    mv "$APPIMAGE" \
-      "dist/signal-cli-qt-${SHA}-x86_64.AppImage"
-
-    chmod +x \
-      "dist/signal-cli-qt-${SHA}-x86_64.AppImage"
-          SHA="${GITHUB_SHA::7}"
+          echo "Running linuxdeploy..."
 
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
@@ -215,50 +338,114 @@ jobs:
             --plugin qt \
             --output appimage
 
-          APPIMAGE="$(find . -maxdepth 1 -name '*.AppImage' -type f | head -n 1)"
+          APPIMAGE="$(find . -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
 
           if [ -z "$APPIMAGE" ]; then
-            echo "ERROR: AppImage was not created"
+            echo "::error::linuxdeploy did not create an AppImage"
             exit 1
           fi
 
+          echo "Created AppImage:"
+          echo "$APPIMAGE"
+
           mv "$APPIMAGE" \
-            "dist/signal-cli-qt-${SHA}-x86_64.AppImage"
+            "dist/signal-cli-qt-${SHORT_SHA}-x86_64.AppImage"
 
           chmod +x \
-            "dist/signal-cli-qt-${SHA}-x86_64.AppImage"
+            "dist/signal-cli-qt-${SHORT_SHA}-x86_64.AppImage"
 
-      - name: Verify artifacts
+      # ------------------------------------------------------------
+      # Verify AppImage
+      # ------------------------------------------------------------
+
+      - name: Verify AppImage
+        shell: bash
         run: |
-          echo "Artifacts:"
-          ls -lah dist
+          set -euo pipefail
 
-          test -f "dist/signal-cli-qt-${GITHUB_SHA::7}-linux-x86_64"
-          test -f "dist/signal-cli-qt-${GITHUB_SHA::7}-x86_64.AppImage"
+          SHORT_SHA="${GITHUB_SHA::7}"
 
-          file dist/*
+          APPIMAGE="dist/signal-cli-qt-${SHORT_SHA}-x86_64.AppImage"
+          BINARY="dist/signal-cli-qt-${SHORT_SHA}-linux-x86_64"
+
+          test -f "$APPIMAGE"
+          test -x "$APPIMAGE"
+
+          test -f "$BINARY"
+          test -x "$BINARY"
+
+          echo "=== Binary ==="
+          file "$BINARY"
+          ls -lh "$BINARY"
+
+          echo
+          echo "=== AppImage ==="
+          file "$APPIMAGE"
+          ls -lh "$APPIMAGE"
+
+          echo
+          echo "=== AppDir ==="
+          find AppDir -type f -print
+
+      # ------------------------------------------------------------
+      # Checksums
+      # ------------------------------------------------------------
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd dist
+
+          sha256sum * > SHA256SUMS
+
+          cat SHA256SUMS
+
+      # ------------------------------------------------------------
+      # Upload workflow artifacts
+      # ------------------------------------------------------------
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: signal-cli-qt-linux-${{ github.sha }}
+          path: |
+            dist/*
+          if-no-files-found: error
 
       # ------------------------------------------------------------
       # GitHub Release
       # ------------------------------------------------------------
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Build ${{ github.run_number }}
+          tag_name: "build-${{ github.sha }}"
+          name: "Build ${{ github.sha }}"
+          target_commitish: ${{ github.sha }}
+
           body: |
-            Automatic build for commit `${{ github.sha }}`.
+            Automatic Linux x86_64 build.
 
-            Linux x86_64 artifacts:
+            Commit:
+            `${{ github.sha }}`
 
-            - `signal-cli-qt-${{ github.sha }}-linux-x86_64` — plain binary
-            - `signal-cli-qt-${{ github.sha }}-x86_64.AppImage` — self-contained AppImage
+            Artifacts:
 
-            The application still requires `signal-cli` to be installed separately.
+            - `signal-cli-qt-${{ github.sha }}-linux-x86_64`
+            - `signal-cli-qt-${{ github.sha }}-x86_64.AppImage`
+            - `SHA256SUMS`
+
+            The AppImage contains the Qt runtime and required Qt plugins.
+
+            `signal-cli` itself is not bundled and must be installed separately.
+
           draft: false
           prerelease: false
           make_latest: true
+
           files: |
             dist/signal-cli-qt-${{ github.sha }}-linux-x86_64
             dist/signal-cli-qt-${{ github.sha }}-x86_64.AppImage
+            dist/SHA256SUMS
