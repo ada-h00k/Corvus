@@ -27,13 +27,24 @@ def png(w=64, h=48):
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
+nap = float(os.environ.get("MOCK_SLEEP", "0"))      # simulate a slow JVM start
+mode = os.environ.get("MOCK_ACCOUNTS", "ok")        # ok | empty | fail | okexit1
+
 if "--version" in args:
+    time.sleep(nap)
     print("signal-cli 0.13.99")
     sys.exit(0)
 
 if "listAccounts" in args:
+    time.sleep(nap)
+    if mode == "fail":
+        sys.stderr.write("boom: cannot read config\n")
+        sys.exit(3)
+    if mode == "empty":
+        print("[]")
+        sys.exit(0)
     print(json.dumps([{"number": "+491234567"}]))
-    sys.exit(0)
+    sys.exit(1 if mode == "okexit1" else 0)  # valid output but a non-zero exit code
 
 if "jsonRpc" not in args:
     sys.stderr.write("mock: unsupported command %r\n" % (args,))

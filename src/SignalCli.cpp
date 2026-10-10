@@ -1,6 +1,10 @@
 #include "SignalCli.h"
 
 #include <QDir>
+#include <QElapsedTimer>
+#include <QFileInfo>
+#include <QTimer>
+#include <memory>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -25,63 +29,161 @@ QString SignalCli::autodetect()
     return QStandardPaths::findExecutable(QStringLiteral("signal-cli"), extra);
 }
 
-QString SignalCli::runOnce(const QStringList &args, int timeoutMs, QString *error) const
+QString SignalCli::Result::describe() const
 {
-    QProcess p;
-    p.start(m_exe, args);
-    if (!p.waitForStarted(5000)) {
-        if (error) *error = p.errorString();
-        return {};
-    }
-    if (!p.waitForFinished(timeoutMs)) {
-        p.kill();
-        p.waitForFinished(2000);
-        if (error) *error = QStringLiteral("Timed out");
-        return {};
-    }
-    if (p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
-        if (error) *error = QString::fromUtf8(p.readAllStandardError()).trimmed();
-        return {};
-    }
-    return QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+    if (ok) return {};
+    if (!startError.isEmpty()) return QObject::tr("signal-cli could not be started: %1").arg(startError);
+    if (timedOut) return QObject::tr("signal-cli did not answer in time.");
+    QString text = QObject::tr("signal-cli exited with code %1.").arg(exitCode);
+    const QString e = err.trimmed();
+    if (!e.isEmpty()) text += QStringLiteral("\n\n") + (e.size() > 700 ? e.left(700) + QStringLiteral("…") : e);
+    return text;
 }
 
-QString SignalCli::version() const
+QString SignalCli::maskNumbers(const QString &text)
 {
-    return runOnce({QStringLiteral("--version")}).section(QLatin1Char('\n'), 0, 0).trimmed();
+    if (qEnvironmentVariableIsSet("SIGNAL_CLI_QT_DEBUG")) return text;
+    static const QRegularExpression re(QStringLiteral(R"(\+?(\d{2})\d{5,}(\d{2}))"));
+    QString t = text;
+    t.replace(re, QStringLiteral("+\\1…\\2"));
+    return t;
 }
 
-QStringList SignalCli::accounts() const
+QProcessEnvironment SignalCli::childEnvironment(const QProcessEnvironment &base)
+{
+    QProcessEnvironment env = base;
+    const QString appdir = env.value(QStringLiteral("APPDIR"));
+    if (appdir.isEmpty()) return env;
+
+    // Running from an AppImage: drop everything that points into the bundle.
+    const QStringList vars = {QStringLiteral("LD_LIBRARY_PATH"), QStringLiteral("PATH"),
+                              QStringLiteral("QT_PLUGIN_PATH"), QStringLiteral("QML2_IMPORT_PATH"),
+                              QStringLiteral("QT_QPA_PLATFORM_PLUGIN_PATH"), QStringLiteral("XDG_DATA_DIRS"),
+                              QStringLiteral("GSETTINGS_SCHEMA_DIR")};
+    for (const QString &name : vars) {
+        if (!env.contains(name)) continue;
+        QStringList keep;
+        for (const QString &entry : env.value(name).split(QDir::listSeparator(), Qt::SkipEmptyParts))
+            if (!entry.startsWith(appdir)) keep << entry;
+        if (keep.isEmpty())
+            env.remove(name);
+        else
+            env.insert(name, keep.join(QDir::listSeparator()));
+    }
+    return env;
+}
+
+static void logResult(const QString &exe, const QStringList &args, const SignalCli::Result &r)
+{
+    auto show = [](QString t) {
+        t = SignalCli::maskNumbers(t.trimmed());
+        t.replace(QLatin1Char('\n'), QStringLiteral(" ⏎ "));
+        return t.size() > 300 ? t.left(300) + QStringLiteral("…") : t;
+    };
+    QString status = r.ok ? QStringLiteral("ok")
+                   : !r.startError.isEmpty() ? QStringLiteral("START FAILED: ") + r.startError
+                   : r.timedOut ? QStringLiteral("TIMEOUT")
+                   : QStringLiteral("exit code %1").arg(r.exitCode);
+    qInfo().noquote() << "signal-cli:" << QFileInfo(exe).fileName() << args.join(QLatin1Char(' ')) << "->" << status
+                      << QStringLiteral("(%1 ms)").arg(r.ms)
+                      << (r.out.trimmed().isEmpty() ? QString() : QStringLiteral("| stdout: ") + show(r.out))
+                      << (r.err.trimmed().isEmpty() ? QString() : QStringLiteral("| stderr: ") + show(r.err));
+}
+
+void SignalCli::runAsync(const QStringList &args, int timeoutMs, ResultCallback cb)
+{
+    auto *p = new QProcess(this);
+    p->setProcessEnvironment(childEnvironment());
+    auto *timer = new QTimer(p);
+    timer->setSingleShot(true);
+    auto clock = std::make_shared<QElapsedTimer>();
+    clock->start();
+    auto done = std::make_shared<bool>(false);
+    const QString exe = m_exe;
+
+    auto finish = [=](bool timedOut, const QString &startError) {
+        if (*done) return;
+        *done = true;
+        timer->stop();
+        Result r;
+        r.command = exe + QLatin1Char(' ') + args.join(QLatin1Char(' '));
+        r.ms = clock->elapsed();
+        r.timedOut = timedOut;
+        r.startError = startError;
+        r.out = QString::fromUtf8(p->readAllStandardOutput());
+        r.err = QString::fromUtf8(p->readAllStandardError());
+        if (!timedOut && startError.isEmpty()) {
+            r.exitCode = p->exitCode();
+            r.ok = p->exitStatus() == QProcess::NormalExit && r.exitCode == 0;
+        }
+        logResult(exe, args, r);
+        p->deleteLater();
+        if (cb) cb(r);
+    };
+
+    // Signals (not waitForFinished) so a fast process can never be mistaken for a hang.
+    connect(p, &QProcess::finished, this, [finish](int, QProcess::ExitStatus) { finish(false, QString()); });
+    connect(p, &QProcess::errorOccurred, this, [finish, p](QProcess::ProcessError e) {
+        if (e == QProcess::FailedToStart) finish(false, p->errorString());
+    });
+    connect(timer, &QTimer::timeout, this, [finish, p] {
+        p->kill();
+        p->waitForFinished(1000);
+        finish(true, QString());
+    });
+    p->start(m_exe, args);
+    p->closeWriteChannel(); // signal-cli never needs stdin for these commands
+    timer->start(timeoutMs);
+}
+
+void SignalCli::queryVersion(std::function<void(const Result &, const QString &)> cb)
+{
+    runAsync({QStringLiteral("--version")}, 60000, [cb](const Result &r) {
+        cb(r, r.out.section(QLatin1Char('\n'), 0, 0).trimmed());
+    });
+}
+
+QStringList SignalCli::parseAccounts(const QString &out)
 {
     QStringList result;
-    const QString out = runOnce({QStringLiteral("-o"), QStringLiteral("json"), QStringLiteral("listAccounts")});
+    auto add = [&result](const QString &n) {
+        if (!n.isEmpty() && !result.contains(n)) result << n;
+    };
     const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8());
     if (doc.isArray()) {
-        for (const QJsonValue &v : doc.array()) {
-            const QString n = v.toObject().value(QStringLiteral("number")).toString();
-            if (!n.isEmpty()) result << n;
-        }
+        for (const QJsonValue &v : doc.array())
+            add(v.isString() ? v.toString() : v.toObject().value(QStringLiteral("number")).toString());
         return result;
     }
-    // Fallback: plain-text output "Number: +49..."
+    // Fallback: plain text ("Number: +49…") or JSON preceded by warnings
     static const QRegularExpression re(QStringLiteral(R"((\+\d{5,}))"));
     auto it = re.globalMatch(out);
-    while (it.hasNext()) result << it.next().captured(1);
+    while (it.hasNext()) add(it.next().captured(1));
     return result;
+}
+
+void SignalCli::queryAccounts(std::function<void(const Result &, const QStringList &)> cb)
+{
+    runAsync({QStringLiteral("-o"), QStringLiteral("json"), QStringLiteral("listAccounts")}, 60000,
+             [cb](const Result &r) { cb(r, parseAccounts(r.out)); });
 }
 
 void SignalCli::start(const QString &account)
 {
     stop();
     QProcess *p = new QProcess(this);
+    p->setProcessEnvironment(childEnvironment());
     m_proc = p;
     m_buf.clear();
+    m_lastErrLine.clear();
 
     connect(p, &QProcess::readyReadStandardOutput, this, &SignalCli::onStdout);
     connect(p, &QProcess::readyReadStandardError, this, [this, p] {
         const QString s = QString::fromUtf8(p->readAllStandardError());
-        for (const QString &l : s.split(QLatin1Char('\n'), Qt::SkipEmptyParts))
+        for (const QString &l : s.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+            m_lastErrLine = l.trimmed();
             emit logLine(l);
+        }
     });
     connect(p, &QProcess::started, this, &SignalCli::started);
     connect(p, &QProcess::errorOccurred, this, [this, p](QProcess::ProcessError e) {
@@ -96,7 +198,8 @@ void SignalCli::start(const QString &account)
         if (p != m_proc) return;
         m_proc = nullptr;
         p->deleteLater();
-        const QString reason = QStringLiteral("signal-cli exited (exit code %1)").arg(code);
+        QString reason = QStringLiteral("signal-cli exited (exit code %1)").arg(code);
+        if (!m_lastErrLine.isEmpty()) reason += QStringLiteral(": ") + m_lastErrLine;
         failPending(reason);
         emit stopped(reason);
     });

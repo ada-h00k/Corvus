@@ -6,6 +6,7 @@
 #include <QJsonValue>
 #include <QObject>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QStringList>
 #include <functional>
 
@@ -28,10 +29,32 @@ public:
     QString executable() const { return m_exe; }
     void setExecutable(const QString &path) { m_exe = path; }
 
-    // One-shot calls (blocking, short)
-    QString runOnce(const QStringList &args, int timeoutMs = 20000, QString *error = nullptr) const;
-    QString version() const;      // e.g. "signal-cli 0.13.12"
-    QStringList accounts() const; // registered numbers
+    // Result of a one-shot signal-cli call.
+    struct Result {
+        bool ok = false;        // started, exited normally with code 0
+        bool timedOut = false;
+        int exitCode = -1;
+        QString out, err;
+        QString startError;     // set when the process could not be started at all
+        QString command;        // for diagnostics
+        qint64 ms = 0;
+
+        // Human-readable description of what went wrong ("" if ok).
+        QString describe() const;
+    };
+    using ResultCallback = std::function<void(const Result &)>;
+
+    // One-shot calls. They never block the GUI: the callback runs in the event loop.
+    void runAsync(const QStringList &args, int timeoutMs, ResultCallback cb);
+    void queryVersion(std::function<void(const Result &, const QString &version)> cb); // "signal-cli 0.13.12"
+    void queryAccounts(std::function<void(const Result &, const QStringList &accounts)> cb);
+
+    static QStringList parseAccounts(const QString &output);
+    // Environment for child processes: inside an AppImage the library/plugin
+    // paths that point into the bundle are removed so Java etc. are not confused.
+    static QProcessEnvironment childEnvironment(const QProcessEnvironment &base = QProcessEnvironment::systemEnvironment());
+    // Phone numbers are masked in diagnostics unless SIGNAL_CLI_QT_DEBUG is set.
+    static QString maskNumbers(const QString &text);
 
     // Long-running process (JSON-RPC over stdin/stdout)
     void start(const QString &account);
@@ -53,6 +76,7 @@ private:
     QString m_exe;
     QProcess *m_proc = nullptr;
     QByteArray m_buf;
+    QString m_lastErrLine;
     int m_nextId = 1;
     QHash<int, Callback> m_pending;
 };

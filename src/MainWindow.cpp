@@ -257,9 +257,7 @@ void MainWindow::initialise()
         return;
     }
     if (!ensureExecutable()) return;
-    refreshVersion();
-    connectAccount();
-    checkForUpdates(true); // silent check, only shows a hint in the status bar
+    connectAccount(); // asynchronous: version, accounts, then the update hint
 }
 
 bool MainWindow::ensureExecutable()
@@ -297,53 +295,93 @@ void MainWindow::chooseExecutable()
     if (exe.isEmpty()) return;
     QSettings().setValue(QStringLiteral("executable"), exe);
     m_cli.setExecutable(exe);
-    refreshVersion();
-    reconnect();
-}
-
-void MainWindow::refreshVersion()
-{
-    // Read on every (re)connect -> an update of signal-cli
-    // is detected without restarting the GUI.
-    m_version = m_cli.version().section(QLatin1Char(' '), -1);
+    connectAccount();
 }
 
 void MainWindow::connectAccount()
 {
-    QStringList accounts = m_cli.accounts();
-    if (accounts.isEmpty()) {
-        if (QMessageBox::question(this, tr("No account"),
-                                  tr("No account is set up in signal-cli yet.\n"
-                                     "Link this device with your phone now?"))
-            == QMessageBox::Yes) {
-            linkDevice();
-        }
-        return;
-    }
+    // Everything here is asynchronous so the window never freezes while the JVM
+    // behind signal-cli starts. The version is read on every (re)connect, so an
+    // update of signal-cli is noticed without restarting the GUI.
+    const int gen = ++m_connectGen;
+    m_cli.stop();
+    setConnected(false);
+    m_statusLabel->setText(tr("Connecting …"));
 
-    QSettings s;
-    m_account = s.value(QStringLiteral("account")).toString();
-    if (!accounts.contains(m_account)) {
-        if (accounts.size() == 1) {
-            m_account = accounts.first();
-        } else {
-            bool ok = false;
-            m_account = QInputDialog::getItem(this, tr("Choose account"), tr("Account:"), accounts, 0, false, &ok);
-            if (!ok) return;
+    m_cli.queryVersion([this, gen](const SignalCli::Result &r, const QString &version) {
+        if (gen != m_connectGen) return;
+        if (!r.ok) {
+            showCliProblem(tr("signal-cli could not be run."), r);
+            return;
         }
-        s.setValue(QStringLiteral("account"), m_account);
-    }
+        m_version = version.section(QLatin1Char(' '), -1);
 
-    m_view->setSelfKey(m_account);
-    m_cli.start(m_account);
-    setConnected(true);
-    loadContactsAndGroups();
+        m_cli.queryAccounts([this, gen](const SignalCli::Result &r, const QStringList &accounts) {
+            if (gen != m_connectGen) return;
+            // A failing command is NOT "no account": report what actually went wrong.
+            if (!r.ok && accounts.isEmpty()) {
+                showCliProblem(tr("The accounts could not be listed."), r);
+                return;
+            }
+            if (accounts.isEmpty()) {
+                setConnected(false, tr("no account linked"));
+                if (QMessageBox::question(this, tr("No account"),
+                                          tr("signal-cli reports that no account is set up yet.\n"
+                                             "Link this device with your phone now?"))
+                        == QMessageBox::Yes &&
+                    gen == m_connectGen)
+                    linkDevice();
+                return;
+            }
+
+            QSettings s;
+            m_account = s.value(QStringLiteral("account")).toString();
+            if (!accounts.contains(m_account)) {
+                if (accounts.size() == 1) {
+                    m_account = accounts.first();
+                } else {
+                    bool ok = false;
+                    m_account = QInputDialog::getItem(this, tr("Choose account"), tr("Account:"), accounts, 0, false, &ok);
+                    if (!ok) {
+                        setConnected(false, tr("no account chosen"));
+                        return;
+                    }
+                }
+                s.setValue(QStringLiteral("account"), m_account);
+            }
+            if (gen != m_connectGen) return; // reconnect requested while a dialog was open
+
+            m_view->setSelfKey(m_account);
+            m_cli.start(m_account);
+            setConnected(true);
+            loadContactsAndGroups();
+            checkForUpdates(true); // silent: only a hint in the status bar
+        });
+    });
+}
+
+void MainWindow::showCliProblem(const QString &title, const SignalCli::Result &r)
+{
+    setConnected(false, title);
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(tr("signal-cli problem"));
+    box.setText(title + QStringLiteral("\n\n") + r.describe());
+    box.setInformativeText(tr("Command: %1\n\nThis does not mean that no account is linked. Check that the command "
+                              "works in a terminal (the non-native signal-cli build needs Java).")
+                               .arg(SignalCli::maskNumbers(r.command)));
+    QPushButton *retry = box.addButton(tr("Retry"), QMessageBox::AcceptRole);
+    QPushButton *pick = box.addButton(tr("Choose signal-cli …"), QMessageBox::ActionRole);
+    box.addButton(QMessageBox::Close);
+    box.exec();
+    if (box.clickedButton() == retry)
+        QTimer::singleShot(0, this, &MainWindow::connectAccount);
+    else if (box.clickedButton() == pick)
+        chooseExecutable();
 }
 
 void MainWindow::reconnect()
 {
-    m_cli.stop();
-    refreshVersion();
     connectAccount();
 }
 

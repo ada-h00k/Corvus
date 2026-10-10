@@ -58,7 +58,7 @@ private slots:
 private:
     // --- setup / signal-cli
     bool ensureExecutable();
-    void refreshVersion();
+    void showCliProblem(const QString &title, const SignalCli::Result &r);
     void connectAccount();
     void loadContactsAndGroups();
     void setConnected(bool connected, const QString &info = QString());
@@ -112,6 +112,7 @@ private:
     QString m_account;
     QString m_version; // e.g. "0.13.12"
     bool m_showArchived = false;
+    int m_connectGen = 0; // invalidates callbacks of an older connect attempt
     Appearance m_appearance;
 
     Quote m_replyQuote;
