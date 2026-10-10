@@ -159,10 +159,54 @@ jobs:
           Categories=Network;InstantMessaging;
           EOF
 
-      - name: Build AppImage
-        env:
-          QMAKE: ${{ env.Qt6_DIR }}/bin/qmake
-        run: |
+      - name: Verify Qt installation
+  run: |
+    echo "QT_ROOT_DIR=$QT_ROOT_DIR"
+    echo "PATH=$PATH"
+
+    which qmake || true
+    which qmake6 || true
+
+    find "$QT_ROOT_DIR" -type f \( -name qmake -o -name qmake6 \) -print
+
+    qmake --version || true
+    qmake6 --version || true
+
+- name: Build AppImage
+  run: |
+    SHA="${GITHUB_SHA::7}"
+
+    QMAKE_PATH="$(find "$QT_ROOT_DIR" -type f -name qmake -print -quit)"
+
+    if [ -z "$QMAKE_PATH" ]; then
+      echo "ERROR: qmake was not found in QT_ROOT_DIR=$QT_ROOT_DIR"
+      exit 1
+    fi
+
+    echo "Using qmake: $QMAKE_PATH"
+
+    export QMAKE="$QMAKE_PATH"
+
+    "$QMAKE" --version
+
+    ./linuxdeploy-x86_64.AppImage \
+      --appdir AppDir \
+      --desktop-file AppDir/usr/share/applications/signal-cli-qt.desktop \
+      --plugin qt \
+      --output appimage
+
+    APPIMAGE="$(find . -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+
+    if [ -z "$APPIMAGE" ]; then
+      echo "ERROR: AppImage was not created"
+      exit 1
+    fi
+
+    mv "$APPIMAGE" \
+      "dist/signal-cli-qt-${SHA}-x86_64.AppImage"
+
+    chmod +x \
+      "dist/signal-cli-qt-${SHA}-x86_64.AppImage"
           SHA="${GITHUB_SHA::7}"
 
           ./linuxdeploy-x86_64.AppImage \
