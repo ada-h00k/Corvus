@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=signal-cli Qt
+GenericName=Messenger
+Comment=Qt GUI for signal-cli
+Exec=signal-cli-qt
+Icon=signal-cli-qt
+Terminal=false
+Categories=Network;InstantMessaging;Qt;
+Keywords=signal;messenger;chat;
+StartupWMClass=signal-cli-qt

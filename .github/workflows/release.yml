@@ -1,0 +1,143 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create releases
+
+# Never cancel a push build (every commit gets its release),
+# but cancel superseded pull-request builds.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  QT_VERSION: "6.5.3"
+
+jobs:
+  build:
+    # Oldest runner that still works with Qt 6 -> AppImage runs on most distros
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build cmake \
+            libgl1-mesa-dev libglu1-mesa-dev libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-xinerama0 libxcb-shape0 \
+            libfuse2 desktop-file-utils
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "history-store -> ../build/cargo"
+
+      - name: Test encrypted history store
+        run: cargo test --release --locked --manifest-path history-store/Cargo.toml
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/build/cargo
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DSIGNAL_CLI_QT_TESTS=ON
+          cmake --build build
+
+      - name: Run GUI integration test (headless, mock signal-cli)
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package plain binary
+        run: |
+          SHORT="${GITHUB_SHA::7}"
+          mkdir -p dist stage
+          DESTDIR="$PWD/stage" cmake --install build
+          strip stage/usr/bin/signal-cli-qt
+          cp stage/usr/bin/signal-cli-qt "dist/signal-cli-qt-${SHORT}-linux-x86_64"
+          chmod +x "dist/signal-cli-qt-${SHORT}-linux-x86_64"
+
+      - name: Package AppImage
+        run: |
+          SHORT="${GITHUB_SHA::7}"
+          TOOLS="$RUNNER_TEMP/tools"
+          mkdir -p "$TOOLS"
+          wget -q -P "$TOOLS" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x "$TOOLS"/*.AppImage
+
+          rm -rf AppDir
+          DESTDIR="$PWD/AppDir" cmake --install build
+
+          export PATH="$TOOLS:$PATH"
+          export QMAKE="$QT_ROOT_DIR/bin/qmake"
+          export LD_LIBRARY_PATH="$QT_ROOT_DIR/lib:${LD_LIBRARY_PATH:-}"
+          export APPIMAGE_EXTRACT_AND_RUN=1   # no FUSE needed on the runner
+          export LINUXDEPLOY_OUTPUT_VERSION="$SHORT"
+
+          mkdir -p appimage-out
+          (cd appimage-out && "$TOOLS/linuxdeploy-x86_64.AppImage" \
+            --appdir "$GITHUB_WORKSPACE/AppDir" \
+            --desktop-file "$GITHUB_WORKSPACE/AppDir/usr/share/applications/signal-cli-qt.desktop" \
+            --icon-file "$GITHUB_WORKSPACE/AppDir/usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg" \
+            --plugin qt \
+            --output appimage)
+
+          mv appimage-out/*.AppImage "dist/signal-cli-qt-${SHORT}-x86_64.AppImage"
+          chmod +x "dist/signal-cli-qt-${SHORT}-x86_64.AppImage"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-qt-${{ github.sha }}
+          path: dist/*
+
+      - name: Create GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHORT="${GITHUB_SHA::7}"
+          TAG="build-${{ github.run_number }}"
+          {
+            echo "Automated build of commit ${GITHUB_SHA}."
+            echo
+            echo "**Commit message:**"
+            echo
+            git log -1 --pretty=%B
+            echo
+            echo "**Files**"
+            echo
+            echo "- \`signal-cli-qt-${SHORT}-x86_64.AppImage\` – self-contained, bundles Qt ${QT_VERSION}"
+            echo "- \`signal-cli-qt-${SHORT}-linux-x86_64\` – plain binary, needs Qt >= 6.5 (Widgets, Network) installed"
+            echo
+            echo "signal-cli itself is **not** included – install it separately."
+            echo "Chat history is stored encrypted (Argon2id + XChaCha20-Poly1305); keep your passphrase safe."
+          } > release-notes.md
+
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "Build ${{ github.run_number }} (${SHORT})" \
+            --notes-file release-notes.md

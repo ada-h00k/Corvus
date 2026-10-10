@@ -1,0 +1,387 @@
+// Headless end-to-end test: real MainWindow + encrypted Rust store + mock signal-cli.
+#include "ChatView.h"
+#include "EmojiPicker.h"
+#include "MainWindow.h"
+#include "PassphraseDialog.h"
+
+#include <QApplication>
+#include <QClipboard>
+#include <QtTest/QTest>
+#include <QDir>
+#include <QDragEnterEvent>
+#include <QElapsedTimer>
+#include <QThread>
+#include <QDropEvent>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QMessageBox>
+#include <QMimeData>
+#include <QPushButton>
+#include <QSettings>
+#include <QTemporaryDir>
+#include <QTimer>
+#include <QToolButton>
+#include <cstdio>
+#include <cstdlib>
+
+static int g_failed = 0;
+#define CHECK(cond)                                                                    \
+    do {                                                                               \
+        if (!(cond)) {                                                                 \
+            std::printf("  FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond);              \
+            ++g_failed;                                                                \
+        }                                                                              \
+    } while (0)
+
+static const char *kPass = "test-passphrase-1";
+static QString g_unexpectedBox;
+
+static bool waitFor(const std::function<bool()> &cond, int ms = 15000)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!cond()) {
+        if (t.elapsed() > ms) return false;
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(5);
+    }
+    return true;
+}
+
+// Answers the passphrase dialog; records any unexpected message box.
+static void autoDialogs()
+{
+    QWidget *w = QApplication::activeModalWidget();
+    if (!w) return;
+    if (auto *pd = qobject_cast<PassphraseDialog *>(w)) {
+        for (QLineEdit *e : pd->findChildren<QLineEdit *>()) e->setText(QString::fromLatin1(kPass));
+        pd->accept();
+    } else if (auto *mb = qobject_cast<QMessageBox *>(w)) {
+        g_unexpectedBox = mb->text();
+        std::printf("  [unexpected message box] %s\n", qPrintable(mb->text()));
+        std::fflush(stdout);
+        mb->reject();
+    }
+}
+
+static QStringList listTexts(QListWidget *l)
+{
+    QStringList out;
+    for (int i = 0; i < l->count(); ++i) out << l->item(i)->text();
+    return out;
+}
+
+static bool listHas(QListWidget *l, const QString &needle)
+{
+    for (const QString &t : listTexts(l))
+        if (t.contains(needle)) return true;
+    return false;
+}
+
+static void selectItem(QListWidget *l, const QString &needle)
+{
+    for (int i = 0; i < l->count(); ++i)
+        if (l->item(i)->text().contains(needle)) {
+            l->setCurrentRow(i);
+            return;
+        }
+}
+
+static QList<QJsonObject> readLog(const QString &path)
+{
+    QList<QJsonObject> out;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return out;
+    for (const QByteArray &l : f.readAll().split('\n'))
+        if (!l.trimmed().isEmpty()) out << QJsonDocument::fromJson(l).object();
+    return out;
+}
+
+static QJsonObject findCall(const QString &log, const QString &method, int nth = 0)
+{
+    int n = 0;
+    for (const QJsonObject &o : readLog(log))
+        if (o["method"].toString() == method && n++ == nth) return o;
+    return {};
+}
+
+static void inject(const QString &file, const QJsonObject &env)
+{
+    QFile f(file);
+    f.open(QIODevice::Append);
+    f.write(QJsonDocument(env).toJson(QJsonDocument::Compact) + "\n");
+}
+
+static QString html(ChatView *v) { return v->plainText(); }
+
+int main(int argc, char **argv)
+{
+    QApplication app(argc, argv);
+    QApplication::setOrganizationName(QStringLiteral("signal-cli-qt"));
+    QApplication::setApplicationName(QStringLiteral("signal-cli-qt"));
+
+    QTemporaryDir tmp;
+    CHECK(tmp.isValid());
+    qputenv("XDG_DATA_HOME", (tmp.path() + "/data").toUtf8());
+    qputenv("XDG_CONFIG_HOME", (tmp.path() + "/config").toUtf8());
+    QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, tmp.path() + "/config");
+    QSettings().setValue("executable", QStringLiteral(MOCK_CLI));
+
+    const QString logFile = tmp.path() + "/rpc.log";
+    const QString injectFile = tmp.path() + "/inject.jsonl";
+    qputenv("MOCK_LOG", logFile.toUtf8());
+    qputenv("MOCK_INJECT", injectFile.toUtf8());
+
+    QTimer dialogTimer;
+    QObject::connect(&dialogTimer, &QTimer::timeout, autoDialogs);
+    dialogTimer.start(30);
+
+    // ---------------------------------------------------------------- run 1
+    std::printf("run 1: first start, create encrypted history\n");
+    {
+        MainWindow w;
+        w.show();
+        auto *list = w.findChild<QListWidget *>();
+        auto *view = w.findChild<ChatView *>();
+        auto *input = w.findChild<QLineEdit *>();
+        QPushButton *sendBtn = nullptr;
+        for (auto *b : w.findChildren<QPushButton *>())
+            if (b->text() == "Send") sendBtn = b;
+        CHECK(list && view && input && sendBtn);
+
+        CHECK(waitFor([&] { return listHas(list, "Alice") && listHas(list, "Archived chats"); }));
+        CHECK(listHas(list, "Archived chats (2)")); // Bob + Carol archived on the "phone"
+        CHECK(!listHas(list, "Bob"));
+        CHECK(!listHas(list, "Carol"));
+        CHECK(listHas(list, "Team"));
+        {
+            bool found = false;
+            for (QLabel *l : w.findChildren<QLabel *>()) {
+                if (l->text().contains("Connected")) {
+                    found = true;
+                    CHECK(!l->text().contains("+49"));      // no phone number in the status bar
+                    CHECK(l->text().contains("0.13.99"));   // but the signal-cli version
+                }
+            }
+            CHECK(found);
+        }
+
+        // --- incoming message with quote and image attachment
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+            {"timestamp", 1700000000000LL},
+            {"dataMessage", QJsonObject{
+                {"timestamp", 1700000000000LL}, {"message", "look at this 📷"},
+                {"quote", QJsonObject{{"id", 1699999999000LL}, {"authorNumber", "+491234567"}, {"text", "earlier question"}}},
+                {"attachments", QJsonArray{QJsonObject{{"contentType", "image/png"}, {"filename", "pic.png"},
+                                                       {"id", "att1"}, {"size", 6321}}}}}}});
+        CHECK(waitFor([&] { return listHas(list, "Alice (1)"); }));
+        selectItem(list, "Alice");
+        CHECK(waitFor([&] { return view->messageCount() == 1; }));
+        CHECK(waitFor([&] { return html(view).contains("[image: pic.png]"); }));  // thumbnail fetched via getAttachment
+        CHECK(html(view).contains("look at this"));
+        CHECK(html(view).contains("earlier question"));              // quote rendered
+        CHECK(html(view).contains("You"));                           // quote author is us
+        CHECK(!findCall(logFile, "getAttachment").isEmpty());
+        CHECK(findCall(logFile, "getAttachment")["params"].toObject()["id"].toString() == "att1");
+        CHECK(view->messageAt(view->bubbleRect(0).center()) == 0);
+
+        // --- archived contact receives a message -> leaves the folder
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49222"}, {"sourceUuid", "u-bob"}, {"sourceName", "Bob"},
+            {"timestamp", 1700000050000LL},
+            {"dataMessage", QJsonObject{{"timestamp", 1700000050000LL}, {"message", "hi from bob"}}}});
+        CHECK(waitFor([&] { return listHas(list, "Bob (1)"); }));
+        CHECK(listHas(list, "Archived chats (1)"));
+
+        // --- reply with quote + attachment (dropped file)
+        QImage img(40, 30, QImage::Format_RGB32);
+        img.fill(Qt::red);
+        const QString imgPath = tmp.path() + "/photo.png";
+        CHECK(img.save(imgPath, "PNG"));
+        emit view->replyRequested(0);
+        w.addPendingFiles({imgPath});
+        input->setText("my reply 😀");
+        sendBtn->click();
+        CHECK(waitFor([&] { return !findCall(logFile, "send").isEmpty(); }));
+        const QJsonObject sendParams = findCall(logFile, "send")["params"].toObject();
+        CHECK(sendParams["message"].toString() == "my reply 😀");
+        CHECK(sendParams["quoteTimestamp"].toVariant().toLongLong() == 1700000000000LL);
+        CHECK(sendParams["quoteAuthor"].toString() == "+49111");
+        CHECK(sendParams["quoteMessage"].toString().contains("look at this"));
+        CHECK(sendParams["recipient"].toArray().first().toString() == "+49111");
+        CHECK(sendParams["attachments"].toArray().first().toString() == imgPath);
+        CHECK(waitFor([&] { return view->messageCount() == 2; }));
+        CHECK(html(view).contains("my reply"));
+
+        // --- react (and take the reaction back by choosing the same emoji again)
+        emit view->reactionChosen(0, QStringLiteral("👍"));
+        CHECK(waitFor([&] { return !findCall(logFile, "sendReaction").isEmpty(); }));
+        QJsonObject r1 = findCall(logFile, "sendReaction")["params"].toObject();
+        CHECK(r1["emoji"].toString() == "👍");
+        CHECK(r1["targetAuthor"].toString() == "+49111");
+        CHECK(r1["targetTimestamp"].toVariant().toLongLong() == 1700000000000LL);
+        CHECK(!r1["remove"].toBool());
+        CHECK(waitFor([&] { return html(view).contains("👍"); }));
+        emit view->reactionChosen(0, QStringLiteral("👍"));
+        CHECK(waitFor([&] { return findCall(logFile, "sendReaction", 1)["params"].toObject()["remove"].toBool(); }));
+        CHECK(waitFor([&] { return !html(view).contains("👍"); }));
+
+        // --- Alice reacts to our reply (target = our number + the timestamp mock returned)
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"timestamp", 1700000200000LL},
+            {"dataMessage", QJsonObject{{"timestamp", 1700000200000LL},
+                {"reaction", QJsonObject{{"emoji", "❤️"}, {"targetAuthorNumber", "+491234567"},
+                                         {"targetSentTimestamp", 1700000100001LL}, {"isRemove", false}}}}}});
+        CHECK(waitFor([&] { return html(view).contains("❤"); }));
+
+        // --- message sent from the phone (sync) with a group id
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+491234567"}, {"timestamp", 1700000300000LL},
+            {"syncMessage", QJsonObject{{"sentMessage", QJsonObject{
+                {"destinationNumber", "+49111"}, {"timestamp", 1700000300000LL}, {"message", "sent from phone"}}}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 3; }));
+
+        // --- unread attachment-only message in the group
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"}, {"timestamp", 1700000400000LL},
+            {"dataMessage", QJsonObject{{"timestamp", 1700000400000LL},
+                {"groupInfo", QJsonObject{{"groupId", "R1JPVVA="}}},
+                {"attachments", QJsonArray{QJsonObject{{"contentType", "application/pdf"}, {"filename", "doc.pdf"},
+                                                       {"id", "att2"}, {"size", 2048}}}}}}});
+        CHECK(waitFor([&] { return listHas(list, "Team (1)"); }));
+
+        // --- pasting with Ctrl+V: a screenshot in the clipboard becomes an attachment
+        {
+            auto labelWith = [&](const QString &needle) {
+                for (QLabel *l : w.findChildren<QLabel *>())
+                    if (l->isVisible() && l->text().contains(needle)) return true;
+                return false;
+            };
+            auto clearPending = [&] {
+                for (QToolButton *b : w.findChildren<QToolButton *>())
+                    if (b->text() == "✕" && b->parentWidget()->isVisible()) b->click();
+            };
+            input->clear();
+            input->setFocus();
+            QImage screenshot(300, 200, QImage::Format_RGB32);
+            screenshot.fill(Qt::darkGreen);
+
+            QApplication::clipboard()->setImage(screenshot);
+            QTest::keyClick(input, Qt::Key_V, Qt::ControlModifier);
+            CHECK(waitFor([&] { return labelWith("pasted-"); }, 3000));
+            CHECK(input->text().isEmpty());
+            clearPending();
+            CHECK(!labelWith("pasted-"));
+
+            QApplication::clipboard()->setImage(screenshot); // Shift+Insert is "paste" as well
+            QTest::keyClick(input, Qt::Key_Insert, Qt::ShiftModifier);
+            CHECK(waitFor([&] { return labelWith("pasted-"); }, 3000));
+            clearPending();
+
+            QApplication::clipboard()->setText("pasted text"); // plain text must still paste normally
+            QTest::keyClick(input, Qt::Key_V, Qt::ControlModifier);
+            CHECK(input->text() == "pasted text");
+            CHECK(!labelWith("pasted-"));
+            input->clear();
+
+            { // files copied in a file manager
+                auto *md = new QMimeData;
+                md->setUrls({QUrl::fromLocalFile(tmp.path() + "/photo.png")});
+                QApplication::clipboard()->setMimeData(md);
+                QTest::keyClick(input, Qt::Key_V, Qt::ControlModifier);
+                CHECK(waitFor([&] { return labelWith("photo.png"); }, 3000));
+                clearPending();
+            }
+            { // image *and* text on the clipboard (e.g. copied from a document): the text wins
+                auto *md = new QMimeData;
+                md->setImageData(screenshot);
+                md->setText("some text");
+                QApplication::clipboard()->setMimeData(md);
+                QTest::keyClick(input, Qt::Key_V, Qt::ControlModifier);
+                CHECK(input->text() == "some text");
+                CHECK(!labelWith("pasted-"));
+                input->clear();
+            }
+            { // paste a screenshot and actually send it (to Bob)
+                selectItem(list, "Bob");
+                CHECK(waitFor([&] { return view->messageCount() == 1; }));
+                input->setFocus();
+                QApplication::clipboard()->setImage(screenshot);
+                QTest::keyClick(input, Qt::Key_V, Qt::ControlModifier);
+                CHECK(waitFor([&] { return labelWith("pasted-"); }, 3000));
+                sendBtn->click();
+                CHECK(waitFor([&] { return !findCall(logFile, "send", 1).isEmpty(); }));
+                const QJsonObject sp = findCall(logFile, "send", 1)["params"].toObject();
+                CHECK(sp["recipient"].toArray().first().toString() == "+49222");
+                const QString sent = sp["attachments"].toArray().first().toString();
+                CHECK(sent.contains("pasted-") && sent.endsWith(".png"));
+                CHECK(waitFor([&] { return view->messageCount() == 2; }));
+                CHECK(html(view).contains("[image: pasted-"));
+                CHECK(!labelWith("pasted-")); // attachment bar is cleared after sending
+            }
+        }
+
+        // --- emoji picker emits what was clicked
+        EmojiPicker picker;
+        QString got;
+        QObject::connect(&picker, &EmojiPicker::emojiSelected, [&](const QString &e) { got = e; });
+        auto buttons = picker.findChildren<QToolButton *>();
+        CHECK(buttons.size() > 100);
+        buttons.first()->click();
+        CHECK(!got.isEmpty());
+
+        CHECK(g_unexpectedBox.isEmpty());
+        w.close();
+    }
+
+    // ---------------------------------------------------------------- run 2
+    std::printf("run 2: restart, history must come back from the encrypted file\n");
+    {
+        QFile::remove(injectFile);
+        MainWindow w;
+        w.show();
+        auto *list = w.findChild<QListWidget *>();
+        auto *view = w.findChild<ChatView *>();
+        CHECK(waitFor([&] { return listHas(list, "Alice"); }));
+        CHECK(listHas(list, "Archived chats (1)")); // Carol only: Bob stays unarchived (phone state unchanged)
+        CHECK(listHas(list, "Bob"));
+        CHECK(waitFor([&] { return w.findChild<QLabel *>() != nullptr; }));
+        selectItem(list, "Alice");
+        CHECK(waitFor([&] { return view->messageCount() == 3; }));
+        const QString h = html(view);
+        CHECK(h.contains("look at this"));
+        CHECK(h.contains("earlier question"));
+        CHECK(h.contains("my reply"));
+        CHECK(h.contains("sent from phone"));
+        CHECK(h.contains("❤"));
+        CHECK(h.count("[image:") >= 2);       // incoming thumbnail + own thumbnail, restored without signal-cli
+        CHECK(!h.contains("👍"));          // removed reaction stays removed
+        CHECK(waitFor([&] { return listHas(list, "Team"); })); // title arrives with listGroups
+        selectItem(list, "Team");
+        CHECK(waitFor([&] { return view->messageCount() == 1; }));
+        CHECK(html(view).contains("doc.pdf"));
+        w.close();
+    }
+
+    // The history file must not contain any message text.
+    {
+        QFile f(tmp.path() + "/data/signal-cli-qt/signal-cli-qt/history.scq");
+        CHECK(f.open(QIODevice::ReadOnly));
+        const QByteArray raw = f.readAll();
+        CHECK(raw.size() > 1000);
+        CHECK(!raw.contains("look at this"));
+        CHECK(!raw.contains("Alice"));
+        CHECK(!raw.contains("PNG"));
+    }
+
+    CHECK(g_unexpectedBox.isEmpty());
+    if (!g_unexpectedBox.isEmpty()) std::printf("  unexpected message box: %s\n", qPrintable(g_unexpectedBox));
+    std::printf(g_failed ? "FAILED (%d checks)\n" : "ALL OK\n", g_failed);
+    return g_failed ? 1 : 0;
+}
