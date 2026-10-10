@@ -163,6 +163,22 @@ older Rust toolchains.
 No secrets are needed (default `GITHUB_TOKEN` with `contents: write`).
 One release per commit accumulates quickly – delete old ones from time to time.
 
+## Troubleshooting
+
+- **Every call to signal-cli is logged to the terminal** (command, result, duration;
+  phone numbers are masked). Start the app from a terminal to see it, e.g.
+  `signal-cli: signal-cli -o json listAccounts -> exit code 1 (1530 ms) | stderr: …`.
+  Set `SIGNAL_CLI_QT_DEBUG=1` to see unmasked output.
+- If signal-cli cannot be run or fails, the app says so with the command and the
+  error message. It reports *"no account"* only if signal-cli itself returns an
+  empty account list. The window never blocks while signal-cli starts.
+- `qt.qpa.services: Failed to register with host portal … App info not found for
+  'signal-cli-qt'` is harmless. It appears when a desktop application ID is announced
+  but no matching `.desktop` file is installed; the app now announces its ID only if
+  one exists.
+- Inside the AppImage, library/plugin paths pointing into the bundle are removed from
+  the environment of signal-cli, so a system Java is not confused by bundled libraries.
+
 ## Tests
 
 ```sh
@@ -177,7 +193,10 @@ The GUI test starts the real `MainWindow` (offscreen) against
 field names of signal-cli's source. It covers first start / unlock, the
 status bar (no phone number), archive folder, quotes, image thumbnails, attachments, reactions, sync messages,
 persistence across a restart and that no message text is visible in the file.
-A second test (`chatview_test`) renders the bubble view offscreen and checks
+`startup_test` runs the real window against a mock that fails, returns an empty
+list, is slow, or exits non-zero after printing valid data, and checks that the app
+shows the real error, never blocks, and still connects when the output is valid.
+A further test (`chatview_test`) renders the bubble view offscreen and checks
 rounded corners, the configurable colours, layout, clicks on links /
 attachments / quotes, text selection, scrolling and saving of the appearance
 settings. It does **not** replace testing against a real signal-cli account.

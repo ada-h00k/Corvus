@@ -82,6 +82,13 @@ if(SIGNAL_CLI_QT_TESTS)
         MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
     add_test(NAME gui_integration COMMAND gui_integration_test)
 
+    add_executable(startup_test tests/startup_test.cpp)
+    target_link_libraries(startup_test PRIVATE app_core)
+    target_compile_definitions(startup_test PRIVATE
+        MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
+    add_test(NAME startup COMMAND startup_test)
+    set_tests_properties(startup PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 240)
+
     add_executable(chatview_test tests/chatview_test.cpp)
     target_link_libraries(chatview_test PRIVATE app_core Qt6::Test)
     add_test(NAME chatview COMMAND chatview_test)
