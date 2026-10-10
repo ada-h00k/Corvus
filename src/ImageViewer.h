@@ -1,0 +1,18 @@
+#pragma once
+
+#include <QByteArray>
+#include <QDialog>
+
+// Shows a full-size image with a "Save as …" button.
+class ImageViewer : public QDialog
+{
+    Q_OBJECT
+public:
+    ImageViewer(const QByteArray &data, const QString &filename, QWidget *parent = nullptr);
+    bool isValid() const { return m_valid; }
+
+private:
+    QByteArray m_data;
+    QString m_filename;
+    bool m_valid = false;
+};

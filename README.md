@@ -1,0 +1,196 @@
+# signal-cli Qt
+
+A native Qt 6 GUI for [signal-cli](https://github.com/AsamK/signal-cli) with
+an **encrypted local chat history**.
+
+## Architecture
+
+| Part | Language | Job |
+|------|----------|-----|
+| `src/` – GUI | C++ / Qt 6 Widgets | Windows, chat view, talking to signal-cli |
+| `history-store/` – encrypted history | **Rust** | Everything that is new compared to signal-cli: key derivation, encryption, tamper detection, file format |
+| signal-cli | (external, Java/native) | Installed by you, **not** part of this project |
+
+### signal-cli stays independent
+
+- signal-cli must be installed separately (package manager, release archive, …).
+- The GUI only starts the `signal-cli` executable as a child process:
+  one-shot commands (`--version`, `-o json listAccounts`, `link -n <name>`) and
+  `signal-cli -a <number> jsonRpc` (JSON-RPC over stdin/stdout).
+- No signal-cli code or library is linked, so updating signal-cli never
+  requires rebuilding the GUI. After an update choose `File → Reconnect`.
+- `Help → Check for signal-cli update` compares your installed version with the
+  latest GitHub release (a silent check also runs at startup and only shows a
+  hint in the status bar). You perform the update yourself.
+- The path is looked up in `PATH` and can be changed under
+  `Settings → Path to signal-cli …`.
+
+### Encrypted chat history (Rust)
+
+signal-cli does not keep a chat history, so the GUI stores one itself in
+`history.scq` (in the application data directory, see *About*). Design:
+
+- A random 256-bit **data key** encrypts every message with
+  **XChaCha20-Poly1305** (random 192-bit nonce per record).
+- The data key is wrapped with a key derived from your passphrase using
+  **Argon2id** (64 MiB, 3 passes). Changing the passphrase only re-wraps the key.
+- Every record is authenticated together with its sequence number: modified,
+  swapped or removed (non-final) records are detected and refused.
+- Writes are append-only and `fsync`ed; compaction (deleting a conversation)
+  and passphrase changes use atomic temp-file + rename. A torn last record
+  after a crash is dropped automatically.
+- The file is created with mode `0600`; keys are zeroized when dropped
+  (best effort).
+- Rust code is a static library with a small C ABI
+  (`history-store/include/history_store.h`), covered by unit and FFI tests
+  (`cargo test`).
+
+The passphrase is asked at every start. **There is no recovery** if you forget
+it.
+
+#### What is *not* protected
+
+- signal-cli's own data directory (`~/.local/share/signal-cli`: account keys,
+  sessions, contacts, attachments) is managed by signal-cli and is **not**
+  encrypted by this program. Use full-disk/home-directory encryption for that.
+- Decrypted messages and previews exist in RAM while the app runs; attachments
+  you *open* are written to a temporary directory until the app exits.
+- A screenshot pasted from the clipboard is saved as a temporary file until the
+  app exits; afterwards only its preview (≤ 480 px) remains in the history.
+- The file reveals the number and approximate size of messages (no padding),
+  and an attacker with write access could delete the *last* records unnoticed.
+
+## Features
+
+- Choose an account / link this device via QR code (`signal-cli link`)
+- Contacts and groups, conversation list with unread counters
+- **Replies (quotes):** receive and display them; reply via the message
+  context menu, click a quote to jump to the original
+- **Attachments:** send files with the 📎 button, drag & drop, or by pasting:
+  `Ctrl+V` / `Shift+Insert` (or right-click → *Attach from clipboard*) turns a
+  **screenshot** in the clipboard, or files copied in a file manager, into an
+  attachment with a small preview above the input field. If the clipboard also
+  holds real text (e.g. copied from a document), the text is pasted instead.
+  Receive and save attachments (context menu → *Save …*, or click to open).
+  Files of risky types (`.exe`, `.sh`, …) are never opened directly, only saved
+- **Inline images:** received and sent pictures are shown in the chat;
+  click for the full size
+- **Reactions:** react from the context menu (quick set or full picker);
+  choose the same emoji again to take it back; incoming reactions are shown
+  below the message
+- **Emoji:** picker next to the input field
+- **Rounded message bubbles** like the official client: own messages on the
+  right, received ones on the left, date separators, timestamps, clickable
+  links, text selection within a message (double-click selects a word,
+  `Ctrl+C` copies)
+- **Appearance:** `Settings → Appearance …` lets you change the colour of your
+  bubbles, received bubbles, their texts and the chat background, plus the
+  corner radius, with a live preview. Untouched colours keep following a light
+  or dark system theme. *Reset to defaults* restores them
+- **Archived chats:** archived contacts are shown in an *Archived chats*
+  folder (see below), like the official client
+- Persistent, encrypted history; delete single conversations (right-click) –
+  the file is compacted so the old ciphertext is gone
+- Change the history passphrase (`File → Change history passphrase …`)
+
+### Archived chats
+
+- Contacts you archived on your phone appear in the *Archived chats* folder
+  at the top of the list (click it, *← Back to chats* to return). signal-cli
+  reports this as `isArchived` in `listContacts`.
+- A new message (sent or received) moves a chat out of the archive again,
+  as in the official client.
+- You can also archive/unarchive any chat locally (right-click). That state is
+  kept in the encrypted history and is only overwritten when signal-cli
+  reports a *change* (e.g. you unarchive on the phone).
+- **Groups:** signal-cli does not report the archive state of groups, so
+  they cannot be synchronised; archive them locally if you like.
+- The state only arrives if your phone synced it to signal-cli; this is
+  outside of the GUI's control.
+
+### Attachments and the history
+
+- Images keep a small preview (≤ 480 px) **inside the encrypted history**, so
+  they are still displayed after a restart without signal-cli.
+- Full-size files are fetched from signal-cli on demand (`getAttachment`).
+  signal-cli keeps its own (unencrypted) copies in its data directory.
+- *Open* writes a temporary copy that is removed when the app exits.
+
+## Downloads
+
+Every commit to `main`/`master` is built by GitHub Actions and published as a
+release (`build-<run number>`):
+
+| File | Description |
+|------|-------------|
+| `signal-cli-qt-<sha>-x86_64.AppImage` | Self-contained (bundles Qt and the Rust library). `chmod +x` and run. |
+| `signal-cli-qt-<sha>-linux-x86_64` | Plain binary. Requires Qt ≥ 6.5 (Widgets, Network) installed. |
+
+Linux x86_64 only. Remember to install signal-cli as well.
+
+## Build from source
+
+Requirements: C++17 compiler, CMake ≥ 3.16, Qt 6 (Widgets, Network),
+**Rust ≥ 1.75 with cargo** (e.g. via [rustup](https://rustup.rs) or your distro).
+
+```sh
+# Debian/Ubuntu
+sudo apt install build-essential cmake qt6-base-dev cargo qrencode
+
+cmake -S . -B build
+cmake --build build -j
+./build/signal-cli-qt
+
+# Rust tests only
+cargo test --release --manifest-path history-store/Cargo.toml
+```
+
+`qrencode` is optional; it is needed to show the QR code when linking a device.
+Without it only the link URI is shown. `Cargo.lock` is committed and the build
+uses `--locked`; some dependencies are pinned to versions that still build on
+older Rust toolchains.
+
+## CI / release workflow
+
+`.github/workflows/release.yml` runs on every push to `main`/`master`
+(pull requests build only, no release):
+
+1. install Qt 6.5.3 and Rust, run `cargo test` for the history store
+2. build with CMake (which invokes cargo)
+3. package the plain binary and an AppImage (linuxdeploy + Qt plugin)
+4. publish both as a GitHub release tagged `build-<run number>`
+
+No secrets are needed (default `GITHUB_TOKEN` with `contents: write`).
+One release per commit accumulates quickly – delete old ones from time to time.
+
+## Tests
+
+```sh
+cargo test --release --manifest-path history-store/Cargo.toml   # Rust: crypto, file format, C ABI
+
+cmake -S . -B build -DSIGNAL_CLI_QT_TESTS=ON && cmake --build build
+ctest --test-dir build --output-on-failure                        # headless GUI test
+```
+
+The GUI test starts the real `MainWindow` (offscreen) against
+`tests/mock-signal-cli.py`, a small stand-in for signal-cli that uses the JSON
+field names of signal-cli's source. It covers first start / unlock, the
+status bar (no phone number), archive folder, quotes, image thumbnails, attachments, reactions, sync messages,
+persistence across a restart and that no message text is visible in the file.
+A second test (`chatview_test`) renders the bubble view offscreen and checks
+rounded corners, the configurable colours, layout, clicks on links /
+attachments / quotes, text selection, scrolling and saving of the appearance
+settings. It does **not** replace testing against a real signal-cli account.
+
+## Known limitations
+
+- No voice notes, stickers, link previews, mentions, message editing/deleting
+  or disappearing-message timers yet.
+- Text can be selected within one message only (not across messages); use
+  *Copy message text* in the context menu otherwise.
+- Only one account is connected at a time; messages are single-line input.
+- The whole history is decrypted into memory at startup (previews included);
+  very large histories would need lazy loading.
+- Unread counters are not persisted across restarts.
+- Signal eventually rejects outdated clients, so keep signal-cli up to date –
+  which is what the update check is for.

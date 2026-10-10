@@ -1,0 +1,138 @@
+#pragma once
+
+#include "Appearance.h"
+#include "HistoryStore.h"
+#include "Model.h"
+#include "SignalCli.h"
+
+#include <QHash>
+#include <QMainWindow>
+#include <QNetworkAccessManager>
+#include <QSet>
+#include <QTemporaryDir>
+#include <functional>
+
+class ChatView;
+class EmojiPicker;
+class MessageInput;
+class QCloseEvent;
+class QDragEnterEvent;
+class QDropEvent;
+class QLabel;
+class QLineEdit;
+class QMimeData;
+class QListWidget;
+class QListWidgetItem;
+class QPushButton;
+class QToolButton;
+class QWidget;
+
+class MainWindow : public QMainWindow
+{
+    Q_OBJECT
+public:
+    MainWindow();
+
+    // Queue files for the next message (attach button, drag & drop, paste).
+    void addPendingFiles(const QStringList &files);
+
+protected:
+    void closeEvent(QCloseEvent *e) override;
+    void dragEnterEvent(QDragEnterEvent *e) override;
+    void dropEvent(QDropEvent *e) override;
+
+private slots:
+    void initialise();
+    void onEnvelope(const QJsonObject &env);
+    void onSelectionChanged(QListWidgetItem *item);
+    void sendMessage();
+    void newConversation();
+    void linkDevice();
+    void reconnect();
+    void chooseExecutable();
+    void checkForUpdates(bool silent);
+    void showAbout();
+    void changePassphrase();
+    void editAppearance();
+
+private:
+    // --- setup / signal-cli
+    bool ensureExecutable();
+    void refreshVersion();
+    void connectAccount();
+    void loadContactsAndGroups();
+    void setConnected(bool connected, const QString &info = QString());
+
+    // --- encrypted history (Rust store)
+    QString historyPath() const;
+    bool unlockHistory();
+    void loadHistory(const QJsonArray &records);
+    QJsonArray allRecords() const;
+    void persist(const QJsonObject &record);
+    void learnName(const QString &key, const QString &name);
+    void deleteConversation(const QString &key);
+
+    // --- model
+    Conversation &conv(const QString &key, const QString &title = QString(), bool group = false);
+    QString resolveKey(const QString &id) const;
+    QString displayName(const QString &key) const;
+    QString effectiveAuthor(const Conversation &c, const Message &m) const;
+    bool authorMatches(const Conversation &c, const Message &m, const QStringList &authors) const;
+    int findMessage(const Conversation &c, qint64 ts, const QStringList &authors) const;
+    bool addMessage(const QString &key, Message m, const QString &title = QString(), bool group = false);
+    bool applyReaction(const QString &key, qint64 ts, const QStringList &authors, const QString &reactor,
+                       const QString &emoji);
+    void setArchived(const QString &key, bool archived);
+
+    // --- list / view
+    void refreshList();
+    void showConversation(bool keepScroll = false);
+    void updateReplyBar();
+    void updateAttachBar();
+
+    // --- actions on messages
+    void startReply(int idx);
+    void sendReaction(int idx, const QString &emoji);
+    void addRecipient(QJsonObject &params, const Conversation &c) const;
+    void fetchThumbnails(const QString &key, qint64 ts, const QString &author, int attempt = 0);
+    void fetchAttachmentData(const QString &key, const Attachment &att,
+                             std::function<void(const QByteArray &, const QString &)> cb);
+    void openAttachment(int msgIdx, int attIdx);
+    void saveAttachment(int msgIdx, int attIdx);
+    // Files or an image (e.g. a screenshot) from drag & drop / the clipboard -> pending attachments.
+    bool attachFromMimeData(const QMimeData *md);
+
+    SignalCli m_cli;
+    HistoryStore m_store;
+    QNetworkAccessManager m_nam;
+
+    QHash<QString, Conversation> m_convs;
+    QHash<QString, QString> m_alias; // uuid -> number
+    QString m_current;
+    QString m_account;
+    QString m_version; // e.g. "0.13.12"
+    bool m_showArchived = false;
+    Appearance m_appearance;
+
+    Quote m_replyQuote;
+    QStringList m_pendingFiles;
+    QSet<QString> m_thumbPending;
+    std::function<void(const QString &)> m_pickAction;
+    QTemporaryDir m_tmp;
+
+    QListWidget *m_list;
+    QLabel *m_title;
+    ChatView *m_view;
+    QWidget *m_replyBar;
+    QLabel *m_replyLabel;
+    QWidget *m_attachBar;
+    QLabel *m_attachLabel;
+    QLabel *m_attachThumb;
+    MessageInput *m_input;
+    QToolButton *m_attachBtn;
+    QToolButton *m_emojiBtn;
+    QPushButton *m_send;
+    EmojiPicker *m_picker;
+    QLabel *m_statusLabel;
+    QLabel *m_updateLabel;
+};

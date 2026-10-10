@@ -1,0 +1,10 @@
+build/
+AppDir/
+appimage-out/
+stage/
+dist/
+*.AppImage
+target/
+CMakeUserPresets.json
+.vscode/
+.idea/
