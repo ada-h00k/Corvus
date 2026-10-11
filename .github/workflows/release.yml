@@ -181,257 +181,6 @@ jobs:
           chmod +x dist/signal-cli-qt-linux-x86_64
 
       # --------------------------------------------------
-      # Download linuxdeploy tools
-      # --------------------------------------------------
-      - name: Download linuxdeploy
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          curl -fL --retry 5 \
-            -o linuxdeploy-x86_64.AppImage \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-
-          curl -fL --retry 5 \
-            -o linuxdeploy-plugin-qt-x86_64.AppImage \
-            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-
-          chmod +x \
-            linuxdeploy-x86_64.AppImage \
-            linuxdeploy-plugin-qt-x86_64.AppImage
-
-          echo "LINUXDEPLOY_PLUGIN_QT=linuxdeploy-plugin-qt-x86_64.AppImage" >> "$GITHUB_ENV"
-
-      # --------------------------------------------------
-      # Prepare AppDir, icon and desktop entry
-      # --------------------------------------------------
-      - name: Prepare AppDir
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf AppDir
-
-          mkdir -p \
-            AppDir/usr/bin \
-            AppDir/usr/share/applications \
-            AppDir/usr/share/icons/hicolor/scalable/apps
-
-          install -m 755 "$BINARY" AppDir/usr/bin/signal-cli-qt
-
-          cat > AppDir/usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg <<'SVG'
-          <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-            <rect x="8" y="8" width="240" height="240" rx="48" fill="#ffffff" stroke="#222222" stroke-width="8"/>
-            <circle cx="128" cy="116" r="64" fill="none" stroke="#222222" stroke-width="12"/>
-            <path d="M92 188 L128 224 L164 188" fill="none" stroke="#222222" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
-            <circle cx="106" cy="116" r="8" fill="#222222"/>
-            <circle cx="150" cy="116" r="8" fill="#222222"/>
-          </svg>
-          SVG
-
-          cat > AppDir/usr/share/applications/signal-cli-qt.desktop <<'DESKTOP'
-          [Desktop Entry]
-          Type=Application
-          Name=signal-cli Qt
-          Comment=Qt GUI for signal-cli
-          Exec=signal-cli-qt
-          Icon=signal-cli-qt
-          Terminal=false
-          Categories=Network;InstantMessaging;
-          StartupNotify=true
-          DESKTOP
-
-          # Make the icon available in the conventional root location too.
-          cp \
-            AppDir/usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg \
-            AppDir/signal-cli-qt.svg
-
-            # --------------------------------------------------
-      # Custom AppRun: follow the KDE Plasma system theme
-      #
-      # Mode 1 (preferred on KDE Plasma): run against the SYSTEM Qt.
-      #   plasma-integration, Breeze style, colour scheme, fonts and
-      #   icons then behave exactly like for a natively installed KDE
-      #   application, no matter how new the system Qt is (Arch etc.).
-      #
-      # Mode 2 (fallback): run against the bundled Qt and expose the
-      #   host's Qt6 plugin/QML dirs as well. Qt only loads such
-      #   plugins when the system Qt is not newer than the bundled
-      #   one (stable distributions).
-      # --------------------------------------------------
-      - name: Create custom AppRun
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p custom-apprun
-
-          cat > custom-apprun/AppRun <<'APPRUN'
-          #!/usr/bin/env bash
-          set -u
-
-          APPDIR="${APPDIR:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")}"
-          APP="${APPDIR}/usr/bin/signal-cli-qt"
-
-          # Qt version this AppImage was built with (set at build time).
-          MIN_QT_VERSION='@MIN_QT_VERSION@'
-
-          debug() {
-            [ -n "${DEBUG_APPRUN:-}" ] && printf 'AppRun: %s\n' "$*" >&2
-            return 0
-          }
-
-          is_plasma_session() {
-            [ "${KDE_FULL_SESSION:-}" = "true" ] && return 0
-            printf '%s\n' "${XDG_CURRENT_DESKTOP:-}" | grep -qiE 'kde|plasma' && return 0
-            printf '%s\n' "${XDG_SESSION_DESKTOP:-}" | grep -qiE 'kde|plasma' && return 0
-            printf '%s\n' "${DESKTOP_SESSION:-}"    | grep -qiE 'kde|plasma' && return 0
-            return 1
-          }
-
-          # version_ge A B -> success if A >= B
-          version_ge() {
-            [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n 1)" = "$2" ]
-          }
-
-          # Success if every Qt library bundled in the AppImage also
-          # exists on the host - only then can the app run completely
-          # against the system Qt.
-          system_has_all_qt_libs() {
-            local cache f soname
-            [ -e "${APPDIR}/usr/lib/libQt6Core.so.6" ] || return 1
-            cache="$(ldconfig -p 2>/dev/null || true)"
-            while IFS= read -r f; do
-              soname="$(basename "$f")"
-              printf '%s\n' "$cache" | grep -qF "${soname} (" || return 1
-            done < <(find "${APPDIR}/usr/lib" -maxdepth 1 -name 'libQt6*.so*' -print 2>/dev/null)
-            return 0
-          }
-
-          IN_PLASMA=0
-          if is_plasma_session; then
-            IN_PLASMA=1
-          fi
-
-          # ---------------------------------------------- mode 1: system Qt
-
-          SYS_QT_VERSION=""
-
-          if [ "$IN_PLASMA" = 1 ] && command -v qmake6 >/dev/null 2>&1; then
-            SYS_QT_VERSION="$(qmake6 -query QT_VERSION 2>/dev/null || true)"
-          fi
-
-          if [ -n "$SYS_QT_VERSION" ] \
-             && version_ge "$SYS_QT_VERSION" "$MIN_QT_VERSION" \
-             && system_has_all_qt_libs; then
-
-            SYS_LIBS="$(qmake6 -query QT_INSTALL_LIBS 2>/dev/null || true)"
-            if [ -z "$SYS_LIBS" ] || [ ! -d "$SYS_LIBS" ]; then
-              SYS_LIBS="/usr/lib"
-            fi
-
-            # LD_LIBRARY_PATH takes precedence over the RUNPATH that
-            # linuxdeploy baked into the binary, so Qt is resolved from
-            # the system. Bundled non-Qt libraries are still found via
-            # the RUNPATH.
-            export LD_LIBRARY_PATH="${SYS_LIBS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-
-            # Plugins, QML paths and platform theme are left to the
-            # system Qt / the Plasma session.
-            export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-kde}"
-
-            debug "using SYSTEM Qt ${SYS_QT_VERSION} (built against ${MIN_QT_VERSION})"
-            exec "$APP" "$@"
-          fi
-
-          # -------------------------------------------- mode 2: bundled Qt
-
-          export LD_LIBRARY_PATH="${APPDIR}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-
-          PLUGIN_PATHS="${APPDIR}/usr/plugins"
-          QML_PATHS="${APPDIR}/usr/qml"
-
-          if [ "$IN_PLASMA" = 1 ]; then
-            SYSTEM_PLUGINS=""
-
-            if command -v qtpaths6 >/dev/null 2>&1; then
-              p="$(qtpaths6 --plugin-dir 2>/dev/null || true)"
-              if [ -n "$p" ] && [ -d "$p" ]; then SYSTEM_PLUGINS="$p"; fi
-            fi
-
-            if [ -z "$SYSTEM_PLUGINS" ] && command -v qmake6 >/dev/null 2>&1; then
-              p="$(qmake6 -query QT_INSTALL_PLUGINS 2>/dev/null || true)"
-              if [ -n "$p" ] && [ -d "$p" ]; then SYSTEM_PLUGINS="$p"; fi
-            fi
-
-            if [ -z "$SYSTEM_PLUGINS" ]; then
-              for p in \
-                /usr/lib/qt6/plugins \
-                /usr/lib/x86_64-linux-gnu/qt6/plugins \
-                /usr/lib64/qt6/plugins
-              do
-                if [ -d "$p" ]; then SYSTEM_PLUGINS="$p"; break; fi
-              done
-            fi
-
-            if [ -n "$SYSTEM_PLUGINS" ]; then
-              PLUGIN_PATHS="${PLUGIN_PATHS}:${SYSTEM_PLUGINS}"
-              SYSTEM_QML="${SYSTEM_PLUGINS%/plugins}/qml"
-              if [ -d "$SYSTEM_QML" ]; then
-                QML_PATHS="${QML_PATHS}:${SYSTEM_QML}"
-              fi
-              export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-kde}"
-            fi
-          fi
-
-          export QT_PLUGIN_PATH="${PLUGIN_PATHS}${QT_PLUGIN_PATH:+:${QT_PLUGIN_PATH}}"
-          export QML2_IMPORT_PATH="${QML_PATHS}${QML2_IMPORT_PATH:+:${QML2_IMPORT_PATH}}"
-          export QML_IMPORT_PATH="${QML2_IMPORT_PATH}"
-
-          debug "using BUNDLED Qt (system Qt: ${SYS_QT_VERSION:-unknown}, built against ${MIN_QT_VERSION})"
-          exec "$APP" "$@"
-          APPRUN
-
-          # Bake the Qt version this AppImage was built with into the script.
-          sed -i "s/@MIN_QT_VERSION@/${QT_VERSION}/" custom-apprun/AppRun
-
-          chmod 755 custom-apprun/AppRun
-          
-      # --------------------------------------------------
-      # Build AppImage
-      # --------------------------------------------------
-      - name: Build AppImage
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -x "$QMAKE"
-          "$QMAKE" --version
-
-          export QMAKE
-          export LINUXDEPLOY_PLUGIN_QT
-
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --desktop-file AppDir/usr/share/applications/signal-cli-qt.desktop \
-            --custom-apprun custom-apprun/AppRun \
-            --plugin qt \
-            --output appimage
-
-          APPIMAGE="$(find . -maxdepth 1 -type f \
-            -name '*.AppImage' \
-            ! -name 'linuxdeploy-*' \
-            -print -quit)"
-
-          if [ -z "$APPIMAGE" ]; then
-            echo "::error::No AppImage was generated"
-            exit 1
-          fi
-
-          mv "$APPIMAGE" dist/signal-cli-qt-x86_64.AppImage
-          chmod +x dist/signal-cli-qt-x86_64.AppImage
-
-      # --------------------------------------------------
       # Validate output and checksums
       # --------------------------------------------------
       - name: Verify artifacts
@@ -440,26 +189,13 @@ jobs:
           set -euo pipefail
 
           test -s dist/signal-cli-qt-linux-x86_64
-          test -s dist/signal-cli-qt-x86_64.AppImage
 
           file dist/signal-cli-qt-linux-x86_64
-          file dist/signal-cli-qt-x86_64.AppImage
-
-          # Make sure the custom AppRun (KDE theme support) really made it
-          # into the AppImage.
-          if ! ./dist/signal-cli-qt-x86_64.AppImage --appimage-extract AppRun >/dev/null 2>&1; then
-            echo "::error::Could not extract AppRun from the AppImage"
-            exit 1
-          fi
-          test -f squashfs-root/AppRun
-          grep -q 'QT_QPA_PLATFORMTHEME' squashfs-root/AppRun
-          rm -rf squashfs-root
 
           (
             cd dist
             sha256sum \
               signal-cli-qt-linux-x86_64 \
-              signal-cli-qt-x86_64.AppImage \
               > SHA256SUMS
           )
 
@@ -494,12 +230,7 @@ jobs:
 
             Files:
             - `signal-cli-qt-linux-x86_64` — plain executable
-            - `signal-cli-qt-x86_64.AppImage` — AppImage
             - `SHA256SUMS` — SHA-256 checksums
-
-            The AppImage follows the KDE Plasma system theme (Breeze and
-            other installed themes) when run inside a Plasma session and
-            falls back to the bundled Qt look otherwise.
 
             `signal-cli` must be installed separately.
           draft: false
@@ -508,5 +239,4 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/signal-cli-qt-linux-x86_64
-            dist/signal-cli-qt-x86_64.AppImage
             dist/SHA256SUMS
