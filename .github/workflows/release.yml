@@ -16,7 +16,7 @@ concurrency:
 
 env:
   BUILD_TYPE: Release
-  QT_VERSION: "6.8.3"
+  QT_VERSION: "6.12"
 
 jobs:
   build:
