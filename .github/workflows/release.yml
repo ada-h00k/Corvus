@@ -1,362 +1,478 @@
 name: Build Linux Release
 
 on:
-push:
-branches:
-- main
-- master
-workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
 
 permissions:
-contents: write
+  contents: write
 
 concurrency:
-group: release-${{ github.ref }}
-cancel-in-progress: false
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
-BUILD_TYPE: Release
-QT_VERSION: "6.8.3"
+  BUILD_TYPE: Release
+  QT_VERSION: "6.8.3"
 
 jobs:
-build:
-name: Build Linux x86_64
-runs-on: ubuntu-24.04
+  build:
+    name: Build Linux x86_64
+    runs-on: ubuntu-24.04
 
-steps:
-  # --------------------------------------------------
-  # Checkout
-  # --------------------------------------------------
-  - name: Checkout
-    uses: actions/checkout@v4
+    steps:
+      # --------------------------------------------------
+      # Checkout
+      # --------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  # --------------------------------------------------
-  # System dependencies
-  # --------------------------------------------------
-  - name: Install dependencies
-    shell: bash
-    run: |
-      set -euxo pipefail
+      # --------------------------------------------------
+      # System dependencies
+      # --------------------------------------------------
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-      sudo apt-get update
-      sudo apt-get install -y \
-        build-essential \
-        cmake \
-        ninja-build \
-        pkg-config \
-        file \
-        curl \
-        wget \
-        ca-certificates \
-        fuse3 \
-        libfuse2t64 \
-        libgl1-mesa-dev \
-        libxkbcommon-dev \
-        libxkbcommon-x11-0 \
-        libxcb-cursor0 \
-        libxcb-icccm4 \
-        libxcb-image0 \
-        libxcb-keysyms1 \
-        libxcb-randr0 \
-        libxcb-render-util0 \
-        libxcb-shape0 \
-        libxcb-xinerama0 \
-        libxcb-xkb1 \
-        libxcb-util1 \
-        libx11-xcb1 \
-        libdbus-1-3 \
-        libfontconfig1 \
-        libfreetype6 \
-        libegl1 \
-        libopengl0 \
-        libqrencode-dev \
-        plasma-integration
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            file \
+            curl \
+            wget \
+            ca-certificates \
+            fuse3 \
+            libfuse2t64 \
+            libgl1-mesa-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxcb-util1 \
+            libx11-xcb1 \
+            libdbus-1-3 \
+            libfontconfig1 \
+            libfreetype6 \
+            libegl1 \
+            libopengl0 \
+            libqrencode-dev
 
-  # --------------------------------------------------
-  # Qt
-  # --------------------------------------------------
-  - name: Install Qt
-    uses: jurplel/install-qt-action@v4
-    with:
-      version: ${{ env.QT_VERSION }}
-      host: linux
-      target: desktop
-      arch: linux_gcc_64
-      cache: true
+      # --------------------------------------------------
+      # Qt
+      # --------------------------------------------------
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
 
-  - name: Configure Qt environment
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Configure Qt environment
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      echo "QT_ROOT_DIR=$QT_ROOT_DIR"
+          echo "QT_ROOT_DIR=$QT_ROOT_DIR"
 
-      QMAKE_PATH="$(find "$QT_ROOT_DIR" \
-        -type f -name qmake -print -quit)"
+          QMAKE_PATH="$(find "$QT_ROOT_DIR" \
+            -type f -name qmake -print -quit)"
 
-      if [ -z "$QMAKE_PATH" ]; then
-        echo "::error::qmake not found in $QT_ROOT_DIR"
-        exit 1
-      fi
+          if [ -z "$QMAKE_PATH" ]; then
+            echo "::error::qmake not found in $QT_ROOT_DIR"
+            exit 1
+          fi
 
-      echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
-      "$QMAKE_PATH" --version
+          echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
+          "$QMAKE_PATH" --version
 
-  # --------------------------------------------------
-  # Rust
-  # --------------------------------------------------
-  - name: Install Rust
-    uses: dtolnay/rust-toolchain@stable
+      # --------------------------------------------------
+      # Rust
+      # --------------------------------------------------
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-  - name: Run Rust tests
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Run Rust tests
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      cargo test \
-        --release \
-        --locked \
-        --manifest-path history-store/Cargo.toml
+          cargo test \
+            --release \
+            --locked \
+            --manifest-path history-store/Cargo.toml
 
-  # --------------------------------------------------
-  # CMake
-  # --------------------------------------------------
-  - name: Configure CMake
-    shell: bash
-    run: |
-      set -euo pipefail
+      # --------------------------------------------------
+      # CMake
+      # --------------------------------------------------
+      - name: Configure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      cmake \
-        -S . \
-        -B build \
-        -G Ninja \
-        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-        -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
 
-  - name: Build
-    run: cmake --build build --parallel
+      - name: Build
+        run: cmake --build build --parallel
 
-  # --------------------------------------------------
-  # Locate application executable
-  # --------------------------------------------------
-  - name: Locate executable
-    shell: bash
-    run: |
-      set -euo pipefail
+      # --------------------------------------------------
+      # Locate application executable
+      # --------------------------------------------------
+      - name: Locate executable
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      find build -maxdepth 4 -type f -executable -print
+          find build -maxdepth 4 -type f -executable -print
 
-      BINARY=""
+          BINARY=""
 
-      for candidate in \
-        build/signal-cli-qt \
-        build/bin/signal-cli-qt \
-        build/signal-cli-Qt \
-        build/bin/signal-cli-Qt
-      do
-        if [ -f "$candidate" ]; then
-          BINARY="$candidate"
-          break
-        fi
-      done
+          for candidate in \
+            build/signal-cli-qt \
+            build/bin/signal-cli-qt \
+            build/signal-cli-Qt \
+            build/bin/signal-cli-Qt
+          do
+            if [ -f "$candidate" ]; then
+              BINARY="$candidate"
+              break
+            fi
+          done
 
-      if [ -z "$BINARY" ]; then
-        echo "::error::Application binary not found. Check the CMake target name."
-        exit 1
-      fi
+          if [ -z "$BINARY" ]; then
+            echo "::error::Application binary not found. Check the CMake target name."
+            exit 1
+          fi
 
-      echo "BINARY=$BINARY" >> "$GITHUB_ENV"
-      file "$BINARY"
+          echo "BINARY=$BINARY" >> "$GITHUB_ENV"
+          file "$BINARY"
 
-  # --------------------------------------------------
-  # Plain Linux binary
-  # --------------------------------------------------
-  - name: Package binary
-    shell: bash
-    run: |
-      set -euo pipefail
+      # --------------------------------------------------
+      # Plain Linux binary
+      # --------------------------------------------------
+      - name: Package binary
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      mkdir -p dist
+          mkdir -p dist
 
-      cp "$BINARY" dist/signal-cli-qt-linux-x86_64
-      chmod +x dist/signal-cli-qt-linux-x86_64
+          cp "$BINARY" dist/signal-cli-qt-linux-x86_64
+          chmod +x dist/signal-cli-qt-linux-x86_64
 
-  # --------------------------------------------------
-  # Download linuxdeploy tools
-  # --------------------------------------------------
-  - name: Download linuxdeploy
-    shell: bash
-    run: |
-      set -euo pipefail
+      # --------------------------------------------------
+      # Download linuxdeploy tools
+      # --------------------------------------------------
+      - name: Download linuxdeploy
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      curl -fL --retry 5 \
-        -o linuxdeploy-x86_64.AppImage \
-        https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fL --retry 5 \
+            -o linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
 
-      curl -fL --retry 5 \
-        -o linuxdeploy-plugin-qt-x86_64.AppImage \
-        https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          curl -fL --retry 5 \
+            -o linuxdeploy-plugin-qt-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
 
-      chmod +x \
-        linuxdeploy-x86_64.AppImage \
-        linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x \
+            linuxdeploy-x86_64.AppImage \
+            linuxdeploy-plugin-qt-x86_64.AppImage
 
-      echo "LINUXDEPLOY_PLUGIN_QT=linuxdeploy-plugin-qt-x86_64.AppImage" >> "$GITHUB_ENV"
+          echo "LINUXDEPLOY_PLUGIN_QT=linuxdeploy-plugin-qt-x86_64.AppImage" >> "$GITHUB_ENV"
 
-  # --------------------------------------------------
-  # Prepare AppDir, icon, desktop entry and KDE hook
-  # --------------------------------------------------
-  - name: Prepare AppDir
-    shell: bash
-    run: |
-      set -euo pipefail
+      # --------------------------------------------------
+      # Prepare AppDir, icon and desktop entry
+      # --------------------------------------------------
+      - name: Prepare AppDir
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      rm -rf AppDir
+          rm -rf AppDir
 
-      mkdir -p \
-        AppDir/usr/bin \
-        AppDir/usr/share/applications \
-        AppDir/usr/share/icons/hicolor/scalable/apps \
-        AppDir/apprun-hooks
+          mkdir -p \
+            AppDir/usr/bin \
+            AppDir/usr/share/applications \
+            AppDir/usr/share/icons/hicolor/scalable/apps
 
-      install -m 755 "$BINARY" AppDir/usr/bin/signal-cli-qt
+          install -m 755 "$BINARY" AppDir/usr/bin/signal-cli-qt
 
-      cat > AppDir/usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg <<'SVG'
-      <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-        <rect x="8" y="8" width="240" height="240" rx="48" fill="#ffffff" stroke="#222222" stroke-width="8"/>
-        <circle cx="128" cy="116" r="64" fill="none" stroke="#222222" stroke-width="12"/>
-        <path d="M92 188 L128 224 L164 188" fill="none" stroke="#222222" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="106" cy="116" r="8" fill="#222222"/>
-        <circle cx="150" cy="116" r="8" fill="#222222"/>
-      </svg>
-      SVG
+          cat > AppDir/usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg <<'SVG'
+          <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+            <rect x="8" y="8" width="240" height="240" rx="48" fill="#ffffff" stroke="#222222" stroke-width="8"/>
+            <circle cx="128" cy="116" r="64" fill="none" stroke="#222222" stroke-width="12"/>
+            <path d="M92 188 L128 224 L164 188" fill="none" stroke="#222222" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="106" cy="116" r="8" fill="#222222"/>
+            <circle cx="150" cy="116" r="8" fill="#222222"/>
+          </svg>
+          SVG
 
-      cat > AppDir/usr/share/applications/signal-cli-qt.desktop <<'DESKTOP'
-      [Desktop Entry]
-      Type=Application
-      Name=signal-cli Qt
-      Comment=Qt GUI for signal-cli
-      Exec=signal-cli-qt
-      Icon=signal-cli-qt
-      Terminal=false
-      Categories=Network;InstantMessaging;
-      StartupNotify=true
-      DESKTOP
+          cat > AppDir/usr/share/applications/signal-cli-qt.desktop <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=signal-cli Qt
+          Comment=Qt GUI for signal-cli
+          Exec=signal-cli-qt
+          Icon=signal-cli-qt
+          Terminal=false
+          Categories=Network;InstantMessaging;
+          StartupNotify=true
+          DESKTOP
 
-      cp \
-        AppDir/usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg \
-        AppDir/signal-cli-qt.svg
+          # Make the icon available in the conventional root location too.
+          cp \
+            AppDir/usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg \
+            AppDir/signal-cli-qt.svg
 
-      # Do not force KDE integration outside a Plasma session.
-      # The host KDE plugin is used only if it is available and
-      # compatible with the Qt libraries loaded by the AppImage.
-      cat > AppDir/apprun-hooks/10-kde-theme.sh <<'HOOK'
-      #!/bin/bash
+      # --------------------------------------------------
+      # Custom AppRun: follow the KDE Plasma system theme
+      #
+      # linuxdeploy-plugin-qt bundles its own Qt, which by default only
+      # sees the bundled plugins. The custom AppRun below additionally
+      # exposes the host system's Qt6 plugin/QML directories whenever the
+      # AppImage is started inside a KDE Plasma session. This lets Qt load
+      # the system's plasma-integration platform theme plus the widget/QML
+      # styles the user has installed (Breeze etc.). If the host provides
+      # nothing usable, Qt falls back to its default look, so this is
+      # always safe.
+      # --------------------------------------------------
+      - name: Create custom AppRun
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      case "${XDG_CURRENT_DESKTOP:-}" in
-          *KDE*|*Kde*|*kde*)
+          mkdir -p custom-apprun
+
+          cat > custom-apprun/AppRun <<'APPRUN'
+          #!/usr/bin/env bash
+          #
+          # Custom AppRun for the signal-cli-qt AppImage.
+          #
+          # 1. Sets up the environment for the Qt libraries and plugins
+          #    bundled inside the AppImage.
+          # 2. When started inside a KDE Plasma session, additionally makes
+          #    the host system's Qt6 plugin and QML directories visible to
+          #    the bundled Qt, so the application follows the KDE Plasma
+          #    system theme the user has configured.
+
+          set -u
+
+          APPDIR="${APPDIR:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")}"
+
+          # --- 1) bundled Qt ----------------------------------------------
+
+          export LD_LIBRARY_PATH="${APPDIR}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+          PLUGIN_PATHS="${APPDIR}/usr/plugins"
+          QML_PATHS="${APPDIR}/usr/qml"
+
+          # --- 2) KDE Plasma system theme ----------------------------------
+
+          is_plasma_session() {
+            [ "${KDE_FULL_SESSION:-}" = "true" ] && return 0
+            printf '%s\n' "${XDG_CURRENT_DESKTOP:-}" | grep -qiE 'kde|plasma' && return 0
+            printf '%s\n' "${XDG_SESSION_DESKTOP:-}" | grep -qiE 'kde|plasma' && return 0
+            printf '%s\n' "${DESKTOP_SESSION:-}"    | grep -qiE 'kde|plasma' && return 0
+            return 1
+          }
+
+          if is_plasma_session; then
+            SYSTEM_PLUGINS=""
+
+            # Ask the system's Qt where its plugins are installed.
+            if command -v qtpaths6 >/dev/null 2>&1; then
+              p="$(qtpaths6 --plugin-dir 2>/dev/null || true)"
+              if [ -n "$p" ] && [ -d "$p" ]; then
+                SYSTEM_PLUGINS="$p"
+              fi
+            fi
+
+            if [ -z "$SYSTEM_PLUGINS" ] && command -v qmake6 >/dev/null 2>&1; then
+              p="$(qmake6 -query QT_INSTALL_PLUGINS 2>/dev/null || true)"
+              if [ -n "$p" ] && [ -d "$p" ]; then
+                SYSTEM_PLUGINS="$p"
+              fi
+            fi
+
+            # Fallback: well known locations of the major distributions.
+            #   /usr/lib/x86_64-linux-gnu/qt6/plugins  Debian, Ubuntu, ...
+            #   /usr/lib64/qt6/plugins                 Fedora, openSUSE, ...
+            #   /usr/lib/qt6/plugins                   Arch, ...
+            if [ -z "$SYSTEM_PLUGINS" ]; then
+              for p in \
+                /usr/lib/x86_64-linux-gnu/qt6/plugins \
+                /usr/lib64/qt6/plugins \
+                /usr/lib/qt6/plugins
+              do
+                if [ -d "$p" ]; then
+                  SYSTEM_PLUGINS="$p"
+                  break
+                fi
+              done
+            fi
+
+            if [ -n "$SYSTEM_PLUGINS" ]; then
+              # Make plasma-integration (platform theme "kde"), the user's
+              # widget style, input context plugins, ... from the system
+              # visible to the bundled Qt.
+              PLUGIN_PATHS="${PLUGIN_PATHS}:${SYSTEM_PLUGINS}"
+
+              # QML modules such as org.kde.desktop (qqc2-desktop-style)
+              # sit next to the plugin directory on all major distros.
+              SYSTEM_QML="${SYSTEM_PLUGINS%/plugins}/qml"
+              if [ -d "$SYSTEM_QML" ]; then
+                QML_PATHS="${QML_PATHS}:${SYSTEM_QML}"
+              fi
+
+              # plasma-integration registers itself as platform theme "kde".
+              # Keep whatever the session has already configured.
               export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-kde}"
-              ;;
-      esac
-      HOOK
+            fi
+          fi
 
-      chmod 755 AppDir/apprun-hooks/10-kde-theme.sh
+          # --- 3) hand over to the application ------------------------------
 
-  # --------------------------------------------------
-  # Build AppImage
-  # --------------------------------------------------
-  - name: Build AppImage
-    shell: bash
-    run: |
-      set -euo pipefail
+          export QT_PLUGIN_PATH="${PLUGIN_PATHS}${QT_PLUGIN_PATH:+:${QT_PLUGIN_PATH}}"
+          export QML2_IMPORT_PATH="${QML_PATHS}${QML2_IMPORT_PATH:+:${QML2_IMPORT_PATH}}"
+          export QML_IMPORT_PATH="${QML2_IMPORT_PATH}"
 
-      test -x "$QMAKE"
-      "$QMAKE" --version
+          exec "${APPDIR}/usr/bin/signal-cli-qt" "$@"
+          APPRUN
 
-      export QMAKE
-      export LINUXDEPLOY_PLUGIN_QT
+          chmod 755 custom-apprun/AppRun
 
-      ./linuxdeploy-x86_64.AppImage \
-        --appdir AppDir \
-        --desktop-file AppDir/usr/share/applications/signal-cli-qt.desktop \
-        --plugin qt \
-        --output appimage
+      # --------------------------------------------------
+      # Build AppImage
+      # --------------------------------------------------
+      - name: Build AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      APPIMAGE="$(find . -maxdepth 1 -type f \
-        -name '*.AppImage' \
-        ! -name 'linuxdeploy-*' \
-        -print -quit)"
+          test -x "$QMAKE"
+          "$QMAKE" --version
 
-      if [ -z "$APPIMAGE" ]; then
-        echo "::error::No AppImage was generated"
-        exit 1
-      fi
+          export QMAKE
+          export LINUXDEPLOY_PLUGIN_QT
 
-      mv "$APPIMAGE" dist/signal-cli-qt-x86_64.AppImage
-      chmod +x dist/signal-cli-qt-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --desktop-file AppDir/usr/share/applications/signal-cli-qt.desktop \
+            --custom-apprun custom-apprun/AppRun \
+            --plugin qt \
+            --output appimage
 
-  # --------------------------------------------------
-  # Verify artifacts and checksums
-  # --------------------------------------------------
-  - name: Verify artifacts
-    shell: bash
-    run: |
-      set -euo pipefail
+          APPIMAGE="$(find . -maxdepth 1 -type f \
+            -name '*.AppImage' \
+            ! -name 'linuxdeploy-*' \
+            -print -quit)"
 
-      test -s dist/signal-cli-qt-linux-x86_64
-      test -s dist/signal-cli-qt-x86_64.AppImage
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No AppImage was generated"
+            exit 1
+          fi
 
-      file dist/signal-cli-qt-linux-x86_64
-      file dist/signal-cli-qt-x86_64.AppImage
+          mv "$APPIMAGE" dist/signal-cli-qt-x86_64.AppImage
+          chmod +x dist/signal-cli-qt-x86_64.AppImage
 
-      (
-        cd dist
-        sha256sum \
-          signal-cli-qt-linux-x86_64 \
-          signal-cli-qt-x86_64.AppImage \
-          > SHA256SUMS
-      )
+      # --------------------------------------------------
+      # Validate output and checksums
+      # --------------------------------------------------
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      cat dist/SHA256SUMS
-      ls -lh dist
+          test -s dist/signal-cli-qt-linux-x86_64
+          test -s dist/signal-cli-qt-x86_64.AppImage
 
-  # --------------------------------------------------
-  # Preserve artifacts even when a later step fails
-  # --------------------------------------------------
-  - name: Upload build artifacts
-    if: always() && hashFiles('dist/*') != ''
-    uses: actions/upload-artifact@v4
-    with:
-      name: signal-cli-qt-linux-${{ github.sha }}
-      path: dist/*
-      if-no-files-found: warn
-      retention-days: 14
+          file dist/signal-cli-qt-linux-x86_64
+          file dist/signal-cli-qt-x86_64.AppImage
 
-  # --------------------------------------------------
-  # Create a release for every commit
-  # --------------------------------------------------
-  - name: Create GitHub Release
-    uses: softprops/action-gh-release@v2
-    with:
-      tag_name: build-${{ github.sha }}
-      name: Linux build ${{ github.sha }}
-      target_commitish: ${{ github.sha }}
-      body: |
-        Automatic Linux x86_64 build.
+          # Make sure the custom AppRun (KDE theme support) really made it
+          # into the AppImage.
+          if ! ./dist/signal-cli-qt-x86_64.AppImage --appimage-extract AppRun >/dev/null 2>&1; then
+            echo "::error::Could not extract AppRun from the AppImage"
+            exit 1
+          fi
+          test -f squashfs-root/AppRun
+          grep -q 'QT_QPA_PLATFORMTHEME' squashfs-root/AppRun
+          rm -rf squashfs-root
 
-        Commit: `${{ github.sha }}`
+          (
+            cd dist
+            sha256sum \
+              signal-cli-qt-linux-x86_64 \
+              signal-cli-qt-x86_64.AppImage \
+              > SHA256SUMS
+          )
 
-        Files:
-        - `signal-cli-qt-linux-x86_64` — plain executable
-        - `signal-cli-qt-x86_64.AppImage` — AppImage
-        - `SHA256SUMS` — SHA-256 checksums
+          cat dist/SHA256SUMS
+          ls -lh dist
 
-        `signal-cli` must be installed separately.
-      draft: false
-      prerelease: false
-      make_latest: true
-      fail_on_unmatched_files: true
-      files: |
-        dist/signal-cli-qt-linux-x86_64
-        dist/signal-cli-qt-x86_64.AppImage
-        dist/SHA256SUMS
+      # --------------------------------------------------
+      # Preserve artifacts even when a later step fails
+      # --------------------------------------------------
+      - name: Upload build artifacts
+        if: always() && hashFiles('dist/*') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-qt-linux-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: warn
+          retention-days: 14
+
+      # --------------------------------------------------
+      # Create a release for every commit
+      # --------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.sha }}
+          name: Linux build ${{ github.sha }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            Automatic Linux x86_64 build.
+
+            Commit: `${{ github.sha }}`
+
+            Files:
+            - `signal-cli-qt-linux-x86_64` — plain executable
+            - `signal-cli-qt-x86_64.AppImage` — AppImage
+            - `SHA256SUMS` — SHA-256 checksums
+
+            The AppImage follows the KDE Plasma system theme (Breeze and
+            other installed themes) when run inside a Plasma session and
+            falls back to the bundled Qt look otherwise.
+
+            `signal-cli` must be installed separately.
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/signal-cli-qt-linux-x86_64
+            dist/signal-cli-qt-x86_64.AppImage
+            dist/SHA256SUMS
