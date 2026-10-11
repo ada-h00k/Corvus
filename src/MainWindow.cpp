@@ -282,6 +282,14 @@ void MainWindow::showEvent(QShowEvent *e)
 {
     QMainWindow::showEvent(e);
     QApplication::setQuitOnLastWindowClosed(true);
+    // Mark the selected chat read again when the window is shown from the tray.
+    if (!m_current.isEmpty()) {
+        auto it = m_convs.find(m_current);
+        if (it != m_convs.end() && it->unread > 0) {
+            it->unread = 0;
+            refreshList();
+        }
+    }
 }
 
 void MainWindow::quitApplication()
@@ -767,9 +775,10 @@ bool MainWindow::addMessage(const QString &key, Message m, const QString &title,
             m_view->appendMessage(m);
         else
             showConversation(true);
-    } else if (!m.outgoing) {
-        c.unread++;
     }
+    // A message in the selected chat is only read while the window is visible.
+    if (!m.outgoing && !(key == m_current && isVisible() && !isMinimized()))
+        c.unread++;
     refreshList();
     if (!m.outgoing && !isActiveWindow()) QApplication::alert(this);
     return true;
