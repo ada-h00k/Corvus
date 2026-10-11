@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/sounds">
+        <file alias="pop.ogg">sounds/pop.ogg</file>
+    </qresource>
+</RCC>
