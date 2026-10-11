@@ -246,17 +246,18 @@ jobs:
             AppDir/usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg \
             AppDir/signal-cli-qt.svg
 
-      # --------------------------------------------------
+            # --------------------------------------------------
       # Custom AppRun: follow the KDE Plasma system theme
       #
-      # linuxdeploy-plugin-qt bundles its own Qt, which by default only
-      # sees the bundled plugins. The custom AppRun below additionally
-      # exposes the host system's Qt6 plugin/QML directories whenever the
-      # AppImage is started inside a KDE Plasma session. This lets Qt load
-      # the system's plasma-integration platform theme plus the widget/QML
-      # styles the user has installed (Breeze etc.). If the host provides
-      # nothing usable, Qt falls back to its default look, so this is
-      # always safe.
+      # Mode 1 (preferred on KDE Plasma): run against the SYSTEM Qt.
+      #   plasma-integration, Breeze style, colour scheme, fonts and
+      #   icons then behave exactly like for a natively installed KDE
+      #   application, no matter how new the system Qt is (Arch etc.).
+      #
+      # Mode 2 (fallback): run against the bundled Qt and expose the
+      #   host's Qt6 plugin/QML dirs as well. Qt only loads such
+      #   plugins when the system Qt is not newer than the bundled
+      #   one (stable distributions).
       # --------------------------------------------------
       - name: Create custom AppRun
         shell: bash
@@ -267,28 +268,18 @@ jobs:
 
           cat > custom-apprun/AppRun <<'APPRUN'
           #!/usr/bin/env bash
-          #
-          # Custom AppRun for the signal-cli-qt AppImage.
-          #
-          # 1. Sets up the environment for the Qt libraries and plugins
-          #    bundled inside the AppImage.
-          # 2. When started inside a KDE Plasma session, additionally makes
-          #    the host system's Qt6 plugin and QML directories visible to
-          #    the bundled Qt, so the application follows the KDE Plasma
-          #    system theme the user has configured.
-
           set -u
 
           APPDIR="${APPDIR:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")}"
+          APP="${APPDIR}/usr/bin/signal-cli-qt"
 
-          # --- 1) bundled Qt ----------------------------------------------
+          # Qt version this AppImage was built with (set at build time).
+          MIN_QT_VERSION='@MIN_QT_VERSION@'
 
-          export LD_LIBRARY_PATH="${APPDIR}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-
-          PLUGIN_PATHS="${APPDIR}/usr/plugins"
-          QML_PATHS="${APPDIR}/usr/qml"
-
-          # --- 2) KDE Plasma system theme ----------------------------------
+          debug() {
+            [ -n "${DEBUG_APPRUN:-}" ] && printf 'AppRun: %s\n' "$*" >&2
+            return 0
+          }
 
           is_plasma_session() {
             [ "${KDE_FULL_SESSION:-}" = "true" ] && return 0
@@ -298,71 +289,114 @@ jobs:
             return 1
           }
 
+          # version_ge A B -> success if A >= B
+          version_ge() {
+            [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n 1)" = "$2" ]
+          }
+
+          # Success if every Qt library bundled in the AppImage also
+          # exists on the host - only then can the app run completely
+          # against the system Qt.
+          system_has_all_qt_libs() {
+            local cache f soname
+            [ -e "${APPDIR}/usr/lib/libQt6Core.so.6" ] || return 1
+            cache="$(ldconfig -p 2>/dev/null || true)"
+            while IFS= read -r f; do
+              soname="$(basename "$f")"
+              printf '%s\n' "$cache" | grep -qF "${soname} (" || return 1
+            done < <(find "${APPDIR}/usr/lib" -maxdepth 1 -name 'libQt6*.so*' -print 2>/dev/null)
+            return 0
+          }
+
+          IN_PLASMA=0
           if is_plasma_session; then
+            IN_PLASMA=1
+          fi
+
+          # ---------------------------------------------- mode 1: system Qt
+
+          SYS_QT_VERSION=""
+
+          if [ "$IN_PLASMA" = 1 ] && command -v qmake6 >/dev/null 2>&1; then
+            SYS_QT_VERSION="$(qmake6 -query QT_VERSION 2>/dev/null || true)"
+          fi
+
+          if [ -n "$SYS_QT_VERSION" ] \
+             && version_ge "$SYS_QT_VERSION" "$MIN_QT_VERSION" \
+             && system_has_all_qt_libs; then
+
+            SYS_LIBS="$(qmake6 -query QT_INSTALL_LIBS 2>/dev/null || true)"
+            if [ -z "$SYS_LIBS" ] || [ ! -d "$SYS_LIBS" ]; then
+              SYS_LIBS="/usr/lib"
+            fi
+
+            # LD_LIBRARY_PATH takes precedence over the RUNPATH that
+            # linuxdeploy baked into the binary, so Qt is resolved from
+            # the system. Bundled non-Qt libraries are still found via
+            # the RUNPATH.
+            export LD_LIBRARY_PATH="${SYS_LIBS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+            # Plugins, QML paths and platform theme are left to the
+            # system Qt / the Plasma session.
+            export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-kde}"
+
+            debug "using SYSTEM Qt ${SYS_QT_VERSION} (built against ${MIN_QT_VERSION})"
+            exec "$APP" "$@"
+          fi
+
+          # -------------------------------------------- mode 2: bundled Qt
+
+          export LD_LIBRARY_PATH="${APPDIR}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+          PLUGIN_PATHS="${APPDIR}/usr/plugins"
+          QML_PATHS="${APPDIR}/usr/qml"
+
+          if [ "$IN_PLASMA" = 1 ]; then
             SYSTEM_PLUGINS=""
 
-            # Ask the system's Qt where its plugins are installed.
             if command -v qtpaths6 >/dev/null 2>&1; then
               p="$(qtpaths6 --plugin-dir 2>/dev/null || true)"
-              if [ -n "$p" ] && [ -d "$p" ]; then
-                SYSTEM_PLUGINS="$p"
-              fi
+              if [ -n "$p" ] && [ -d "$p" ]; then SYSTEM_PLUGINS="$p"; fi
             fi
 
             if [ -z "$SYSTEM_PLUGINS" ] && command -v qmake6 >/dev/null 2>&1; then
               p="$(qmake6 -query QT_INSTALL_PLUGINS 2>/dev/null || true)"
-              if [ -n "$p" ] && [ -d "$p" ]; then
-                SYSTEM_PLUGINS="$p"
-              fi
+              if [ -n "$p" ] && [ -d "$p" ]; then SYSTEM_PLUGINS="$p"; fi
             fi
 
-            # Fallback: well known locations of the major distributions.
-            #   /usr/lib/x86_64-linux-gnu/qt6/plugins  Debian, Ubuntu, ...
-            #   /usr/lib64/qt6/plugins                 Fedora, openSUSE, ...
-            #   /usr/lib/qt6/plugins                   Arch, ...
             if [ -z "$SYSTEM_PLUGINS" ]; then
               for p in \
+                /usr/lib/qt6/plugins \
                 /usr/lib/x86_64-linux-gnu/qt6/plugins \
-                /usr/lib64/qt6/plugins \
-                /usr/lib/qt6/plugins
+                /usr/lib64/qt6/plugins
               do
-                if [ -d "$p" ]; then
-                  SYSTEM_PLUGINS="$p"
-                  break
-                fi
+                if [ -d "$p" ]; then SYSTEM_PLUGINS="$p"; break; fi
               done
             fi
 
             if [ -n "$SYSTEM_PLUGINS" ]; then
-              # Make plasma-integration (platform theme "kde"), the user's
-              # widget style, input context plugins, ... from the system
-              # visible to the bundled Qt.
               PLUGIN_PATHS="${PLUGIN_PATHS}:${SYSTEM_PLUGINS}"
-
-              # QML modules such as org.kde.desktop (qqc2-desktop-style)
-              # sit next to the plugin directory on all major distros.
               SYSTEM_QML="${SYSTEM_PLUGINS%/plugins}/qml"
               if [ -d "$SYSTEM_QML" ]; then
                 QML_PATHS="${QML_PATHS}:${SYSTEM_QML}"
               fi
-
-              # plasma-integration registers itself as platform theme "kde".
-              # Keep whatever the session has already configured.
               export QT_QPA_PLATFORMTHEME="${QT_QPA_PLATFORMTHEME:-kde}"
             fi
           fi
-
-          # --- 3) hand over to the application ------------------------------
 
           export QT_PLUGIN_PATH="${PLUGIN_PATHS}${QT_PLUGIN_PATH:+:${QT_PLUGIN_PATH}}"
           export QML2_IMPORT_PATH="${QML_PATHS}${QML2_IMPORT_PATH:+:${QML2_IMPORT_PATH}}"
           export QML_IMPORT_PATH="${QML2_IMPORT_PATH}"
 
-          exec "${APPDIR}/usr/bin/signal-cli-qt" "$@"
+          debug "using BUNDLED Qt (system Qt: ${SYS_QT_VERSION:-unknown}, built against ${MIN_QT_VERSION})"
+          exec "$APP" "$@"
           APPRUN
 
-          chmod 755 custom-apprun/AppRun
+          # Bake the Qt version this AppImage was built with into the script.
+          sed -i "s/@MIN_QT_VERSION@/${QT_VERSION}/" custom-apprun/AppRun
 
+          chmod 755 custom-apprun/AppRun
+          
       # --------------------------------------------------
       # Build AppImage
       # --------------------------------------------------
