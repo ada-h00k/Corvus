@@ -9,7 +9,7 @@ struct NotificationSettings {
     bool notifications = true;     // desktop notifications
     int content = NameAndText;     // what a notification reveals
     bool sound = true;             // play a sound for new messages
-    QString soundId = QStringLiteral("chime"); // built-in id or "custom"
+    QString soundId = QStringLiteral("pop-ogg"); // built-in id or "custom"
     QString soundFile;             // used when soundId == "custom"
     bool trayIcon = true;          // show the tray icon
     bool closeToTray = true;       // closing the window keeps the app running in the tray
