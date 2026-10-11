@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "AppearanceDialog.h"
+#include "AppIcon.h"
 #include "Attachments.h"
 #include "ChatView.h"
 #include "EmojiPicker.h"
@@ -8,8 +9,11 @@
 #include "ImageViewer.h"
 #include "LinkDialog.h"
 #include "MessageInput.h"
+#include "NotificationDialog.h"
+#include "Notifier.h"
 #include "PassphraseDialog.h"
 #include "Records.h"
+#include "SoundPlayer.h"
 
 #include <QAction>
 #include <QApplication>
@@ -38,9 +42,11 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QShortcut>
+#include <QShowEvent>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QSystemTrayIcon>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -146,10 +152,11 @@ MainWindow::MainWindow()
     file->addSeparator();
     file->addAction(tr("Change history passphrase …"), this, &MainWindow::changePassphrase);
     file->addSeparator();
-    file->addAction(tr("Quit"), QKeySequence::Quit, this, &QWidget::close);
+    file->addAction(tr("Quit"), QKeySequence::Quit, this, &MainWindow::quitApplication);
 
     QMenu *settings = menuBar()->addMenu(tr("&Settings"));
     settings->addAction(tr("Appearance …"), this, &MainWindow::editAppearance);
+    settings->addAction(tr("Notifications && sound …"), this, &MainWindow::editNotifications);
     settings->addAction(tr("Path to signal-cli …"), this, &MainWindow::chooseExecutable);
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
@@ -175,6 +182,8 @@ MainWindow::MainWindow()
         QMenu menu(this);
         const bool archived = m_convs[key].archived;
         menu.addAction(archived ? tr("Unarchive") : tr("Archive"), this, [this, key, archived] { setArchived(key, !archived); });
+        const bool muted = m_convs[key].muted;
+        menu.addAction(muted ? tr("Unmute notifications") : tr("Mute notifications"), this, [this, key, muted] { setMuted(key, !muted); });
         menu.addAction(tr("Delete conversation …"), this, [this, key] { deleteConversation(key); });
         menu.exec(m_list->viewport()->mapToGlobal(pos));
     });
@@ -212,6 +221,25 @@ MainWindow::MainWindow()
     // Ctrl+V / Shift+Insert / context menu: screenshots and copied files become attachments
     m_input->setPasteHook([this](const QMimeData *md) { return attachFromMimeData(md); });
 
+    // Tray icon, notifications, sound
+    m_notify = NotificationSettings::load();
+    setWindowIcon(AppIcon::app());
+    m_sound = new SoundPlayer(this);
+    m_notifier = new Notifier(this);
+    m_tray = new QSystemTrayIcon(AppIcon::tray(0), this);
+    m_trayMenu = new QMenu(this);
+    m_trayMenu->addAction(tr("Show / hide window"), this, &MainWindow::toggleWindow);
+    m_trayMenu->addSeparator();
+    m_trayMenu->addAction(tr("Quit"), this, &MainWindow::quitApplication);
+    m_tray->setContextMenu(m_trayMenu);
+    connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason r) {
+        if (r == QSystemTrayIcon::Trigger || r == QSystemTrayIcon::DoubleClick) toggleWindow();
+    });
+    m_notifier->setTrayIcon(m_tray);
+    connect(m_notifier, &Notifier::activated, this, &MainWindow::activateConversation);
+    connect(qApp, &QGuiApplication::commitDataRequest, this, [this] { m_quitting = true; }); // session end
+    applyNotificationSettings();
+
     // signal-cli
     connect(&m_cli, &SignalCli::envelopeReceived, this, &MainWindow::onEnvelope);
     connect(&m_cli, &SignalCli::stopped, this, [this](const QString &reason) { setConnected(false, reason); });
@@ -223,11 +251,59 @@ MainWindow::MainWindow()
     QTimer::singleShot(0, this, &MainWindow::initialise);
 }
 
+bool MainWindow::shouldHideOnClose(bool trayVisible, bool closeToTray, bool quitting)
+{
+    return trayVisible && closeToTray && !quitting;
+}
+
 void MainWindow::closeEvent(QCloseEvent *e)
 {
     QSettings().setValue(QStringLiteral("geometry"), saveGeometry());
+    if (shouldHideOnClose(m_tray && m_tray->isVisible(), m_notify.closeToTray, m_quitting)) {
+        // Keep running in the tray. A hidden main window must not quit the app when a
+        // dialog closes, so "quit on last window closed" is off while hidden (see showEvent).
+        QApplication::setQuitOnLastWindowClosed(false);
+        e->ignore();
+        hide();
+        QSettings s;
+        if (!s.value(QStringLiteral("trayHintShown")).toBool()) {
+            s.setValue(QStringLiteral("trayHintShown"), true);
+            m_tray->showMessage(tr("signal-cli Qt is still running"),
+                                tr("Click the tray icon to open it again. Use the tray menu or File → Quit to quit."),
+                                QSystemTrayIcon::NoIcon, 7000);
+        }
+        return;
+    }
     m_cli.stop();
     e->accept();
+}
+
+void MainWindow::showEvent(QShowEvent *e)
+{
+    QMainWindow::showEvent(e);
+    QApplication::setQuitOnLastWindowClosed(true);
+}
+
+void MainWindow::quitApplication()
+{
+    m_quitting = true;
+    if (isVisible()) {
+        close(); // closeEvent accepts, the last window closing ends the app
+    } else {
+        m_cli.stop();
+        QCoreApplication::quit();
+    }
+}
+
+void MainWindow::toggleWindow()
+{
+    if (isVisible() && !isMinimized() && isActiveWindow()) {
+        close(); // goes through closeEvent: hides to the tray
+    } else {
+        showNormal();
+        raise();
+        activateWindow();
+    }
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *e)
@@ -536,6 +612,8 @@ void MainWindow::loadHistory(const QJsonArray &records)
                 const QString e = o.value(QStringLiteral("e")).toString();
                 if (e.isEmpty()) m.reactions.remove(by); else m.reactions[by] = e;
             }
+        } else if (t == QLatin1String("k")) {
+            conv(key, key, group).muted = o.value(QStringLiteral("v")).toBool();
         } else if (t == QLatin1String("a")) {
             Conversation &c = conv(key, key, group);
             c.archived = o.value(QStringLiteral("v")).toBool();
@@ -554,6 +632,7 @@ QJsonArray MainWindow::allRecords() const
         const Conversation &c = m_convs[k];
         if (!c.storedName.isEmpty()) out.append(Records::name(c.key, c.storedName));
         if (c.archived || c.sigArchived) out.append(Records::archive(c.key, c.archived, c.sigArchived));
+        if (c.muted) out.append(Records::mute(c.key, true));
         for (const Message &m : c.msgs) {
             out.append(Records::message(c.key, m));
             for (auto it = m.reactions.cbegin(); it != m.reactions.cend(); ++it)
@@ -764,7 +843,7 @@ void MainWindow::refreshList()
 
     QListWidgetItem *toSelect = nullptr;
     for (const Conversation *c : items) {
-        QString text = c->isGroup ? QStringLiteral("👥 ") + c->title : c->title;
+        QString text = (c->muted ? QStringLiteral("🔕 ") : QString()) + (c->isGroup ? QStringLiteral("👥 ") + c->title : c->title);
         auto *it = new QListWidgetItem;
         if (c->unread > 0) {
             text += QStringLiteral(" (%1)").arg(c->unread);
@@ -778,6 +857,7 @@ void MainWindow::refreshList()
         if (c->key == m_current) toSelect = it;
     }
     if (toSelect) m_list->setCurrentItem(toSelect);
+    updateTray();
 }
 
 void MainWindow::onSelectionChanged(QListWidgetItem *item)
@@ -785,12 +865,19 @@ void MainWindow::onSelectionChanged(QListWidgetItem *item)
     if (!item) return;
     const QString key = item->data(Qt::UserRole).toString();
     if (key == kFolderKey || key == kBackKey) return; // handled on click
+    openConversation(key);
+}
+
+void MainWindow::openConversation(const QString &key)
+{
+    if (!m_convs.contains(key)) return;
     m_current = key;
     m_convs[m_current].unread = 0;
     m_replyQuote = Quote();
     updateReplyBar();
     showConversation();
     refreshList();
+    m_notifier->close(key); // the notification for this chat is obsolete now
     m_input->setFocus();
 }
 
@@ -943,6 +1030,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     const QString title = group ? tr("Group") : (pe.outgoing ? key : m.sender);
     if (!addMessage(key, m, title, group)) return;
     if (!pe.outgoing && !group && !pe.srcName.isEmpty()) learnName(key, pe.srcName);
+    if (!pe.outgoing) alertIncoming(key, m);
     fetchThumbnails(key, m.ts(), m.authorKey);
 }
 
@@ -1290,4 +1378,93 @@ void MainWindow::editAppearance()
     m_appearance = dlg.appearance();
     m_appearance.save(palette());
     m_view->setAppearance(m_appearance);
+}
+
+// ----------------------------------------- Tray, notifications, sound
+
+void MainWindow::applyNotificationSettings()
+{
+    m_tray->setVisible(m_notify.trayIcon && QSystemTrayIcon::isSystemTrayAvailable());
+    m_trayUnread = -1; // force an icon refresh
+    updateTray();
+}
+
+void MainWindow::updateTray()
+{
+    if (!m_tray) return;
+    int unread = 0;
+    for (const Conversation &c : std::as_const(m_convs)) unread += c.unread;
+    if (unread != m_trayUnread) {
+        m_trayUnread = unread;
+        m_tray->setIcon(AppIcon::tray(unread));
+        setWindowTitle(unread > 0 ? QStringLiteral("(%1) signal-cli Qt").arg(unread) : QStringLiteral("signal-cli Qt"));
+    }
+    m_tray->setToolTip(unread > 0 ? tr("signal-cli Qt – %n unread message(s)", nullptr, unread) : tr("signal-cli Qt"));
+}
+
+void MainWindow::alertIncoming(const QString &key, const Message &m)
+{
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd() || it->muted) return;
+    // Nothing to announce while the user is looking at this very conversation.
+    if (isVisible() && !isMinimized() && isActiveWindow() && key == m_current) return;
+
+    // Notification and sound are independent switches.
+    if (m_notify.notifications) {
+        QString preview = m.text.simplified();
+        if (preview.size() > 240) preview = preview.left(240) + QStringLiteral("…");
+        if (preview.isEmpty() && !m.attachments.isEmpty()) {
+            const Attachment &a = m.attachments.first();
+            preview = a.isImage() ? tr("[Image]") : tr("[File] %1").arg(a.filename);
+        }
+        QString title = it->title, body;
+        switch (m_notify.content) {
+        case NotificationSettings::Hidden:
+            title = tr("signal-cli Qt");
+            body = tr("New message");
+            break;
+        case NotificationSettings::NameOnly:
+            body = tr("New message");
+            break;
+        default:
+            body = (it->isGroup && !m.sender.isEmpty()) ? m.sender + QStringLiteral(": ") + preview : preview;
+            break;
+        }
+        m_notifier->notify(key, title, body);
+    }
+    if (m_notify.sound) {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - m_lastSoundMs >= 700) { // a burst of messages should not become a burst of noise
+            m_lastSoundMs = now;
+            m_sound->play(m_notify);
+        }
+    }
+}
+
+void MainWindow::activateConversation(const QString &key)
+{
+    if (!m_convs.contains(key)) return;
+    showNormal();
+    raise();
+    activateWindow();
+    m_showArchived = m_convs[key].archived;
+    openConversation(key);
+}
+
+void MainWindow::setMuted(const QString &key, bool muted)
+{
+    auto it = m_convs.find(key);
+    if (it == m_convs.end() || it->muted == muted) return;
+    it->muted = muted;
+    persist(Records::mute(key, muted));
+    refreshList();
+}
+
+void MainWindow::editNotifications()
+{
+    NotificationDialog dlg(m_notify, m_sound, m_notifier, QSystemTrayIcon::isSystemTrayAvailable(), this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    m_notify = dlg.settings();
+    m_notify.save();
+    applyNotificationSettings();
 }

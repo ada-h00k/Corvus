@@ -49,4 +49,5 @@ struct Conversation {
     QString storedName;       // display name learnt from an incoming message (persisted)
     bool archived = false;    // shown in the "Archived chats" folder
     bool sigArchived = false; // archive state last reported by signal-cli
+    bool muted = false;       // local "mute notifications" (signal-cli does not report mute state)
 };

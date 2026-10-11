@@ -109,6 +109,11 @@ QJsonObject archive(const QString &conv, bool archived, bool sigArchived)
     return {{"t", "a"}, {"c", conv}, {"v", archived}, {"s", sigArchived}};
 }
 
+QJsonObject mute(const QString &conv, bool muted)
+{
+    return {{"t", "k"}, {"c", conv}, {"v", muted}};
+}
+
 QJsonObject name(const QString &conv, const QString &n)
 {
     return {{"t", "n"}, {"c", conv}, {"n", n}};

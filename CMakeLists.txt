@@ -8,6 +8,12 @@ set(CMAKE_AUTOMOC ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 find_package(Threads REQUIRED)
 
+# Desktop notifications use the freedesktop.org D-Bus service (Linux/BSD). Optional: without
+# Qt DBus the tray icon's own notifications are used as a fallback.
+if(UNIX AND NOT APPLE)
+    find_package(Qt6 QUIET OPTIONAL_COMPONENTS DBus)
+endif()
+
 # ---- Rust: encrypted history store (static library with C ABI) ------------
 find_program(CARGO cargo REQUIRED)
 set(STORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/history-store)
@@ -30,6 +36,16 @@ add_dependencies(history_store history_store_cargo)
 # ---- Qt GUI ---------------------------------------------------------------
 set(APP_SOURCES
     src/Model.h
+    src/NotificationSettings.h
+    src/NotificationSettings.cpp
+    src/SoundPlayer.h
+    src/SoundPlayer.cpp
+    src/Notifier.h
+    src/Notifier.cpp
+    src/NotificationDialog.h
+    src/NotificationDialog.cpp
+    src/AppIcon.h
+    src/AppIcon.cpp
     src/Appearance.h
     src/Appearance.cpp
     src/AppearanceDialog.h
@@ -64,6 +80,13 @@ target_include_directories(app_core PUBLIC src)
 target_compile_definitions(app_core PUBLIC APP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(app_core PUBLIC
     Qt6::Widgets Qt6::Network history_store Threads::Threads ${CMAKE_DL_LIBS} m)
+if(TARGET Qt6::DBus)
+    target_link_libraries(app_core PUBLIC Qt6::DBus)
+    target_compile_definitions(app_core PUBLIC HAVE_QT_DBUS)
+    message(STATUS "Desktop notifications: freedesktop.org D-Bus")
+else()
+    message(STATUS "Desktop notifications: tray icon fallback only (Qt DBus not found)")
+endif()
 
 add_executable(signal-cli-qt src/main.cpp)
 target_link_libraries(signal-cli-qt PRIVATE app_core)
@@ -88,6 +111,28 @@ if(SIGNAL_CLI_QT_TESTS)
         MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
     add_test(NAME startup COMMAND startup_test)
     set_tests_properties(startup PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 240)
+
+    if(TARGET Qt6::DBus)
+        find_program(DBUS_RUN_SESSION dbus-run-session)
+        if(DBUS_RUN_SESSION)
+            add_executable(alerts_test tests/alerts_test.cpp)
+            target_link_libraries(alerts_test PRIVATE app_core Qt6::DBus Qt6::Test)
+            target_compile_definitions(alerts_test PRIVATE
+                MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
+            # The tray needs a platform with a real theme: use a virtual X server when there is one,
+            # otherwise the offscreen platform (the tray part of the test is then skipped).
+            find_program(XVFB_RUN xvfb-run)
+            if(XVFB_RUN)
+                add_test(NAME alerts COMMAND ${XVFB_RUN} -a ${DBUS_RUN_SESSION} -- $<TARGET_FILE:alerts_test>)
+                set_tests_properties(alerts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb" TIMEOUT 300)
+            else()
+                add_test(NAME alerts COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:alerts_test>)
+                set_tests_properties(alerts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 300)
+            endif()
+        else()
+            message(STATUS "dbus-run-session not found: alerts test skipped")
+        endif()
+    endif()
 
     add_executable(chatview_test tests/chatview_test.cpp)
     target_link_libraries(chatview_test PRIVATE app_core Qt6::Test)
