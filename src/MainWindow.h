@@ -131,6 +131,7 @@ private:
 
     QHash<QString, Conversation> m_convs;
     QHash<QString, QString> m_alias; // uuid -> number
+    QHash<QString, QString> m_contactNames; // key -> contact name from signal-cli
     QString m_current;
     QString m_account;
     QString m_version; // e.g. "0.13.12"
