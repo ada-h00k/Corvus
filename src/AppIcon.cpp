@@ -36,20 +36,26 @@ QPixmap render(int size, int unread)
     for (int i = 0; i < 3; ++i) p.drawEllipse(QPointF(s * (0.37 + 0.13 * i), s * 0.47), r, r);
 
     if (unread > 0) {
-        const qreal d = s * 0.50;
+        // Keep the badge legible in small system-tray icons.
+        const qreal d = s * 0.62;
         const QRectF badge(s - d - s * 0.01, s * 0.01, d, d);
         p.setBrush(Qt::white);
         p.drawEllipse(badge.adjusted(-s * 0.03, -s * 0.03, s * 0.03, s * 0.03));
         p.setBrush(QColor(0xe5, 0x39, 0x35));
         p.drawEllipse(badge);
-        if (size >= 32) {
-            QFont f;
-            f.setBold(true);
-            f.setPixelSize(int(d * (unread > 99 ? 0.40 : unread > 9 ? 0.52 : 0.68)));
-            p.setFont(f);
-            p.setPen(Qt::white);
-            p.drawText(badge, Qt::AlignCenter, unread > 99 ? QStringLiteral("99+") : QString::number(unread));
-        }
+
+        const QString label = unread > 99
+            ? (size < 32 ? QStringLiteral("99") : QStringLiteral("99+"))
+            : QString::number(unread);
+        QFont f;
+        f.setBold(true);
+        const int fontPx = size < 32
+            ? (unread > 9 ? 7 : 8)
+            : int(d * (unread > 99 ? 0.32 : unread > 9 ? 0.46 : 0.60));
+        f.setPixelSize(fontPx);
+        p.setFont(f);
+        p.setPen(Qt::white);
+        p.drawText(badge, Qt::AlignCenter, label);
     }
     return pm;
 }
