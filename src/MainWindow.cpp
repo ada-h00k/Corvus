@@ -513,13 +513,21 @@ void MainWindow::loadContactsAndGroups()
 
             QString title = c.value(QStringLiteral("name")).toString();
             if (title.isEmpty()) title = c.value(QStringLiteral("profileName")).toString();
+            if (!title.isEmpty()) m_contactNames.insert(key, title);
+
+            // signal-cli lists every known recipient (address book, group members, …), not just
+            // people we have chatted with. Only show a chat once there is one: local history,
+            // a new message, or an archived chat on the phone.
+            const bool sig = c.value(QStringLiteral("isArchived")).toBool();
+            if (c.value(QStringLiteral("isHidden")).toBool()) continue;
+            if (!m_convs.contains(key) && !sig) continue;
+
             Conversation &cv2 = conv(key, key);
             if (title.isEmpty()) title = cv2.storedName.isEmpty() ? key : cv2.storedName;
             cv2.title = title;
 
             // Archive state: follow signal-cli only when *it* changed (e.g. archived on the phone);
             // otherwise keep the local state (e.g. auto-unarchived by a new message).
-            const bool sig = c.value(QStringLiteral("isArchived")).toBool();
             if (sig != cv2.sigArchived) {
                 cv2.sigArchived = sig;
                 cv2.archived = sig;
@@ -720,6 +728,7 @@ Conversation &MainWindow::conv(const QString &key, const QString &title, bool gr
         Conversation c;
         c.key = key;
         c.title = title.isEmpty() ? key : title;
+        if (c.title == key) c.title = m_contactNames.value(key, key); // saved contact name, if known
         c.isGroup = group;
         it = m_convs.insert(key, c);
     }
