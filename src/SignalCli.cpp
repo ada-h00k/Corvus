@@ -12,7 +12,13 @@
 
 SignalCli::SignalCli(QObject *parent) : QObject(parent) {}
 
-SignalCli::~SignalCli() { stop(); }
+SignalCli::~SignalCli()
+{
+    // Pending callbacks belong to objects (e.g. the main window) that may already be
+    // partly destroyed at this point: drop them silently instead of failing them.
+    m_pending.clear();
+    stop();
+}
 
 QString SignalCli::autodetect()
 {

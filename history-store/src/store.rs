@@ -119,6 +119,9 @@ pub enum Record {
     /// Archive state: `v` = archived here, `s` = last state seen from signal-cli.
     #[serde(rename = "a")]
     Archive { c: String, v: bool, s: bool },
+    /// Local "mute notifications" flag of a conversation.
+    #[serde(rename = "k")]
+    Mute { c: String, v: bool },
 }
 
 #[derive(Clone)]
@@ -541,6 +544,7 @@ mod tests {
             Record::Upd { c: "+49".into(), ts: 10, au: "+49".into(), d: serde_json::json!({"at": [{"id": "abc", "th": "AAAA"}]}) },
             Record::React { c: "+49".into(), ts: 10, au: "+49".into(), by: "+1".into(), e: "👍".into() },
             Record::Archive { c: "+49".into(), v: true, s: false },
+            Record::Mute { c: "+49".into(), v: true },
         ];
         let mut s = Store::create(&p, "pw", FAST).unwrap();
         for r in &recs {

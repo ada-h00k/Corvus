@@ -3,6 +3,7 @@
 #include "Appearance.h"
 #include "HistoryStore.h"
 #include "Model.h"
+#include "NotificationSettings.h"
 #include "SignalCli.h"
 
 #include <QHash>
@@ -15,9 +16,15 @@
 class ChatView;
 class EmojiPicker;
 class MessageInput;
+class Notifier;
+class SoundPlayer;
+class QAction;
+class QMenu;
+class QSystemTrayIcon;
 class QCloseEvent;
 class QDragEnterEvent;
 class QDropEvent;
+class QShowEvent;
 class QLabel;
 class QLineEdit;
 class QMimeData;
@@ -35,9 +42,15 @@ public:
 
     // Queue files for the next message (attach button, drag & drop, paste).
     void addPendingFiles(const QStringList &files);
+    // Local per-chat mute (signal-cli does not report mute state): no notification, no sound.
+    void setMuted(const QString &key, bool muted);
+
+    // Closing the window hides it to the tray only if the tray icon is really there and enabled.
+    static bool shouldHideOnClose(bool trayVisible, bool closeToTray, bool quitting);
 
 protected:
     void closeEvent(QCloseEvent *e) override;
+    void showEvent(QShowEvent *e) override;
     void dragEnterEvent(QDragEnterEvent *e) override;
     void dropEvent(QDropEvent *e) override;
 
@@ -54,6 +67,10 @@ private slots:
     void showAbout();
     void changePassphrase();
     void editAppearance();
+    void editNotifications();
+    void quitApplication();
+    void toggleWindow();
+    void activateConversation(const QString &key);
 
 private:
     // --- setup / signal-cli
@@ -83,6 +100,12 @@ private:
     bool applyReaction(const QString &key, qint64 ts, const QStringList &authors, const QString &reactor,
                        const QString &emoji);
     void setArchived(const QString &key, bool archived);
+
+    // --- notifications, sound, tray
+    void applyNotificationSettings();
+    void updateTray();
+    void alertIncoming(const QString &key, const Message &m);
+    void openConversation(const QString &key);
 
     // --- list / view
     void refreshList();
@@ -114,6 +137,14 @@ private:
     bool m_showArchived = false;
     int m_connectGen = 0; // invalidates callbacks of an older connect attempt
     Appearance m_appearance;
+    NotificationSettings m_notify;
+    SoundPlayer *m_sound = nullptr;
+    Notifier *m_notifier = nullptr;
+    QSystemTrayIcon *m_tray = nullptr;
+    QMenu *m_trayMenu = nullptr;
+    bool m_quitting = false;
+    qint64 m_lastSoundMs = 0;
+    int m_trayUnread = -1;
 
     Quote m_replyQuote;
     QStringList m_pendingFiles;

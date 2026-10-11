@@ -87,6 +87,16 @@ it.
   bubbles, received bubbles, their texts and the chat background, plus the
   corner radius, with a live preview. Untouched colours keep following a light
   or dark system theme. *Reset to defaults* restores them
+- **Tray icon:** shows an unread counter (also in the window title and tooltip).
+  Closing the window can keep the app running in the tray; click the icon to
+  show/hide it, quit from the tray menu or *File → Quit*
+- **Desktop notifications** and a **sound** for new messages, each with its own
+  switch – you can have either, both or none (`Settings → Notifications & sound …`).
+  Notifications can show name and message, name only, or nothing; clicking one opens
+  the chat. A newer notification from the same chat replaces the old one
+- **Sound:** three built-in sounds (Chime, Pop, Ding) or your own file, with a *Test* button
+- Neither notification nor sound is triggered while you look at that conversation, nor for
+  chats you **muted** (right-click a chat → *Mute notifications*; kept in the encrypted history)
 - **Archived chats:** archived contacts are shown in an *Archived chats*
   folder (see below), like the official client
 - Persistent, encrypted history; delete single conversations (right-click) –
@@ -163,6 +173,21 @@ older Rust toolchains.
 No secrets are needed (default `GITHUB_TOKEN` with `contents: write`).
 One release per commit accumulates quickly – delete old ones from time to time.
 
+### Notifications, sound and tray – how they work
+
+- **Notifications** use the freedesktop.org Notifications service over D-Bus (what GNOME,
+  KDE, … provide), independent of the tray icon. Where that service is missing, and on other
+  platforms, the tray icon's own messages are used if the tray icon is shown.
+- **Sound** is played by the desktop's command line player (`pw-play`, `paplay`,
+  `canberra-gtk-play`, `aplay`, `play`; `afplay` on macOS) instead of Qt Multimedia, so
+  there is no extra dependency and any format the player understands works. If none is
+  found you get the system beep, and the settings dialog tells you.
+- **Tray icon:** needs a system tray (StatusNotifier). GNOME has none by default (install
+  the AppIndicator extension); then the setting is greyed out and closing the window simply
+  quits.
+- **Mute:** signal-cli does not report whether a chat is muted on your phone, so muting is
+  local to this app.
+
 ## Troubleshooting
 
 - **Every call to signal-cli is logged to the terminal** (command, result, duration;
@@ -193,6 +218,11 @@ The GUI test starts the real `MainWindow` (offscreen) against
 field names of signal-cli's source. It covers first start / unlock, the
 status bar (no phone number), archive folder, quotes, image thumbnails, attachments, reactions, sync messages,
 persistence across a restart and that no message text is visible in the file.
+`alerts_test` starts fake D-Bus services (notifications and a tray host) and a fake
+`paplay`, and checks every combination of notification/sound on and off, content
+settings, groups, attachments, mute, rate limiting, clicking a notification, the tray
+(hide on close, unread counter, quit) and the settings dialog. It needs
+`dbus-run-session` and, for the tray part, `xvfb-run`.
 `startup_test` runs the real window against a mock that fails, returns an empty
 list, is slow, or exits non-zero after printing valid data, and checks that the app
 shows the real error, never blocks, and still connects when the output is valid.
