@@ -169,6 +169,47 @@ static bool chooseChatExpiration(MainWindow &window, QListWidget *list, const QS
     return waitFor([] { return QApplication::activeModalWidget() == nullptr; }, 3000);
 }
 
+static bool chooseChatNickname(MainWindow &window, QListWidget *list, const QString &needle, const QString &nickname)
+{
+    QListWidgetItem *item = nullptr;
+    for (int i = 0; i < list->count(); ++i) {
+        if (list->item(i)->text().contains(needle)) {
+            item = list->item(i);
+            break;
+        }
+    }
+    if (!item) return false;
+
+    const QPoint pos = list->visualItemRect(item).center();
+    bool answered = false;
+    QTimer::singleShot(0, &window, [nickname, &answered] {
+        for (QWidget *top : QApplication::topLevelWidgets()) {
+            auto *menu = qobject_cast<QMenu *>(top);
+            if (!menu) continue;
+            for (QAction *action : menu->actions()) {
+                if (!action->text().contains("nickname")) continue;
+                QTimer::singleShot(100, [nickname, &answered] {
+                    auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                    if (!dialog) return;
+                    auto *edit = dialog->findChild<QLineEdit *>();
+                    if (!edit) {
+                        dialog->reject();
+                        answered = true;
+                        return;
+                    }
+                    edit->setText(nickname);
+                    answered = true;
+                    dialog->accept();
+                });
+                action->trigger();
+                return;
+            }
+        }
+    });
+    QMetaObject::invokeMethod(list, "customContextMenuRequested", Qt::DirectConnection, Q_ARG(QPoint, pos));
+    return waitFor([&] { return answered && QApplication::activeModalWidget() == nullptr; }, 3000);
+}
+
 static QList<QJsonObject> readLog(const QString &path)
 {
     QList<QJsonObject> out;
@@ -772,6 +813,9 @@ int main(int argc, char **argv)
             if (movie->state() == QMovie::Running) chatGifPlaying = true;
         CHECK(chatGifPlaying);
 
+        CHECK(chooseChatNickname(w, list, "Bob", "Bobby"));
+        CHECK(listHas(list, "Bobby"));
+
         CHECK(g_unexpectedBox.isEmpty());
         w.close();
     }
@@ -786,7 +830,7 @@ int main(int argc, char **argv)
         auto *view = w.findChild<ChatView *>();
         CHECK(waitFor([&] { return listHas(list, "Alice"); }));
         CHECK(listHas(list, "Archived chats (1)")); // Carol only: Bob stays unarchived (phone state unchanged)
-        CHECK(listHas(list, "Bob"));
+        CHECK(waitFor([&] { return listHas(list, "Bobby"); }));
         CHECK(waitFor([&] { return w.findChild<QLabel *>() != nullptr; }));
         selectItem(list, "Alice");
         CHECK(waitFor([&] { return view->messageCount() == 5; }));
@@ -804,7 +848,7 @@ int main(int argc, char **argv)
         CHECK(!h.contains("👍"));          // removed reaction stays removed
         CHECK(waitFor([&] { return listHas(list, "Team"); })); // title arrives with listGroups
         // edits survive a restart (stored as records of the encrypted history)
-        selectItem(list, "Bob");
+        selectItem(list, "Bobby");
         CHECK(waitFor([&] { return view->messageCount() == 3; }));
         CHECK(html(view).contains("Bob: hi from bob, corrected (edited)"));
         CHECK(html(view).contains("You: phone, via original ts (edited)"));
