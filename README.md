@@ -79,6 +79,8 @@ history depends on retaining access to the system keychain. Use
   Files of risky types (`.exe`, `.sh`, …) are never opened directly, only saved
 - **Inline images:** received and sent pictures are shown in the chat;
   click for the full size
+- **Inline videos:** click a sent or received video to play it directly in the chat;
+  pause or resume with the on-video control
 - **Audio messages and files:** play received audio directly from its chat attachment;
   click again to pause or resume. The chat shows playback progress and duration.
 - **Edit messages:** right-click one of your own text messages → *Edit*. The text moves into the

@@ -26,6 +26,15 @@ struct Attachment {
                            QStringLiteral("opus"), QStringLiteral("wav"), QStringLiteral("weba"),
                            QStringLiteral("webm")}.contains(suffix);
     }
+    bool isVideo() const
+    {
+        if (contentType.startsWith(QLatin1String("video/"), Qt::CaseInsensitive)) return true;
+        const QString suffix = filename.section(QLatin1Char('.'), -1).toLower();
+        return QStringList{QStringLiteral("3gp"), QStringLiteral("avi"), QStringLiteral("m4v"),
+                           QStringLiteral("mkv"), QStringLiteral("mov"), QStringLiteral("mp4"),
+                           QStringLiteral("mpeg"), QStringLiteral("mpg"), QStringLiteral("ogv"),
+                           QStringLiteral("webm")}.contains(suffix);
+    }
     bool isGif() const
     {
         return contentType.compare(QLatin1String("image/gif"), Qt::CaseInsensitive) == 0 ||
@@ -78,6 +87,7 @@ struct Conversation {
     QList<Message> msgs;
     int unread = 0;
     QString storedName;       // display name learnt from an incoming message (persisted)
+    QString localNickname;    // local-only contact nickname (persisted)
     bool archived = false;    // shown in the "Archived chats" folder
     bool sigArchived = false; // archive state last reported by signal-cli
     bool muted = false;       // local "mute notifications" (signal-cli does not report mute state)

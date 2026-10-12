@@ -20,6 +20,7 @@ QJsonObject attachmentsUpdate(const QString &conv, const Message &m);
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji);
 QJsonObject archive(const QString &conv, bool archived, bool sigArchived);
 QJsonObject name(const QString &conv, const QString &name);
+QJsonObject nickname(const QString &conv, const QString &nickname);
 QJsonObject mute(const QString &conv, bool muted);
 QJsonObject expiration(const QString &conv, int seconds);
 

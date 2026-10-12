@@ -11,6 +11,10 @@
 
 class QTextDocument;
 class QMovie;
+class QMediaPlayer;
+class QAudioOutput;
+class QVideoWidget;
+class QToolButton;
 
 // Message list that paints rounded bubbles itself: quotes, inline images,
 // file rows, reactions, date separators, links and per-message text selection.
@@ -32,6 +36,12 @@ public:
     void appendMessage(const Message &m);                                   // fast path
     void setAudioPlayback(int messageIndex, int attachmentIndex, bool loading, bool playing,
                           qint64 positionMs, qint64 durationMs);
+    void setVideoLoading(int messageIndex, int attachmentIndex, bool loading);
+    bool isVideoActive(int messageIndex, int attachmentIndex) const;
+    bool isVideoLoading(int messageIndex, int attachmentIndex) const;
+    void playVideoAttachment(int messageIndex, int attachmentIndex, const QString &path);
+    void toggleVideoPlayback();
+    void stopVideoPlayback();
     void setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data);
     bool hasAnimatedAttachment(int messageIndex, int attachmentIndex) const;
     void clearView();
@@ -59,6 +69,7 @@ signals:
     void attachmentActivated(int msgIdx, int attIdx);     // click: view / open
     void attachmentSaveRequested(int msgIdx, int attIdx); // context menu
     void animatedAttachmentRequested(int msgIdx, int attIdx);
+    void videoPlaybackError(const QString &error);
     void linkClicked(const QString &url);
 
 protected:
@@ -113,6 +124,7 @@ private:
     void clearSelection();
     void updateCursorShape(const QPoint &vp);
     bool atBottom() const;
+    void updateVideoGeometry();
 
     QList<Message> m_msgs;
     QList<Item> m_items;
@@ -127,6 +139,14 @@ private:
     bool m_audioPlaying = false;
     qint64 m_audioPositionMs = 0;
     qint64 m_audioDurationMs = 0;
+    QMediaPlayer *m_videoPlayer = nullptr;
+    QAudioOutput *m_videoAudioOutput = nullptr;
+    QVideoWidget *m_videoWidget = nullptr;
+    QToolButton *m_videoToggle = nullptr;
+    qint64 m_videoMessageTs = 0;
+    int m_videoAttachment = -1;
+    qint64 m_videoLoadingTs = 0;
+    int m_videoLoadingAttachment = -1;
 
     // selection inside one message
     int m_selItem = -1;

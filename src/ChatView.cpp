@@ -11,12 +11,16 @@
 #include <QMovie>
 #include <QBuffer>
 #include <QMouseEvent>
+#include <QMediaPlayer>
+#include <QAudioOutput>
 #include <QPainter>
 #include <QPainterPath>
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QTextDocument>
 #include <QTimer>
+#include <QToolButton>
+#include <QVideoWidget>
 #include <algorithm>
 
 #include "Attachments.h"
@@ -89,6 +93,7 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setFocusPolicy(Qt::StrongFocus);
     m_ap = Appearance::defaults(palette());
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { updateVideoGeometry(); });
 }
 
 ChatView::~ChatView() = default;
@@ -137,6 +142,7 @@ void ChatView::clearSelection()
 
 void ChatView::clearView()
 {
+    stopVideoPlayback();
     for (Item &item : m_items)
         for (QMovie *movie : item.movies)
             delete movie;
@@ -161,6 +167,7 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll)
     clearSelection();
     relayoutAll();
     verticalScrollBar()->setValue((bottom || !keepScroll) ? verticalScrollBar()->maximum() : old);
+    updateVideoGeometry();
 }
 
 void ChatView::appendMessage(const Message &m)
@@ -172,6 +179,7 @@ void ChatView::appendMessage(const Message &m)
     layoutItem(i, i > 0 ? m_items[i - 1].y + m_items[i - 1].height : 0);
     updateScrollRange();
     if (bottom || m.outgoing) verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+    updateVideoGeometry();
     viewport()->update();
 }
 
@@ -229,6 +237,133 @@ void ChatView::setAudioPlayback(int messageIndex, int attachmentIndex, bool load
     }
 }
 
+void ChatView::setVideoLoading(int messageIndex, int attachmentIndex, bool loading)
+{
+    if (messageIndex < 0 || messageIndex >= m_msgs.size() || attachmentIndex < 0 ||
+        attachmentIndex >= m_msgs[messageIndex].attachments.size()) return;
+    if (loading) {
+        m_videoLoadingTs = m_msgs[messageIndex].ts();
+        m_videoLoadingAttachment = attachmentIndex;
+    } else if (m_videoLoadingTs == m_msgs[messageIndex].ts() && m_videoLoadingAttachment == attachmentIndex) {
+        m_videoLoadingTs = 0;
+        m_videoLoadingAttachment = -1;
+    }
+    viewport()->update(m_items[messageIndex].attRects.value(attachmentIndex)
+                           .translated(0, m_items[messageIndex].y - verticalScrollBar()->value()));
+}
+
+bool ChatView::isVideoActive(int messageIndex, int attachmentIndex) const
+{
+    return messageIndex >= 0 && messageIndex < m_msgs.size() && attachmentIndex >= 0 &&
+           attachmentIndex < m_msgs[messageIndex].attachments.size() &&
+           m_videoMessageTs == m_msgs[messageIndex].ts() && m_videoAttachment == attachmentIndex;
+}
+
+bool ChatView::isVideoLoading(int messageIndex, int attachmentIndex) const
+{
+    return messageIndex >= 0 && messageIndex < m_msgs.size() && attachmentIndex >= 0 &&
+           attachmentIndex < m_msgs[messageIndex].attachments.size() &&
+           m_videoLoadingTs == m_msgs[messageIndex].ts() && m_videoLoadingAttachment == attachmentIndex;
+}
+
+void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const QString &path)
+{
+    if (messageIndex < 0 || messageIndex >= m_msgs.size() || attachmentIndex < 0 ||
+        attachmentIndex >= m_msgs[messageIndex].attachments.size()) return;
+    stopVideoPlayback();
+    m_videoPlayer = new QMediaPlayer(this);
+    m_videoAudioOutput = new QAudioOutput(this);
+    m_videoWidget = new QVideoWidget(viewport());
+    m_videoToggle = new QToolButton(viewport());
+    m_videoToggle->setText(QStringLiteral("Ⅱ"));
+    m_videoToggle->setToolTip(tr("Pause video"));
+    m_videoToggle->setAccessibleName(tr("Pause video"));
+    m_videoToggle->setFixedSize(32, 28);
+    m_videoToggle->setStyleSheet(QStringLiteral("QToolButton { background: rgba(0,0,0,180); color: white; border: 0; }"));
+    m_videoPlayer->setAudioOutput(m_videoAudioOutput);
+    m_videoPlayer->setVideoOutput(m_videoWidget);
+    connect(m_videoToggle, &QToolButton::clicked, this, &ChatView::toggleVideoPlayback);
+    connect(m_videoPlayer, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
+        if (!m_videoToggle) return;
+        const bool playing = state == QMediaPlayer::PlayingState;
+        m_videoToggle->setText(playing ? QStringLiteral("Ⅱ") : QStringLiteral("▶"));
+        m_videoToggle->setToolTip(playing ? tr("Pause video") : tr("Play video"));
+        m_videoToggle->setAccessibleName(m_videoToggle->toolTip());
+    });
+    connect(m_videoPlayer, &QMediaPlayer::errorOccurred, this,
+            [this](QMediaPlayer::Error, const QString &error) { emit videoPlaybackError(error); });
+    m_videoMessageTs = m_msgs[messageIndex].ts();
+    m_videoAttachment = attachmentIndex;
+    m_videoLoadingTs = 0;
+    m_videoLoadingAttachment = -1;
+    m_videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
+    m_videoWidget->show();
+    m_videoToggle->show();
+    updateVideoGeometry();
+    m_videoPlayer->setSource(QUrl::fromLocalFile(path));
+    m_videoPlayer->play();
+}
+
+void ChatView::toggleVideoPlayback()
+{
+    if (!m_videoPlayer) return;
+    if (m_videoPlayer->playbackState() == QMediaPlayer::PlayingState)
+        m_videoPlayer->pause();
+    else {
+        if (m_videoPlayer->duration() > 0 && m_videoPlayer->position() >= m_videoPlayer->duration())
+            m_videoPlayer->setPosition(0);
+        m_videoPlayer->play();
+    }
+}
+
+void ChatView::stopVideoPlayback()
+{
+    if (m_videoPlayer) m_videoPlayer->stop();
+    if (m_videoPlayer) {
+        m_videoPlayer->setVideoOutput(static_cast<QVideoWidget *>(nullptr));
+        m_videoPlayer->setAudioOutput(static_cast<QAudioOutput *>(nullptr));
+    }
+    delete m_videoToggle;
+    delete m_videoPlayer;
+    delete m_videoAudioOutput;
+    delete m_videoWidget;
+    m_videoToggle = nullptr;
+    m_videoWidget = nullptr;
+    m_videoPlayer = nullptr;
+    m_videoAudioOutput = nullptr;
+    m_videoMessageTs = 0;
+    m_videoAttachment = -1;
+    m_videoLoadingTs = 0;
+    m_videoLoadingAttachment = -1;
+}
+
+void ChatView::updateVideoGeometry()
+{
+    if (!m_videoWidget || !m_videoToggle) return;
+    int index = -1;
+    for (int i = 0; i < m_msgs.size(); ++i) {
+        if (m_msgs[i].ts() == m_videoMessageTs) { index = i; break; }
+    }
+    if (index < 0 || m_videoAttachment < 0 || m_videoAttachment >= m_items[index].attRects.size()) {
+        stopVideoPlayback();
+        return;
+    }
+    const QRect rect = m_items[index].attRects[m_videoAttachment]
+                           .translated(0, m_items[index].y - verticalScrollBar()->value());
+    const QRect visible = rect.intersected(viewport()->rect());
+    if (visible.isEmpty()) {
+        m_videoWidget->hide();
+        m_videoToggle->hide();
+        return;
+    }
+    m_videoWidget->setGeometry(rect);
+    m_videoToggle->move(rect.right() - m_videoToggle->width() - 6,
+                        rect.bottom() - m_videoToggle->height() - 6);
+    m_videoWidget->show();
+    m_videoToggle->show();
+    m_videoToggle->raise();
+}
+
 void ChatView::setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data)
 {
     if (messageIndex < 0 || messageIndex >= m_items.size() || attachmentIndex < 0 ||
@@ -278,6 +413,8 @@ QString ChatView::plainText() const
             const QString n = a.filename.isEmpty() ? a.contentType : a.filename;
             if (a.isImage())
                 lines << (a.thumb.isEmpty() ? QStringLiteral("[loading image: %1]") : QStringLiteral("[image: %1]")).arg(n);
+            else if (a.isVideo())
+                lines << QStringLiteral("[video: %1]").arg(n);
             else
                 lines << QStringLiteral("[file: %1]").arg(n);
         }
@@ -402,6 +539,9 @@ void ChatView::layoutItem(int i, int y)
                 ph = 360;
             }
             sz = QSize(qMax(40, pw), qMax(30, ph));
+        } else if (att.isVideo()) {
+            const int width = qMin(320, innerMax);
+            sz = QSize(width, qMax(76, width * 9 / 16));
         } else {
             const QString name = att.filename.isEmpty() ? att.contentType : att.filename;
             const int tw = qMax(fm.horizontalAdvance(fm.elidedText(name, Qt::ElideMiddle, innerMax - 44)),
@@ -493,6 +633,7 @@ void ChatView::relayoutAll()
     }
     updateScrollRange();
     viewport()->update();
+    updateVideoGeometry();
 }
 
 void ChatView::updateScrollRange()
@@ -511,6 +652,7 @@ void ChatView::resizeEvent(QResizeEvent *e)
     else
         updateScrollRange();
     verticalScrollBar()->setValue(bottom ? verticalScrollBar()->maximum() : old);
+    updateVideoGeometry();
 }
 
 int ChatView::itemAtY(int docY) const
@@ -633,20 +775,42 @@ void ChatView::paintItem(QPainter &p, int i)
             p.setFont(base);
             p.setPen(fg);
             const bool audio = att.isAudio();
+            const bool video = att.isVideo();
             const bool active = audio && m_audioMessage == i && m_audioAttachment == a;
             p.drawText(icon, Qt::AlignCenter, att.isImage() ? QStringLiteral("🖼")
-                                                            : (audio ? (active && m_audioPlaying ? QStringLiteral("Ⅱ") : QStringLiteral("▶"))
+                                                            : ((audio || video) ? QStringLiteral("▶")
                                                                      : QStringLiteral("📎")));
             const QString name = att.filename.isEmpty() ? att.contentType : att.filename;
             const QFontMetrics fm(base);
-            const int textLeft = audio ? 42 : 40;
+            if (video) {
+                const bool loading = m_videoLoadingTs == m.ts() && m_videoLoadingAttachment == a;
+                p.setFont(scaled(base, 1.8, true));
+                p.setPen(fg);
+                p.drawText(rc, Qt::AlignCenter, loading ? QStringLiteral("…") : QStringLiteral("▶"));
+                p.setFont(smallBold);
+                p.drawText(QRect(rc.left() + 10, rc.bottom() - 38, rc.width() - 20, 18),
+                           Qt::AlignLeft | Qt::AlignVCenter, fm.elidedText(name, Qt::ElideMiddle, rc.width() - 20));
+                p.setFont(small);
+                p.setPen(alpha(fg, 190));
+                const QString info = loading ? tr("Loading video …")
+                                             : tr("Video") + (att.size > 0 ? QStringLiteral(" · ") + AttachmentUtil::humanSize(att.size) : QString());
+                p.drawText(QRect(rc.left() + 10, rc.bottom() - 20, rc.width() - 20, 16),
+                           Qt::AlignLeft | Qt::AlignVCenter, info);
+                continue;
+            }
+            const int textLeft = (audio || video) ? 42 : 40;
             const int textWidth = rc.width() - textLeft - 6;
-            p.drawText(QRect(rc.left() + textLeft, rc.top() + 3, textWidth, 18), Qt::AlignLeft | Qt::AlignVCenter,
-                       fm.elidedText(name, Qt::ElideMiddle, textWidth));
+            if (!video)
+                p.drawText(QRect(rc.left() + textLeft, rc.top() + 3, textWidth, 18), Qt::AlignLeft | Qt::AlignVCenter,
+                           fm.elidedText(name, Qt::ElideMiddle, textWidth));
             p.setFont(small);
             p.setPen(alpha(fg, 190));
             QString info = att.size > 0 ? AttachmentUtil::humanSize(att.size) : att.contentType;
             if (att.isImage()) info += tr(" – loading …");
+            if (video && m_videoLoadingTs == m.ts() && m_videoLoadingAttachment == a)
+                info = tr("Loading video …");
+            else if (video)
+                info = tr("Video") + (att.size > 0 ? QStringLiteral(" · ") + AttachmentUtil::humanSize(att.size) : QString());
             if (audio) {
                 const qint64 shownMs = active ? m_audioPositionMs : 0;
                 const qint64 totalMs = active && m_audioDurationMs > 0 ? m_audioDurationMs : 0;

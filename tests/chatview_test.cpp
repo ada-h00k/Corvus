@@ -246,6 +246,30 @@ int main(int argc, char **argv)
     CHECK(view.plainText().contains("> You: ok"));
     CHECK(view.plainText().contains("reactions:"));
 
+    std::printf("video attachment\n");
+    {
+        Attachment video;
+        video.contentType = "video/mp4";
+        video.filename = "clip.mp4";
+        CHECK(video.isVideo());
+        Message clip;
+        clip.time = QDateTime::currentDateTime();
+        clip.outgoing = true;
+        clip.attachments << video;
+        ChatView videoView;
+        videoView.resize(700, 400);
+        videoView.show();
+        videoView.showMessages({clip});
+        pump();
+        const QRect videoRect = videoView.attachmentRect(0, 0);
+        CHECK(videoRect.width() >= 200);
+        CHECK(videoRect.height() >= 100);
+        CHECK(videoView.plainText().contains("[video: clip.mp4]"));
+        QSignalSpy spy(&videoView, &ChatView::attachmentActivated);
+        click(videoView.viewport(), videoRect.center());
+        CHECK(spy.count() == 1);
+    }
+
     // many messages: scrolling, quote jumps to the original, bottom pinning
     std::printf("scrolling\n");
     {
