@@ -158,7 +158,7 @@ release (`build-<run number>`):
 | File | Description |
 |------|-------------|
 | `signal-cli-qt-<sha>-x86_64.AppImage` | Self-contained (bundles Qt and the Rust library). `chmod +x` and run. |
-| `signal-cli-qt-<sha>-linux-x86_64` | Plain binary. Requires Qt ≥ 6.5 (Widgets, Network), QtKeychain, and a system credential store. |
+| `signal-cli-qt-<sha>-linux-x86_64` | Plain binary. Requires Qt ≥ 6.5 (Widgets, Network), `libqt6keychain1`, and a system credential store. |
 
 Linux x86_64 only. Remember to install signal-cli as well.
 
@@ -170,7 +170,7 @@ QtKeychain 0.14 or newer,
 
 ```sh
 # Debian/Ubuntu
-sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev libqt6keychain1-dev cargo qrencode
+sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev qtkeychain-qt6-dev cargo qrencode
 
 cmake -S . -B build
 cmake --build build -j
