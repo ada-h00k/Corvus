@@ -49,6 +49,10 @@ static QJsonObject editToJson(const Message &m)
 QJsonObject message(const QString &conv, const Message &m)
 {
     QJsonObject d;
+    if (m.expiresInSeconds > 0) {
+        d["ex"] = m.expiresInSeconds;
+        d["es"] = QJsonValue(static_cast<qint64>(m.expirationStartMs));
+    }
     if (m.quote.valid) {
         d["q"] = QJsonObject{{"id", QJsonValue(static_cast<qint64>(m.quote.id))},
                              {"a", m.quote.authorKey},
@@ -80,6 +84,16 @@ QJsonObject edit(const QString &conv, const Message &m)
             {"d", QJsonObject{{"ed", editToJson(m)}}}};
 }
 
+QJsonObject expirationUpdate(const QString &conv, const Message &m)
+{
+    return {{"t", "u"},
+            {"c", conv},
+            {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
+            {"au", m.authorKey},
+            {"d", QJsonObject{{"ex", m.expiresInSeconds},
+                               {"es", QJsonValue(static_cast<qint64>(m.expirationStartMs))}}}};
+}
+
 void applyExtras(Message &m, const QJsonObject &d)
 {
     if (d.contains("q")) {
@@ -95,6 +109,10 @@ void applyExtras(Message &m, const QJsonObject &d)
         if (e.contains("x")) m.text = e["x"].toString();
         m.editTs = e["et"].toVariant().toLongLong();
         m.editCount = e["ec"].toInt();
+    }
+    if (d.contains("ex")) {
+        m.expiresInSeconds = d["ex"].toInt();
+        m.expirationStartMs = d["es"].toVariant().toLongLong();
     }
     if (d.contains("at")) {
         m.attachments.clear();
@@ -136,6 +154,11 @@ QJsonObject archive(const QString &conv, bool archived, bool sigArchived)
 QJsonObject mute(const QString &conv, bool muted)
 {
     return {{"t", "k"}, {"c", conv}, {"v", muted}};
+}
+
+QJsonObject expiration(const QString &conv, int seconds)
+{
+    return {{"t", "e"}, {"c", conv}, {"v", seconds}};
 }
 
 QJsonObject name(const QString &conv, const QString &n)

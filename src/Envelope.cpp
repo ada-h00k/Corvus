@@ -38,6 +38,12 @@ static Quote parseQuote(const QJsonObject &dm)
 // Fills reaction or message data from a dataMessage-like object (also used for sync sentMessage).
 static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelopeTs)
 {
+    out.groupId = dm["groupInfo"].toObject()["groupId"].toString();
+    out.expirationSeconds = dm["expiresInSeconds"].toInt();
+    if (dm["isExpirationUpdate"].toBool()) {
+        out.kind = ParsedEnvelope::ExpirationUpdate;
+        return;
+    }
     const QJsonObject r = dm["reaction"].toObject();
     if (!r.isEmpty()) {
         out.kind = ParsedEnvelope::Reaction;
@@ -53,12 +59,12 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
     out.msg.text = dm["message"].toString();
     out.msg.attachments = parseAttachments(dm);
     out.msg.quote = parseQuote(dm);
+    out.msg.expiresInSeconds = out.expirationSeconds;
     if (out.msg.text.isEmpty() && out.msg.attachments.isEmpty()) return; // receipts, typing, sessions, ...
 
     qint64 ts = dm["timestamp"].toVariant().toLongLong();
     if (ts <= 0) ts = envelopeTs;
     out.msg.time = ts > 0 ? QDateTime::fromMSecsSinceEpoch(ts) : QDateTime::currentDateTime();
-    out.groupId = dm["groupInfo"].toObject()["groupId"].toString();
     out.kind = ParsedEnvelope::Message_;
 }
 

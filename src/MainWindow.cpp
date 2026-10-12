@@ -49,6 +49,7 @@
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QToolButton>
+#include <QTimer>
 #include <QUrl>
 #include <QUuid>
 #include <QVBoxLayout>
@@ -186,6 +187,7 @@ MainWindow::MainWindow()
         menu.addAction(archived ? tr("Unarchive") : tr("Archive"), this, [this, key, archived] { setArchived(key, !archived); });
         const bool muted = m_convs[key].muted;
         menu.addAction(muted ? tr("Unmute notifications") : tr("Mute notifications"), this, [this, key, muted] { setMuted(key, !muted); });
+        menu.addAction(tr("Disappearing messages …"), this, [this, key] { editExpiration(key); });
         menu.addAction(tr("Delete conversation …"), this, [this, key] { deleteConversation(key); });
         menu.exec(m_list->viewport()->mapToGlobal(pos));
     });
@@ -249,6 +251,10 @@ MainWindow::MainWindow()
     connect(&m_cli, &SignalCli::stopped, this, [this](const QString &reason) { setConnected(false, reason); });
     connect(&m_cli, &SignalCli::logLine, this, [this](const QString &l) { statusBar()->showMessage(l, 5000); });
 
+    m_expirationTimer.setInterval(1000);
+    connect(&m_expirationTimer, &QTimer::timeout, this, &MainWindow::expireMessages);
+    m_expirationTimer.start();
+
     setConnected(false);
     QSettings s;
     restoreGeometry(s.value(QStringLiteral("geometry")).toByteArray());
@@ -288,6 +294,7 @@ void MainWindow::showEvent(QShowEvent *e)
     QApplication::setQuitOnLastWindowClosed(true);
     // Mark the selected chat read again when the window is shown from the tray.
     if (!m_current.isEmpty()) {
+        startIncomingExpirationTimers(m_current);
         auto it = m_convs.find(m_current);
         if (it != m_convs.end() && it->unread > 0) {
             it->unread = 0;
@@ -527,6 +534,11 @@ void MainWindow::loadContactsAndGroups()
             if (!m_convs.contains(key) && !sig) continue;
 
             Conversation &cv2 = conv(key, key);
+            const int expiration = c.value(QStringLiteral("messageExpirationTime")).toInt();
+            if (cv2.expirationSeconds != expiration) {
+                cv2.expirationSeconds = expiration;
+                persist(Records::expiration(key, expiration));
+            }
             if (title.isEmpty()) title = cv2.storedName.isEmpty() ? key : cv2.storedName;
             cv2.title = title;
 
@@ -552,6 +564,11 @@ void MainWindow::loadContactsAndGroups()
             if (title.isEmpty()) title = tr("Group");
             Conversation &c = conv(QStringLiteral("g:") + id, title, true);
             c.title = title;
+            const int expiration = g.value(QStringLiteral("messageExpirationTime")).toInt();
+            if (c.expirationSeconds != expiration) {
+                c.expirationSeconds = expiration;
+                persist(Records::expiration(c.key, expiration));
+            }
         }
         refreshList();
     });
@@ -634,6 +651,8 @@ void MainWindow::loadHistory(const QJsonArray &records)
             }
         } else if (t == QLatin1String("k")) {
             conv(key, key, group).muted = o.value(QStringLiteral("v")).toBool();
+        } else if (t == QLatin1String("e")) {
+            conv(key, key, group).expirationSeconds = o.value(QStringLiteral("v")).toInt();
         } else if (t == QLatin1String("a")) {
             Conversation &c = conv(key, key, group);
             c.archived = o.value(QStringLiteral("v")).toBool();
@@ -653,7 +672,16 @@ QJsonArray MainWindow::allRecords() const
         if (!c.storedName.isEmpty()) out.append(Records::name(c.key, c.storedName));
         if (c.archived || c.sigArchived) out.append(Records::archive(c.key, c.archived, c.sigArchived));
         if (c.muted) out.append(Records::mute(c.key, true));
+        out.append(Records::expiration(c.key, c.expirationSeconds));
         for (const Message &m : c.msgs) {
+            bool pending = false;
+            for (auto it = m_pendingSends.cbegin(); it != m_pendingSends.cend(); ++it) {
+                if (it->conversationKey == c.key && it->temporaryTimestamp == m.ts()) {
+                    pending = true;
+                    break;
+                }
+            }
+            if (pending) continue;
             out.append(Records::message(c.key, m));
             for (auto it = m.reactions.cbegin(); it != m.reactions.cend(); ++it)
                 out.append(Records::reaction(c.key, m.ts(), effectiveAuthor(c, m), it.key(), it.value()));
@@ -772,6 +800,8 @@ bool MainWindow::addMessage(const QString &key, Message m, const QString &title,
 {
     Conversation &c = conv(key, title, group);
     if (findMessage(c, m.ts(), QStringList{effectiveAuthor(c, m)}) >= 0) return false; // duplicate
+    if (!m.outgoing && m.expiresInSeconds > 0 && key == m_current && isVisible() && !isMinimized())
+        m.expirationStartMs = QDateTime::currentMSecsSinceEpoch();
 
     int at = c.msgs.size();
     while (at > 0 && c.msgs[at - 1].time > m.time) --at;
@@ -808,6 +838,8 @@ void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const 
 
     Message confirmed = pending.message;
     confirmed.time = QDateTime::fromMSecsSinceEpoch(timestamp);
+    if (echo && echo->expiresInSeconds > 0) confirmed.expiresInSeconds = echo->expiresInSeconds;
+    if (confirmed.expiresInSeconds > 0) confirmed.expirationStartMs = timestamp;
     if (echo) {
         // Keep the local file paths and thumbnails, but copy the remote attachment IDs
         // when signal-cli's own-message envelope reaches us before the RPC reply.
@@ -941,7 +973,94 @@ void MainWindow::setArchived(const QString &key, bool archived)
     refreshList();
 }
 
+void MainWindow::editExpiration(const QString &key)
+{
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd()) return;
+
+    const QStringList labels = {tr("Off"), tr("30 seconds"), tr("1 minute"), tr("5 minutes"),
+                                tr("1 hour"), tr("6 hours"), tr("12 hours"), tr("1 day"),
+                                tr("1 week"), tr("4 weeks")};
+    const QList<int> values = {0, 30, 60, 5 * 60, 60 * 60, 6 * 60 * 60, 12 * 60 * 60,
+                               24 * 60 * 60, 7 * 24 * 60 * 60, 28 * 24 * 60 * 60};
+    const int current = values.indexOf(it->expirationSeconds);
+    bool ok = false;
+    const QString selected = QInputDialog::getItem(this, tr("Disappearing messages"),
+                                                   tr("Timer for %1:").arg(it->title), labels,
+                                                   current < 0 ? 0 : current, false, &ok);
+    if (ok) setExpiration(key, values.at(labels.indexOf(selected)));
+}
+
+void MainWindow::setExpiration(const QString &key, int seconds)
+{
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd() || seconds < 0) return;
+    if (it->isGroup) {
+        m_cli.call(QStringLiteral("updateGroup"),
+                   {{QStringLiteral("groupId"), key.mid(2)}, {QStringLiteral("expiration"), seconds}},
+                   [this, key, seconds](const QJsonValue &, const QString &err) {
+            if (!err.isEmpty()) {
+                statusBar()->showMessage(tr("Could not change disappearing-message timer: %1").arg(err), 10000);
+                return;
+            }
+            auto conversation = m_convs.find(key);
+            if (conversation == m_convs.end()) return;
+            conversation->expirationSeconds = seconds;
+            persist(Records::expiration(key, seconds));
+            statusBar()->showMessage(tr("Disappearing-message timer updated."), 5000);
+        });
+    } else {
+        m_cli.call(QStringLiteral("updateContact"),
+                   {{QStringLiteral("recipient"), resolveKey(key)}, {QStringLiteral("expiration"), seconds}},
+                   [this, key, seconds](const QJsonValue &, const QString &err) {
+            if (!err.isEmpty()) {
+                statusBar()->showMessage(tr("Could not change disappearing-message timer: %1").arg(err), 10000);
+                return;
+            }
+            auto conversation = m_convs.find(key);
+            if (conversation == m_convs.end()) return;
+            conversation->expirationSeconds = seconds;
+            persist(Records::expiration(key, seconds));
+            statusBar()->showMessage(tr("Disappearing-message timer updated."), 5000);
+        });
+    }
+}
+
 // ------------------------------------------------------------ List / view
+
+void MainWindow::startIncomingExpirationTimers(const QString &key)
+{
+    auto conversation = m_convs.find(key);
+    if (conversation == m_convs.end()) return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    for (Message &message : conversation->msgs) {
+        if (message.outgoing || message.expiresInSeconds <= 0 || message.expirationStartMs > 0) continue;
+        message.expirationStartMs = now;
+        persist(Records::expirationUpdate(key, message));
+    }
+}
+
+void MainWindow::expireMessages()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    bool changed = false;
+    for (Conversation &conversation : m_convs) {
+        for (int i = conversation.msgs.size() - 1; i >= 0; --i) {
+            const Message &message = conversation.msgs[i];
+            if (message.expiresInSeconds <= 0 || message.expirationStartMs <= 0) continue;
+            if (now - message.expirationStartMs < static_cast<qint64>(message.expiresInSeconds) * 1000) continue;
+            conversation.msgs.removeAt(i);
+            changed = true;
+        }
+    }
+    if (!changed) return;
+
+    const int rc = m_store.rewrite(allRecords());
+    if (rc != SC_OK)
+        statusBar()->showMessage(tr("Could not remove expired messages: %1").arg(HistoryStore::errorText(rc)), 10000);
+    if (m_convs.contains(m_current)) showConversation(true);
+    refreshList();
+}
 
 void MainWindow::refreshList()
 {
@@ -1016,6 +1135,7 @@ void MainWindow::openConversation(const QString &key)
     if (key != m_current) cancelEdit();
     m_current = key;
     m_convs[m_current].unread = 0;
+    startIncomingExpirationTimers(key);
     m_replyQuote = Quote();
     updateReplyBar();
     showConversation();
@@ -1149,6 +1269,15 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     const QString key = group ? QStringLiteral("g:") + pe.groupId : (pe.outgoing ? resolveKey(pe.destination) : srcKey);
     if (key.isEmpty()) return;
 
+    if (pe.kind == ParsedEnvelope::ExpirationUpdate) {
+        auto conversation = m_convs.find(key);
+        if (conversation != m_convs.end() && conversation->expirationSeconds != pe.expirationSeconds) {
+            conversation->expirationSeconds = pe.expirationSeconds;
+            persist(Records::expiration(key, pe.expirationSeconds));
+        }
+        return;
+    }
+
     if (pe.kind == ParsedEnvelope::Reaction) {
         // The reaction's group id sits in the same dataMessage; groupId was not parsed for reactions.
         const QString gid = env.value(QStringLiteral("dataMessage")).toObject().value(QStringLiteral("groupInfo")).toObject()
@@ -1170,6 +1299,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     Message m = pe.msg;
     m.outgoing = pe.outgoing;
     m.authorKey = pe.outgoing ? m_account : srcKey;
+    if (m.outgoing && m.expiresInSeconds > 0) m.expirationStartMs = m.ts();
     if (m.quote.valid) m.quote.authorKey = resolveKey(m.quote.authorKey);
 
     if (!pe.outgoing) {
@@ -1332,6 +1462,7 @@ void MainWindow::sendMessage()
     preview.text = text;
     preview.outgoing = true;
     preview.authorKey = m_account;
+    preview.expiresInSeconds = c.expirationSeconds;
     preview.quote = quote;
     preview.attachments = atts;
 

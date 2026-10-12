@@ -80,6 +80,11 @@ it.
   official clients: up to 3 hours after sending and at most 10 edits. Edited messages show
   *edited* next to the time. Edits by contacts and edits made on your phone are applied as well
   (only to a known message of the same author). The edit is stored in the encrypted history.
+- **Disappearing messages:** right-click a chat to choose the Signal timer (off, 30 seconds,
+  1 minute, 5 minutes, 1 hour, 6 hours, 12 hours, 1 day, 1 week or 4 weeks). The setting is
+  synchronized with Signal for contacts and groups. New outgoing messages use that timer;
+  incoming messages start their local timer when the chat is opened. Expired messages are
+  removed from the encrypted history as well.
 - **Reactions:** react from the context menu (quick set or full picker);
   choose the same emoji again to take it back; incoming reactions are shown
   below the message
@@ -238,8 +243,7 @@ settings. It does **not** replace testing against a real signal-cli account.
 
 ## Known limitations
 
-- No voice notes, stickers, link previews, mentions, message deleting
-  or disappearing-message timers yet.
+- No voice notes, stickers, link previews, mentions or message deleting yet.
 - Editing: only the text; the previous versions are not kept (no edit history view), and
   multi-line messages (sent from other devices) cannot be edited here because the input is
   single-line.
