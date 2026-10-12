@@ -17,6 +17,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QAudioOutput>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -233,6 +234,27 @@ MainWindow::MainWindow()
     m_notify = NotificationSettings::load();
     setWindowIcon(AppIcon::app());
     m_sound = new SoundPlayer(this);
+    m_audioOutput = new QAudioOutput(this);
+    m_audioPlayer = new QMediaPlayer(this);
+    m_audioPlayer->setAudioOutput(m_audioOutput);
+    m_audioPlayer->setObjectName(QStringLiteral("chatAudioPlayer"));
+    connect(m_audioPlayer, &QMediaPlayer::positionChanged, this, [this](qint64 position) {
+        m_audioPositionMs = position;
+        updateAudioPlaybackView();
+    });
+    connect(m_audioPlayer, &QMediaPlayer::durationChanged, this, [this](qint64 duration) {
+        m_audioDurationMs = duration;
+        updateAudioPlaybackView();
+    });
+    connect(m_audioPlayer, &QMediaPlayer::playbackStateChanged, this, [this] {
+        updateAudioPlaybackView();
+    });
+    connect(m_audioPlayer, &QMediaPlayer::errorOccurred, this,
+            [this](QMediaPlayer::Error, const QString &error) {
+        m_audioLoading = false;
+        statusBar()->showMessage(tr("Audio playback failed: %1").arg(error), 10000);
+        updateAudioPlaybackView();
+    });
     m_notifier = new Notifier(this);
     m_tray = new QSystemTrayIcon(AppIcon::tray(0), this);
     m_trayMenu = new QMenu(this);
@@ -1227,6 +1249,7 @@ void MainWindow::showConversation(bool keepScroll)
     m_title->setText(c.title);
     m_view->setGroupMode(c.isGroup);
     m_view->showMessages(c.msgs, keepScroll);
+    updateAudioPlaybackView();
 }
 
 void MainWindow::updateReplyBar()
@@ -1832,6 +1855,11 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
     const Attachment att = c.msgs[msgIdx].attachments[attIdx];
     const QString key = m_current;
 
+    if (att.isAudio()) {
+        toggleAudioAttachment(msgIdx, attIdx);
+        return;
+    }
+
     if (!att.isImage() && isRiskyFile(att.filename)) {
         QMessageBox::information(this, tr("Attachment"),
                                  tr("For safety, “%1” is not opened directly. Use “Save …” from the message menu instead.")
@@ -1875,6 +1903,92 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
         f.close();
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     });
+}
+
+void MainWindow::toggleAudioAttachment(int msgIdx, int attIdx)
+{
+    if (!m_convs.contains(m_current)) return;
+    const Conversation &conversation = m_convs[m_current];
+    if (msgIdx < 0 || msgIdx >= conversation.msgs.size() || attIdx < 0 ||
+        attIdx >= conversation.msgs[msgIdx].attachments.size()) return;
+    const Message &message = conversation.msgs[msgIdx];
+    const Attachment attachment = message.attachments[attIdx];
+    if (!attachment.isAudio()) return;
+
+    const bool sameClip = m_audioKey == conversation.key && m_audioMessageTs == message.ts() &&
+                          m_audioAttachmentIndex == attIdx;
+    if (sameClip && m_audioLoading) return;
+    if (sameClip && m_audioPlayer->source().isValid()) {
+        if (m_audioPlayer->playbackState() == QMediaPlayer::PlayingState) {
+            m_audioPlayer->pause();
+        } else {
+            if (m_audioDurationMs > 0 && m_audioPositionMs >= m_audioDurationMs)
+                m_audioPlayer->setPosition(0);
+            m_audioPlayer->play();
+        }
+        return;
+    }
+
+    m_audioPlayer->stop();
+    m_audioPlayer->setSource(QUrl());
+    m_audioKey = conversation.key;
+    m_audioMessageTs = message.ts();
+    m_audioAttachmentIndex = attIdx;
+    m_audioPositionMs = 0;
+    m_audioDurationMs = 0;
+    m_audioLoading = true;
+    updateAudioPlaybackView();
+    statusBar()->showMessage(tr("Loading audio …"));
+
+    fetchAttachmentData(conversation.key, attachment,
+                        [this, key = conversation.key, timestamp = message.ts(), attIdx, attachment]
+                        (const QByteArray &data, const QString &error) {
+        if (m_audioKey != key || m_audioMessageTs != timestamp || m_audioAttachmentIndex != attIdx) return;
+        if (!error.isEmpty() || data.isEmpty()) {
+            m_audioLoading = false;
+            statusBar()->showMessage(error.isEmpty() ? tr("The audio file is empty.") : error, 10000);
+            updateAudioPlaybackView();
+            return;
+        }
+
+        QString suffix = QFileInfo(attachment.filename).suffix();
+        if (suffix.isEmpty()) suffix = QMimeDatabase().mimeTypeForName(attachment.contentType).preferredSuffix();
+        const QString path = m_tmp.path() + QStringLiteral("/audio-") +
+                             QUuid::createUuid().toString(QUuid::WithoutBraces) +
+                             (suffix.isEmpty() ? QString() : QStringLiteral(".") + suffix);
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size()) {
+            m_audioLoading = false;
+            statusBar()->showMessage(tr("The audio file could not be prepared for playback."), 10000);
+            updateAudioPlaybackView();
+            return;
+        }
+        file.close();
+        m_audioLoading = false;
+        m_audioPositionMs = 0;
+        m_audioDurationMs = 0;
+        m_audioPlayer->setSource(QUrl::fromLocalFile(path));
+        m_audioPlayer->play();
+        statusBar()->clearMessage();
+        updateAudioPlaybackView();
+    });
+}
+
+void MainWindow::updateAudioPlaybackView()
+{
+    if (!m_view || !m_convs.contains(m_current) || m_audioKey != m_current || m_audioMessageTs <= 0 ||
+        m_audioAttachmentIndex < 0) {
+        if (m_view) m_view->setAudioPlayback(-1, -1, false, false, 0, 0);
+        return;
+    }
+    const int index = findMessage(m_convs[m_current], m_audioMessageTs, {});
+    if (index < 0 || m_audioAttachmentIndex >= m_convs[m_current].msgs[index].attachments.size()) {
+        m_view->setAudioPlayback(-1, -1, false, false, 0, 0);
+        return;
+    }
+    m_view->setAudioPlayback(index, m_audioAttachmentIndex, m_audioLoading,
+                             m_audioPlayer->playbackState() == QMediaPlayer::PlayingState,
+                             m_audioPositionMs, m_audioDurationMs);
 }
 
 void MainWindow::saveAttachment(int msgIdx, int attIdx)

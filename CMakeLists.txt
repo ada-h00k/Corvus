@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia)
 find_package(Threads REQUIRED)
 
 # Desktop notifications use the freedesktop.org D-Bus service (Linux/BSD).
@@ -87,6 +87,7 @@ target_compile_definitions(app_core PUBLIC APP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(app_core PUBLIC
     Qt6::Widgets
     Qt6::Network
+    Qt6::Multimedia
     history_store
     Threads::Threads
     ${CMAKE_DL_LIBS}

@@ -9,7 +9,7 @@ Environment:
   MOCK_LOG     file: every JSON-RPC request is appended (one JSON per line)
   MOCK_INJECT  file: JSON lines appended here are emitted as `receive` envelopes
 """
-import base64, json, os, struct, sys, threading, time, zlib
+import base64, io, json, os, struct, sys, threading, time, wave, zlib
 
 args = sys.argv[1:]
 
@@ -25,6 +25,16 @@ def png(w=64, h=48):
 
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def wav():
+    data = io.BytesIO()
+    with wave.open(data, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\x00\x00" * 16000)
+    return data.getvalue()
 
 
 nap = float(os.environ.get("MOCK_SLEEP", "0"))      # simulate a slow JVM start
@@ -125,7 +135,8 @@ for line in sys.stdin:
         if p.get("id") == "missing":
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find attachment"}})
             continue
-        res = {"data": base64.b64encode(png()).decode()}
+        payload = wav() if p.get("id") == "voice1" else png()
+        res = {"data": base64.b64encode(payload).decode()}
     else:
         emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "unknown method " + str(m)}})
         continue

@@ -29,6 +29,8 @@ public:
 
     void showMessages(const QList<Message> &msgs, bool keepScroll = false); // full rebuild
     void appendMessage(const Message &m);                                   // fast path
+    void setAudioPlayback(int messageIndex, int attachmentIndex, bool loading, bool playing,
+                          qint64 positionMs, qint64 durationMs);
     void clearView();
     void scrollToMessage(int idx);
 
@@ -113,6 +115,12 @@ private:
     bool m_group = false;
     Appearance m_ap;
     int m_layoutWidth = -1;
+    int m_audioMessage = -1;
+    int m_audioAttachment = -1;
+    bool m_audioLoading = false;
+    bool m_audioPlaying = false;
+    qint64 m_audioPositionMs = 0;
+    qint64 m_audioDurationMs = 0;
 
     // selection inside one message
     int m_selItem = -1;

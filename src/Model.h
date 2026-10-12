@@ -17,6 +17,15 @@ struct Attachment {
     QByteArray thumb;    // JPEG/PNG preview (<= 480 px), kept in the encrypted history
 
     bool isImage() const { return contentType.startsWith(QLatin1String("image/")); }
+    bool isAudio() const
+    {
+        if (contentType.startsWith(QLatin1String("audio/"))) return true;
+        const QString suffix = filename.section(QLatin1Char('.'), -1).toLower();
+        return QStringList{QStringLiteral("aac"), QStringLiteral("flac"), QStringLiteral("m4a"),
+                           QStringLiteral("mp3"), QStringLiteral("oga"), QStringLiteral("ogg"),
+                           QStringLiteral("opus"), QStringLiteral("wav"), QStringLiteral("weba"),
+                           QStringLiteral("webm")}.contains(suffix);
+    }
 };
 
 struct Quote {
