@@ -94,6 +94,13 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     setFocusPolicy(Qt::StrongFocus);
     m_ap = Appearance::defaults(palette());
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { updateVideoGeometry(); });
+    m_resizeTimer = new QTimer(this);
+    m_resizeTimer->setSingleShot(true);
+    m_resizeTimer->setInterval(70);
+    connect(m_resizeTimer, &QTimer::timeout, this, [this] {
+        relayoutAll();
+        verticalScrollBar()->setValue(m_resizeAtBottom ? verticalScrollBar()->maximum() : m_resizeScrollValue);
+    });
     m_autoScrollTimer = new QTimer(this);
     m_autoScrollTimer->setInterval(16);
     connect(m_autoScrollTimer, &QTimer::timeout, this, [this] {
@@ -135,7 +142,9 @@ void ChatView::setAppearance(const Appearance &a)
         it.built = false;
         it.doc.reset();
         it.pix.clear();
+        it.renderResourcesBuilt = false;
     }
+    m_renderFirst = m_renderLast = -1;
     const bool bottom = atBottom();
     const int old = verticalScrollBar()->value();
     relayoutAll();
@@ -157,6 +166,7 @@ void ChatView::clearView()
             delete movie;
     m_msgs.clear();
     m_items.clear();
+    m_renderFirst = m_renderLast = -1;
     clearSelection();
     m_flash = -1;
     updateScrollRange();
@@ -173,6 +183,7 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll)
             delete movie;
     m_msgs = msgs;
     m_items = QList<Item>(msgs.size());
+    m_renderFirst = m_renderLast = -1;
     clearSelection();
     relayoutAll();
     verticalScrollBar()->setValue((bottom || !keepScroll) ? verticalScrollBar()->maximum() : old);
@@ -447,7 +458,6 @@ void ChatView::buildItem(int i)
         delete movie;
     it.movies.clear();
     it.animationRequested.clear();
-    it.pix.clear();
     it.built = true;
     const Message &m = m_msgs[i];
 
@@ -461,6 +471,24 @@ void ChatView::buildItem(int i)
             it.quoteText = QStringLiteral("📎 ") + m.quote.attachmentNote;
     }
 
+    for (const Attachment &a : m.attachments) {
+        it.movies << nullptr;
+        it.animationRequested << false;
+        QSize imageSize(a.width, a.height);
+        if ((imageSize.width() <= 0 || imageSize.height() <= 0) && a.isImage() && !a.thumb.isEmpty()) {
+            const QImage image = QImage::fromData(a.thumb);
+            imageSize = image.size();
+        }
+        it.attachmentImageSizes << imageSize;
+    }
+}
+
+void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
+{
+    Item &it = m_items[i];
+    if (it.renderResourcesBuilt) return;
+
+    const Message &m = m_msgs[i];
     if (!m.text.isEmpty()) {
         const QColor fg = m.outgoing ? m_ap.outText : m_ap.inText;
         it.doc = std::make_shared<QTextDocument>();
@@ -468,17 +496,28 @@ void ChatView::buildItem(int i)
         it.doc->setDefaultFont(font());
         it.doc->setDefaultStyleSheet(QStringLiteral("a { color: %1; text-decoration: underline; }").arg(fg.name()));
         it.doc->setHtml(linkify(m.text));
+        if (it.textRect.width() > 0) it.doc->setTextWidth(it.textRect.width());
     }
-    for (const Attachment &a : m.attachments) {
-        it.pix << ((a.isImage() && !a.thumb.isEmpty()) ? QPixmap::fromImage(QImage::fromData(a.thumb)) : QPixmap());
-        it.movies << nullptr;
-        it.animationRequested << false;
+    it.pix.clear();
+    if (includePixmaps) {
+        for (const Attachment &a : m.attachments)
+            it.pix << ((a.isImage() && !a.thumb.isEmpty()) ? QPixmap::fromImage(QImage::fromData(a.thumb)) : QPixmap());
     }
+    it.renderResourcesBuilt = true;
+}
+
+void ChatView::releaseItemRenderResources(int i)
+{
+    Item &it = m_items[i];
+    it.doc.reset();
+    it.pix.clear();
+    it.renderResourcesBuilt = false;
 }
 
 void ChatView::layoutItem(int i, int y)
 {
     buildItem(i);
+    ensureItemRenderResources(i, false);
     Item &it = m_items[i];
     const Message &m = m_msgs[i];
     const int W = viewport()->width();
@@ -538,11 +577,11 @@ void ChatView::layoutItem(int i, int y)
     QList<QSize> attSizes;
     for (int a = 0; a < m.attachments.size(); ++a) {
         const Attachment &att = m.attachments[a];
-        const QPixmap &pm = it.pix[a];
         QSize sz;
-        if (!pm.isNull()) {
-            int pw = qMin(qMin(kMaxImage, innerMax), pm.width());
-            int ph = pm.height() * pw / qMax(1, pm.width());
+        const QSize imageSize = it.attachmentImageSizes[a];
+        if (att.isImage() && !att.thumb.isEmpty() && imageSize.width() > 0 && imageSize.height() > 0) {
+            int pw = qMin(qMin(kMaxImage, innerMax), imageSize.width());
+            int ph = imageSize.height() * pw / qMax(1, imageSize.width());
             if (ph > 360) {
                 pw = pw * 360 / ph;
                 ph = 360;
@@ -630,6 +669,7 @@ void ChatView::layoutItem(int i, int y)
         height = qMax(height, py + pillH + 4);
     }
     it.height = height + 2;
+    releaseItemRenderResources(i);
 }
 
 void ChatView::relayoutAll()
@@ -654,13 +694,20 @@ void ChatView::updateScrollRange()
 void ChatView::resizeEvent(QResizeEvent *e)
 {
     QAbstractScrollArea::resizeEvent(e);
-    const bool bottom = atBottom();
-    const int old = verticalScrollBar()->value();
-    if (viewport()->width() != m_layoutWidth)
-        relayoutAll();
-    else
+    if (viewport()->width() != m_layoutWidth) {
+        if (!m_resizeTimer->isActive()) {
+            m_resizeAtBottom = atBottom();
+            m_resizeScrollValue = verticalScrollBar()->value();
+        }
         updateScrollRange();
-    verticalScrollBar()->setValue(bottom ? verticalScrollBar()->maximum() : old);
+        verticalScrollBar()->setValue(m_resizeAtBottom ? verticalScrollBar()->maximum() : m_resizeScrollValue);
+        m_resizeTimer->start();
+    } else {
+        const bool bottom = atBottom();
+        const int old = verticalScrollBar()->value();
+        updateScrollRange();
+        verticalScrollBar()->setValue(bottom ? verticalScrollBar()->maximum() : old);
+    }
     updateVideoGeometry();
 }
 
@@ -682,12 +729,24 @@ void ChatView::paintEvent(QPaintEvent *)
     QPainter p(viewport());
     p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
     p.fillRect(viewport()->rect(), m_ap.background);
+    if (m_items.isEmpty()) return;
 
     const int top = verticalScrollBar()->value();
     const int bottom = top + viewport()->height();
     int first = itemAtY(top);
     if (first < 0) first = 0;
-    for (int i = first; i < m_items.size() && m_items[i].y < bottom; ++i) {
+    int last = first;
+    while (last + 1 < m_items.size() && m_items[last + 1].y < bottom) ++last;
+
+    const int resourceFirst = qMax(0, first - 8);
+    const int resourceLast = qMin(m_items.size() - 1, last + 8);
+    for (int i = m_renderFirst; i >= 0 && i <= m_renderLast; ++i)
+        if (i < resourceFirst || i > resourceLast) releaseItemRenderResources(i);
+    m_renderFirst = resourceFirst;
+    m_renderLast = resourceLast;
+
+    for (int i = first; i <= last; ++i) ensureItemRenderResources(i);
+    for (int i = first; i <= last; ++i) {
         p.save();
         p.translate(0, m_items[i].y - top);
         paintItem(p, i);

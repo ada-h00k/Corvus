@@ -471,6 +471,23 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return view->messageCount() == 2; }));
         CHECK(html(view).contains("my reply"));
 
+        auto *search = w.findChild<QLineEdit *>(QStringLiteral("messageSearchInput"));
+        auto *searchCount = w.findChild<QLabel *>(QStringLiteral("messageSearchCount"));
+        CHECK(search && searchCount);
+        if (search && searchCount) {
+            input->setFocus();
+            QTest::keyClick(input, Qt::Key_F, Qt::ControlModifier);
+            CHECK(waitFor([&] { return search->isVisible(); }));
+            search->setText(QStringLiteral("e"));
+            CHECK(searchCount->text() == QStringLiteral("1 / 2"));
+            QTest::keyClick(search, Qt::Key_Return);
+            CHECK(searchCount->text() == QStringLiteral("2 / 2"));
+            QTest::keyClick(search, Qt::Key_Return);
+            CHECK(searchCount->text() == QStringLiteral("1 / 2"));
+            QTest::keyClick(search, Qt::Key_Escape);
+            CHECK(!search->isVisible());
+        }
+
         // --- react (and take the reaction back by choosing the same emoji again)
         emit view->reactionChosen(0, QStringLiteral("👍"));
         CHECK(waitFor([&] { return !findCall(logFile, "sendReaction").isEmpty(); }));

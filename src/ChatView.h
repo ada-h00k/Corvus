@@ -90,6 +90,7 @@ private:
     };
     struct Item {
         bool built = false;
+        bool renderResourcesBuilt = false;
         // content (built once)
         std::shared_ptr<QTextDocument> doc;
         QList<QPixmap> pix;
@@ -97,6 +98,7 @@ private:
         mutable QList<bool> animationRequested;
         QString sender, quoteAuthor, quoteText, timeText, dateLabel;
         QString quoteNote;
+        QList<QSize> attachmentImageSizes;
         bool showSender = false;
         // layout (item-local coordinates, valid for m_layoutWidth)
         int y = 0, height = 0;
@@ -113,6 +115,8 @@ private:
     };
 
     void buildItem(int i);
+    void ensureItemRenderResources(int i, bool includePixmaps = true);
+    void releaseItemRenderResources(int i);
     void layoutItem(int i, int y);
     void relayoutAll();
     void updateScrollRange();
@@ -134,6 +138,10 @@ private:
     bool m_group = false;
     Appearance m_ap;
     int m_layoutWidth = -1;
+    int m_renderFirst = -1;
+    int m_renderLast = -1;
+    int m_resizeScrollValue = 0;
+    bool m_resizeAtBottom = true;
     int m_audioMessage = -1;
     int m_audioAttachment = -1;
     bool m_audioLoading = false;
@@ -156,6 +164,7 @@ private:
     QPoint m_pressPos;
     Hit m_pressHit;
     QTimer *m_autoScrollTimer = nullptr;
+    QTimer *m_resizeTimer = nullptr;
     QPoint m_autoScrollAnchor;
     QPoint m_autoScrollPos;
     bool m_autoScrolling = false;

@@ -19,7 +19,7 @@
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -309,27 +309,39 @@ impl Store {
     /// Open and fully decrypt the log. A partially written trailing record
     /// (crash during append) is dropped; any authentication failure is an error.
     pub fn open(path: &Path, pass: &str) -> Result<(Store, Vec<Record>), StoreError> {
-        let data = fs::read(path)?;
-        let header = Header::parse(&data)?;
+        let file = File::open(path)?;
+        let file_len = file.metadata()?.len();
+        if file_len < HEADER_LEN as u64 {
+            return Err(StoreError::Corrupt("not a history file".into()));
+        }
+        let mut reader = BufReader::new(file);
+        let mut header_bytes = [0; HEADER_LEN];
+        reader.read_exact(&mut header_bytes)?;
+        let header = Header::parse(&header_bytes)?;
         let dek = header.unwrap_dek(pass)?;
         let cipher = XChaCha20Poly1305::new(Key::from_slice(&dek[..]));
 
         let mut records = Vec::new();
-        let mut pos = HEADER_LEN;
+        let mut pos = HEADER_LEN as u64;
         let mut seq = 0u64;
-        while pos < data.len() {
-            if data.len() - pos < 4 {
+        while pos < file_len {
+            let remaining = file_len - pos;
+            if remaining < 4 {
                 break;
             }
-            let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+            let mut len_bytes = [0; 4];
+            reader.read_exact(&mut len_bytes)?;
+            let len = u32::from_le_bytes(len_bytes) as usize;
             if !(NONCE_LEN + TAG_LEN..=MAX_RECORD).contains(&len) {
                 return Err(StoreError::Corrupt(format!("bad length of record {seq}")));
             }
-            if data.len() - pos - 4 < len {
+            if remaining - 4 < len as u64 {
                 break; // partial tail
             }
-            let nonce = &data[pos + 4..pos + 4 + NONCE_LEN];
-            let ct = &data[pos + 4 + NONCE_LEN..pos + 4 + len];
+            let mut frame = vec![0; len];
+            reader.read_exact(&mut frame)?;
+            let nonce = &frame[..NONCE_LEN];
+            let ct = &frame[NONCE_LEN..];
             let aad = record_aad(seq);
             let pt = cipher
                 .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
@@ -338,10 +350,10 @@ impl Store {
             let rec: Record = serde_json::from_slice(&pt)
                 .map_err(|e| StoreError::Corrupt(format!("record {seq}: {e}")))?;
             records.push(rec);
-            pos += 4 + len;
+            pos += 4 + len as u64;
             seq += 1;
         }
-        if pos < data.len() {
+        if pos < file_len {
             OpenOptions::new().write(true).open(path)?.set_len(pos as u64)?;
         }
         let file = open_append(path)?;

@@ -33,6 +33,7 @@
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -45,7 +46,6 @@
 #include <QNetworkRequest>
 #include <QPushButton>
 #include <QSettings>
-#include <QShortcut>
 #include <QShowEvent>
 #include <QSplitter>
 #include <QStandardPaths>
@@ -83,9 +83,18 @@ MainWindow::MainWindow()
     f.setBold(true);
     f.setPointSize(f.pointSize() + 2);
     m_title->setFont(f);
-    v->addWidget(m_title);
+    auto *titleRow = new QHBoxLayout;
+    titleRow->addWidget(m_title, 1);
+    auto *findMessages = new QToolButton(right);
+    findMessages->setObjectName(QStringLiteral("openMessageSearch"));
+    findMessages->setText(tr("Search"));
+    findMessages->setToolTip(tr("Search this conversation (Ctrl+F)"));
+    findMessages->setAccessibleName(tr("Search this conversation"));
+    titleRow->addWidget(findMessages);
+    v->addLayout(titleRow);
 
     m_view = new ChatView;
+    m_view->installEventFilter(this);
     m_view->setNameResolver([this](const QString &k) { return displayName(k); });
     m_appearance = Appearance::load(palette());
     m_view->setAppearance(m_appearance);
@@ -143,6 +152,45 @@ MainWindow::MainWindow()
     h->addWidget(m_gifBtn);
     h->addWidget(m_input, 1);
     h->addWidget(m_attachBtn);
+
+    m_searchBar = new QWidget(right);
+    auto *searchLayout = new QHBoxLayout(m_searchBar);
+    searchLayout->setContentsMargins(0, 0, 0, 0);
+    m_searchEdit = new QLineEdit(m_searchBar);
+    m_searchEdit->setObjectName(QStringLiteral("messageSearchInput"));
+    m_searchEdit->setPlaceholderText(tr("Search this conversation"));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->installEventFilter(this);
+    searchLayout->addWidget(m_searchEdit, 1);
+    m_searchCount = new QLabel(m_searchBar);
+    m_searchCount->setObjectName(QStringLiteral("messageSearchCount"));
+    m_searchCount->setMinimumWidth(48);
+    m_searchCount->setAlignment(Qt::AlignCenter);
+    searchLayout->addWidget(m_searchCount);
+    auto *previousMatch = new QToolButton(m_searchBar);
+    previousMatch->setText(QStringLiteral("↑"));
+    previousMatch->setToolTip(tr("Previous match"));
+    previousMatch->setAccessibleName(tr("Previous match"));
+    searchLayout->addWidget(previousMatch);
+    auto *nextMatch = new QToolButton(m_searchBar);
+    nextMatch->setText(QStringLiteral("↓"));
+    nextMatch->setToolTip(tr("Next match"));
+    nextMatch->setAccessibleName(tr("Next match"));
+    searchLayout->addWidget(nextMatch);
+    auto *closeSearch = new QToolButton(m_searchBar);
+    closeSearch->setText(QStringLiteral("×"));
+    closeSearch->setToolTip(tr("Close search"));
+    closeSearch->setAccessibleName(tr("Close search"));
+    searchLayout->addWidget(closeSearch);
+    m_searchBar->hide();
+    v->insertWidget(1, m_searchBar);
+    connect(m_searchEdit, &QLineEdit::textChanged, this, [this] { updateMessageSearch(true); });
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, [this] { navigateMessageSearch(false); });
+    connect(previousMatch, &QToolButton::clicked, this, [this] { navigateMessageSearch(true); });
+    connect(nextMatch, &QToolButton::clicked, this, [this] { navigateMessageSearch(false); });
+    connect(closeSearch, &QToolButton::clicked, this, &MainWindow::closeMessageSearch);
+    connect(findMessages, &QToolButton::clicked, this, &MainWindow::openMessageSearch);
+    m_input->installEventFilter(this);
     v->addLayout(h);
     split->addWidget(right);
     split->setStretchFactor(1, 1);
@@ -310,6 +358,22 @@ MainWindow::MainWindow()
     QSettings s;
     restoreGeometry(s.value(QStringLiteral("geometry")).toByteArray());
     QTimer::singleShot(0, this, &MainWindow::initialise);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->matches(QKeySequence::Find)) {
+            openMessageSearch();
+            return true;
+        }
+        if (watched == m_searchEdit && keyEvent->key() == Qt::Key_Escape) {
+            closeMessageSearch();
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 bool MainWindow::shouldHideOnClose(bool trayVisible, bool closeToTray, bool quitting)
@@ -1497,13 +1561,69 @@ void MainWindow::showConversation(bool keepScroll)
     if (!m_convs.contains(m_current)) {
         m_title->setText(tr("No conversation selected"));
         m_view->clearView();
+        updateMessageSearch();
         return;
     }
     const Conversation &c = m_convs[m_current];
     m_title->setText(c.title);
     m_view->setGroupMode(c.isGroup);
     m_view->showMessages(c.msgs, keepScroll);
+    updateMessageSearch();
     updateAudioPlaybackView();
+}
+
+void MainWindow::openMessageSearch()
+{
+    m_searchBar->show();
+    m_searchEdit->setFocus();
+    m_searchEdit->selectAll();
+    updateMessageSearch(true);
+}
+
+void MainWindow::closeMessageSearch()
+{
+    m_searchBar->hide();
+    m_searchEdit->clear();
+    m_input->setFocus();
+}
+
+void MainWindow::updateMessageSearch(bool selectFirst)
+{
+    const int oldPosition = m_searchPosition;
+    m_searchResults.clear();
+    const QString needle = m_searchEdit->text().trimmed();
+    const auto conversation = m_convs.constFind(m_current);
+    if (!needle.isEmpty() && conversation != m_convs.cend()) {
+        const QList<Message> &messages = conversation->msgs;
+        for (int i = 0; i < messages.size(); ++i) {
+            const Message &message = messages.at(i);
+            QString searchable = message.sender + QLatin1Char('\n') + message.text +
+                                 QLatin1Char('\n') + message.quote.text;
+            for (const Attachment &attachment : message.attachments)
+                searchable += QLatin1Char('\n') + attachment.filename;
+            if (searchable.contains(needle, Qt::CaseInsensitive)) m_searchResults.append(i);
+        }
+    }
+
+    if (m_searchResults.isEmpty()) {
+        m_searchPosition = -1;
+        m_searchCount->setText(needle.isEmpty() ? QString() : QStringLiteral("0 / 0"));
+        return;
+    }
+    m_searchPosition = selectFirst || oldPosition < 0
+                           ? 0
+                           : qMin(oldPosition, m_searchResults.size() - 1);
+    m_searchCount->setText(tr("%1 / %2").arg(m_searchPosition + 1).arg(m_searchResults.size()));
+    if (selectFirst) m_view->scrollToMessage(m_searchResults.at(m_searchPosition));
+}
+
+void MainWindow::navigateMessageSearch(bool backwards)
+{
+    if (m_searchResults.isEmpty()) return;
+    const int count = m_searchResults.size();
+    m_searchPosition = (m_searchPosition + (backwards ? count - 1 : 1)) % count;
+    m_searchCount->setText(tr("%1 / %2").arg(m_searchPosition + 1).arg(count));
+    m_view->scrollToMessage(m_searchResults.at(m_searchPosition));
 }
 
 void MainWindow::updateReplyBar()
