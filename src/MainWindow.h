@@ -57,6 +57,7 @@ protected:
     void showEvent(QShowEvent *e) override;
     void dragEnterEvent(QDragEnterEvent *e) override;
     void dropEvent(QDropEvent *e) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
     void initialise();
@@ -131,6 +132,10 @@ private:
     // --- list / view
     void refreshList();
     void showConversation(bool keepScroll = false);
+    void openMessageSearch();
+    void closeMessageSearch();
+    void updateMessageSearch(bool selectFirst = false);
+    void navigateMessageSearch(bool backwards);
     void updateReplyBar();
     void updateAttachBar();
 
@@ -206,6 +211,11 @@ private:
     QListWidget *m_list;
     QLabel *m_title;
     ChatView *m_view;
+    QWidget *m_searchBar;
+    QLineEdit *m_searchEdit;
+    QLabel *m_searchCount;
+    QList<int> m_searchResults;
+    int m_searchPosition = -1;
     QWidget *m_editBar;
     QLabel *m_editLabel;
     QWidget *m_replyBar;
