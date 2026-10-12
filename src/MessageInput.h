@@ -22,6 +22,7 @@ public:
 
 signals:
     void escapePressed(); // used to cancel editing
+    void upPressed();
 
 protected:
     void keyPressEvent(QKeyEvent *e) override;

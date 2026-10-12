@@ -131,6 +131,7 @@ private:
     // --- actions on messages
     void startReply(int idx);
     void startEdit(int idx);
+    void editLastMessage();
     void cancelEdit(bool restoreDraft = true);
     void sendEdit(const QString &text);
     // Applies an edit (own or received). author = who must have written the message.

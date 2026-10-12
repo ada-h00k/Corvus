@@ -76,7 +76,8 @@ it.
 - **Inline images:** received and sent pictures are shown in the chat;
   click for the full size
 - **Edit messages:** right-click one of your own text messages → *Edit*. The text moves into the
-  input field (Enter saves, Esc or ✕ cancels and restores what you had typed). Same limits as the
+  input field (or press ↑ with an empty input; Shift+↑ selects the whole current draft).
+  Enter saves, Esc or ✕ cancels and restores what you had typed. Same limits as the
   official clients: up to 3 hours after sending and at most 10 edits. Edited messages show
   *edited* next to the time. Edits by contacts and edits made on your phone are applied as well
   (only to a known message of the same author). The edit is stored in the encrypted history.

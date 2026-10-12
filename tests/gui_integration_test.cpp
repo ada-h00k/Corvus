@@ -408,8 +408,21 @@ int main(int argc, char **argv)
             CHECK(waitFor([&] { return view->messageCount() == 3; }));
             const int idx = 2;
 
-            // Edit mode: text is loaded, Esc cancels and restores what was typed before
+            input->clear();
+            QTest::keyClick(input, Qt::Key_Up);
+            CHECK(input->text() == "hello wrold");
+            CHECK(labelWith("Editing message"));
+            QTest::keyClick(input, Qt::Key_Escape);
+            CHECK(input->text().isEmpty());
+
             input->setText("draft in progress");
+            QTest::keyClick(input, Qt::Key_Up, Qt::ShiftModifier);
+            CHECK(input->selectedText() == "draft in progress");
+            QTest::keyClick(input, Qt::Key_Up);
+            CHECK(input->text() == "draft in progress");
+            CHECK(!labelWith("Editing message"));
+
+            // Edit mode: text is loaded, Esc cancels and restores what was typed before
             emit view->editRequested(idx);
             CHECK(input->text() == "hello wrold");
             CHECK(labelWith("Editing message"));
