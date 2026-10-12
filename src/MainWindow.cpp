@@ -193,6 +193,20 @@ MainWindow::MainWindow()
         const QString key = it->data(Qt::UserRole).toString();
         if (!m_convs.contains(key)) return;
         QMenu menu(this);
+        Conversation &conversation = m_convs[key];
+        if (!conversation.isGroup) {
+            menu.addAction(conversation.localNickname.isEmpty() ? tr("Set nickname…") : tr("Change nickname…"),
+                           this, [this, key] {
+                const QString current = m_convs.value(key).localNickname;
+                bool ok = false;
+                const QString nickname = QInputDialog::getText(this, tr("Contact nickname"), tr("Nickname:"),
+                                                               QLineEdit::Normal, current, &ok);
+                if (ok) setNickname(key, nickname.trimmed());
+            });
+            if (!conversation.localNickname.isEmpty())
+                menu.addAction(tr("Remove nickname"), this, [this, key] { setNickname(key, QString()); });
+            menu.addSeparator();
+        }
         const bool archived = m_convs[key].archived;
         menu.addAction(archived ? tr("Unarchive") : tr("Archive"), this, [this, key, archived] { setArchived(key, !archived); });
         const bool muted = m_convs[key].muted;
@@ -213,6 +227,9 @@ MainWindow::MainWindow()
     });
     connect(m_view, &ChatView::attachmentActivated, this, &MainWindow::openAttachment);
     connect(m_view, &ChatView::animatedAttachmentRequested, this, &MainWindow::loadAnimatedAttachment);
+    connect(m_view, &ChatView::videoPlaybackError, this, [this](const QString &error) {
+        statusBar()->showMessage(tr("Video playback failed: %1").arg(error), 10000);
+    });
     connect(m_view, &ChatView::linkClicked, this, [this](const QString &url) {
         const QUrl u(url);
         if (u.scheme() == QLatin1String("http") || u.scheme() == QLatin1String("https")) QDesktopServices::openUrl(u);
@@ -574,7 +591,7 @@ void MainWindow::loadContactsAndGroups()
                 persist(Records::expiration(key, expiration));
             }
             if (title.isEmpty()) title = cv2.storedName.isEmpty() ? key : cv2.storedName;
-            cv2.title = title;
+            cv2.title = cv2.localNickname.isEmpty() ? title : cv2.localNickname;
 
             // Archive state: follow signal-cli only when *it* changed (e.g. archived on the phone);
             // otherwise keep the local state (e.g. auto-unarchived by a new message).
@@ -772,7 +789,12 @@ void MainWindow::loadHistory(const QJsonArray &records)
         } else if (t == QLatin1String("n")) {
             Conversation &c = conv(key, key, group);
             c.storedName = o.value(QStringLiteral("n")).toString();
-            if (!c.storedName.isEmpty()) c.title = c.storedName;
+            if (!c.storedName.isEmpty() && c.localNickname.isEmpty()) c.title = c.storedName;
+        } else if (t == QLatin1String("p")) {
+            Conversation &c = conv(key, key, group);
+            c.localNickname = o.value(QStringLiteral("n")).toString();
+            if (!c.localNickname.isEmpty()) c.title = c.localNickname;
+            else c.title = m_contactNames.value(key, c.storedName.isEmpty() ? key : c.storedName);
         } else if (t == QLatin1String("d")) {
             m_convs.remove(key);
         } else if (t == QLatin1String("u") || t == QLatin1String("r")) {
@@ -811,6 +833,7 @@ QJsonArray MainWindow::allRecords() const
     for (const QString &k : keys) {
         const Conversation &c = m_convs[k];
         if (!c.storedName.isEmpty()) out.append(Records::name(c.key, c.storedName));
+        if (!c.localNickname.isEmpty()) out.append(Records::nickname(c.key, c.localNickname));
         if (c.archived || c.sigArchived) out.append(Records::archive(c.key, c.archived, c.sigArchived));
         if (c.muted) out.append(Records::mute(c.key, true));
         out.append(Records::expiration(c.key, c.expirationSeconds));
@@ -842,11 +865,24 @@ void MainWindow::learnName(const QString &key, const QString &name)
 {
     Conversation &c = conv(key);
     if (!c.storedName.isEmpty() || c.isGroup) return;
-    if (c.title != c.key && c.title != name) return; // a saved contact name wins
+    if (c.title != c.key && c.title != name && c.localNickname.isEmpty()) return; // a saved contact name wins
     c.storedName = name;
-    c.title = name;
+    if (c.localNickname.isEmpty()) c.title = name;
     persist(Records::name(key, name));
     refreshList();
+}
+
+void MainWindow::setNickname(const QString &key, const QString &nickname)
+{
+    auto it = m_convs.find(key);
+    if (it == m_convs.end() || it->isGroup) return;
+    it->localNickname = nickname;
+    it->title = nickname.isEmpty()
+                    ? m_contactNames.value(key, it->storedName.isEmpty() ? key : it->storedName)
+                    : nickname;
+    persist(Records::nickname(key, nickname));
+    refreshList();
+    if (m_current == key) showConversation(true);
 }
 
 void MainWindow::changeHistoryProtection()
@@ -2108,6 +2144,47 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
 
     if (att.isAudio()) {
         toggleAudioAttachment(msgIdx, attIdx);
+        return;
+    }
+
+    if (att.isVideo()) {
+        if (m_view->isVideoActive(msgIdx, attIdx)) {
+            m_view->toggleVideoPlayback();
+            return;
+        }
+        if (m_view->isVideoLoading(msgIdx, attIdx)) return;
+        const Message message = c.msgs[msgIdx];
+        const QString author = effectiveAuthor(c, message);
+        const qint64 timestamp = message.ts();
+        m_view->setVideoLoading(msgIdx, attIdx, true);
+        fetchAttachmentData(key, att, [this, key, author, timestamp, attIdx, att]
+                            (const QByteArray &data, const QString &error) {
+            if (m_current != key || !m_convs.contains(key)) return;
+            const int index = findMessage(m_convs[key], timestamp, {author});
+            if (index < 0 || attIdx >= m_convs[key].msgs[index].attachments.size()) return;
+            m_view->setVideoLoading(index, attIdx, false);
+            if (!error.isEmpty() || data.isEmpty()) {
+                statusBar()->showMessage(error.isEmpty() ? tr("The video file is empty.") : error, 10000);
+                return;
+            }
+            if (!m_tmp.isValid()) {
+                statusBar()->showMessage(tr("No temporary directory available for video playback."), 10000);
+                return;
+            }
+            QString suffix = QFileInfo(att.filename).suffix();
+            if (suffix.isEmpty()) suffix = QMimeDatabase().mimeTypeForName(att.contentType).preferredSuffix();
+            const QString path = m_tmp.path() + QStringLiteral("/video-") +
+                                 QUuid::createUuid().toString(QUuid::WithoutBraces) +
+                                 (suffix.isEmpty() ? QString() : QStringLiteral(".") + suffix);
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size()) {
+                statusBar()->showMessage(tr("The video file could not be prepared for playback."), 10000);
+                return;
+            }
+            file.close();
+            statusBar()->clearMessage();
+            m_view->playVideoAttachment(index, attIdx, path);
+        });
         return;
     }
 

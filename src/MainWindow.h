@@ -93,6 +93,7 @@ private:
     QJsonArray allRecords() const;
     void persist(const QJsonObject &record);
     void learnName(const QString &key, const QString &name);
+    void setNickname(const QString &key, const QString &nickname);
     void deleteConversation(const QString &key);
     void deleteMessage(int idx);
     bool removeMessage(const QString &key, qint64 timestamp);

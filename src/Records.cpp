@@ -166,4 +166,9 @@ QJsonObject name(const QString &conv, const QString &n)
     return {{"t", "n"}, {"c", conv}, {"n", n}};
 }
 
+QJsonObject nickname(const QString &conv, const QString &n)
+{
+    return {{"t", "p"}, {"c", conv}, {"n", n}};
+}
+
 } // namespace Records

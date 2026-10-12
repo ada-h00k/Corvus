@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia MultimediaWidgets)
 find_package(Qt6Keychain 0.14 REQUIRED)
 find_package(Threads REQUIRED)
 
@@ -95,6 +95,7 @@ target_link_libraries(app_core PUBLIC
     Qt6::Widgets
     Qt6::Network
     Qt6::Multimedia
+    Qt6::MultimediaWidgets
     Qt6Keychain::Qt6Keychain
     history_store
     Threads::Threads
