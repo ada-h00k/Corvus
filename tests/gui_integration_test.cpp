@@ -1,12 +1,14 @@
 // Headless end-to-end test: real MainWindow + encrypted Rust store + mock signal-cli.
 #include "ChatView.h"
 #include "EmojiPicker.h"
+#include "ImageViewer.h"
 #include "MainWindow.h"
 #include "PassphraseDialog.h"
 
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
+#include <QBuffer>
 #include <QInputDialog>
 #include <QDateTime>
 #include <QtTest/QTest>
@@ -25,7 +27,9 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QMimeData>
+#include <QPainter>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -179,6 +183,48 @@ int main(int argc, char **argv)
 
     QTemporaryDir tmp;
     CHECK(tmp.isValid());
+
+    {
+        QImage source(2000, 1500, QImage::Format_RGB32);
+        source.fill(Qt::darkCyan);
+        {
+            QPainter painter(&source);
+            painter.fillRect(QRect(1400, 600, 400, 300), Qt::magenta);
+        }
+        QByteArray encoded;
+        QBuffer buffer(&encoded);
+        CHECK(buffer.open(QIODevice::WriteOnly));
+        CHECK(source.save(&buffer, "PNG"));
+
+        ImageViewer viewer(encoded, QStringLiteral("large.png"));
+        CHECK(viewer.isValid());
+        viewer.show();
+        QCoreApplication::processEvents();
+        auto *scroll = viewer.findChild<QScrollArea *>();
+        auto *label = scroll ? qobject_cast<QLabel *>(scroll->widget()) : nullptr;
+        CHECK(scroll && label);
+        if (scroll && label) {
+            auto magentaPixels = [label] {
+                const QImage rendered = label->grab().toImage().convertToFormat(QImage::Format_RGB32);
+                int count = 0;
+                for (int y = 0; y < rendered.height(); ++y)
+                    for (int x = 0; x < rendered.width(); ++x)
+                        if (rendered.pixel(x, y) == qRgb(255, 0, 255)) ++count;
+                return count;
+            };
+            const int initialDetailPixels = magentaPixels();
+            CHECK(initialDetailPixels > 0);
+            viewer.resize(320, 240);
+            QCoreApplication::processEvents();
+            const int smallDetailPixels = magentaPixels();
+            CHECK(smallDetailPixels > 0 && smallDetailPixels < initialDetailPixels);
+            viewer.resize(900, 700);
+            QCoreApplication::processEvents();
+            CHECK(magentaPixels() > smallDetailPixels);
+        }
+        viewer.close();
+    }
+
     qputenv("XDG_DATA_HOME", (tmp.path() + "/data").toUtf8());
     qputenv("XDG_CONFIG_HOME", (tmp.path() + "/config").toUtf8());
     QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, tmp.path() + "/config");
