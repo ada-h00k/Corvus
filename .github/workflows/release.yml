@@ -69,7 +69,8 @@ jobs:
             libfreetype6 \
             libegl1 \
             libopengl0 \
-            libqrencode-dev
+            libqrencode-dev \
+            libqt6keychain1-dev
 
       # --------------------------------------------------
       # Qt

@@ -153,18 +153,19 @@ release (`build-<run number>`):
 | File | Description |
 |------|-------------|
 | `signal-cli-qt-<sha>-x86_64.AppImage` | Self-contained (bundles Qt and the Rust library). `chmod +x` and run. |
-| `signal-cli-qt-<sha>-linux-x86_64` | Plain binary. Requires Qt ≥ 6.5 (Widgets, Network) installed. |
+| `signal-cli-qt-<sha>-linux-x86_64` | Plain binary. Requires Qt ≥ 6.5 (Widgets, Network), QtKeychain, and a system credential store. |
 
 Linux x86_64 only. Remember to install signal-cli as well.
 
 ## Build from source
 
 Requirements: C++17 compiler, CMake ≥ 3.16, Qt 6 (Widgets, Network, Multimedia),
+QtKeychain 0.14 or newer,
 **Rust ≥ 1.75 with cargo** (e.g. via [rustup](https://rustup.rs) or your distro).
 
 ```sh
 # Debian/Ubuntu
-sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev cargo qrencode
+sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev libqt6keychain1-dev cargo qrencode
 
 cmake -S . -B build
 cmake --build build -j
@@ -178,6 +179,10 @@ cargo test --release --manifest-path history-store/Cargo.toml
 Without it only the link URI is shown. `Cargo.lock` is committed and the build
 uses `--locked`; some dependencies are pinned to versions that still build on
 older Rust toolchains.
+
+The GIPHY API key is stored in the operating system credential store through
+QtKeychain. On Linux, a Secret Service provider such as GNOME Keyring or KWallet
+must be available. Existing keys in `QSettings` are migrated when first read.
 
 ## CI / release workflow
 

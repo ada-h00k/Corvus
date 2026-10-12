@@ -7,6 +7,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia)
+find_package(Qt6Keychain 0.14 REQUIRED)
 find_package(Threads REQUIRED)
 
 # Desktop notifications use the freedesktop.org D-Bus service (Linux/BSD).
@@ -64,6 +65,8 @@ set(APP_SOURCES
     src/EmojiPicker.cpp
     src/GiphyPicker.h
     src/GiphyPicker.cpp
+    src/GiphyApiKeyStore.h
+    src/GiphyApiKeyStore.cpp
     src/ChatView.h
     src/ChatView.cpp
     src/ImageViewer.h
@@ -90,6 +93,7 @@ target_link_libraries(app_core PUBLIC
     Qt6::Widgets
     Qt6::Network
     Qt6::Multimedia
+    Qt6Keychain::Qt6Keychain
     history_store
     Threads::Threads
     ${CMAKE_DL_LIBS}

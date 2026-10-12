@@ -6,6 +6,7 @@
 #include "ChatView.h"
 #include "EmojiPicker.h"
 #include "GiphyPicker.h"
+#include "GiphyApiKeyStore.h"
 #include "Envelope.h"
 #include "ImageViewer.h"
 #include "LinkDialog.h"
@@ -2215,16 +2216,22 @@ void MainWindow::editNotifications()
 
 void MainWindow::configureGiphyApiKey()
 {
-    const QString setting = QStringLiteral("giphyApiKey");
-    const QString currentKey = QSettings().value(setting).toString();
+    QString currentKey;
+    QString error;
+    if (!GiphyApiKeyStore::load(currentKey, error)) {
+        QMessageBox::warning(this, tr("GIPHY API key"), error);
+        return;
+    }
     bool accepted = false;
     const QString apiKey = QInputDialog::getText(
         this, tr("GIPHY API key"),
         tr("Enter your GIPHY API key. Create one at developers.giphy.com/dashboard."),
         QLineEdit::Password, currentKey, &accepted).trimmed();
     if (!accepted) return;
-    if (apiKey.isEmpty()) QSettings().remove(setting);
-    else QSettings().setValue(setting, apiKey);
+    const bool stored = apiKey.isEmpty()
+        ? GiphyApiKeyStore::clear(error)
+        : GiphyApiKeyStore::save(apiKey, error);
+    if (!stored) QMessageBox::warning(this, tr("GIPHY API key"), error);
 }
 
 void MainWindow::searchGifs()
@@ -2233,7 +2240,12 @@ void MainWindow::searchGifs()
         statusBar()->showMessage(tr("Open a conversation before searching for GIFs."), 5000);
         return;
     }
-    QString apiKey = QSettings().value(QStringLiteral("giphyApiKey")).toString().trimmed();
+    QString apiKey;
+    QString error;
+    if (!GiphyApiKeyStore::load(apiKey, error)) {
+        QMessageBox::warning(this, tr("GIPHY API key"), error);
+        return;
+    }
     if (apiKey.isEmpty()) {
         QMessageBox box(this);
         box.setWindowTitle(tr("GIPHY API key required"));
@@ -2248,7 +2260,10 @@ void MainWindow::searchGifs()
         }
         if (box.clickedButton() != configure) return;
         configureGiphyApiKey();
-        apiKey = QSettings().value(QStringLiteral("giphyApiKey")).toString().trimmed();
+        if (!GiphyApiKeyStore::load(apiKey, error)) {
+            QMessageBox::warning(this, tr("GIPHY API key"), error);
+            return;
+        }
         if (apiKey.isEmpty()) return;
     }
 
