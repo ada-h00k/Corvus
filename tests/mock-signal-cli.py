@@ -80,11 +80,11 @@ if inject:
     threading.Thread(target=injector, args=(inject,), daemon=True).start()
 
 CONTACTS = [
-    {"number": "+49111", "uuid": "u-alice", "name": "Alice", "isArchived": False, "isBlocked": False, "isHidden": False},
-    {"number": "+49222", "uuid": "u-bob", "name": "Bob", "isArchived": True, "isBlocked": False, "isHidden": False},
-    {"number": "+49333", "uuid": "u-carol", "name": "Carol", "isArchived": True, "isBlocked": False, "isHidden": False},
+    {"number": "+49111", "uuid": "u-alice", "name": "Alice", "isArchived": False, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
+    {"number": "+49222", "uuid": "u-bob", "name": "Bob", "isArchived": True, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
+    {"number": "+49333", "uuid": "u-carol", "name": "Carol", "isArchived": True, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
 ]
-GROUPS = [{"id": "R1JPVVA=", "name": "Team", "isMember": True, "isBlocked": False}]
+GROUPS = [{"id": "R1JPVVA=", "name": "Team", "isMember": True, "isBlocked": False, "messageExpirationTime": 0}]
 sent = 0
 log = os.environ.get("MOCK_LOG")
 
@@ -101,6 +101,16 @@ for line in sys.stdin:
         res = CONTACTS
     elif m == "listGroups":
         res = GROUPS
+    elif m == "updateContact":
+        for contact in CONTACTS:
+            if p.get("recipient") in (contact["number"], contact["uuid"]):
+                contact["messageExpirationTime"] = p.get("expiration", 0)
+        res = {}
+    elif m == "updateGroup":
+        for group in GROUPS:
+            if p.get("groupId") == group["id"]:
+                group["messageExpirationTime"] = p.get("expiration", 0)
+        res = {}
     elif m == "send":
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}

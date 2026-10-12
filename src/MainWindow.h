@@ -10,6 +10,7 @@
 #include <QMainWindow>
 #include <QNetworkAccessManager>
 #include <QSet>
+#include <QTimer>
 #include <QTemporaryDir>
 #include <functional>
 
@@ -108,6 +109,10 @@ private:
     bool applyReaction(const QString &key, qint64 ts, const QStringList &authors, const QString &reactor,
                        const QString &emoji);
     void setArchived(const QString &key, bool archived);
+    void editExpiration(const QString &key);
+    void setExpiration(const QString &key, int seconds);
+    void startIncomingExpirationTimers(const QString &key);
+    void expireMessages();
 
     // --- notifications, sound, tray
     void applyNotificationSettings();
@@ -171,6 +176,7 @@ private:
     QSet<QString> m_thumbPending;
     std::function<void(const QString &)> m_pickAction;
     QTemporaryDir m_tmp;
+    QTimer m_expirationTimer;
 
     QListWidget *m_list;
     QLabel *m_title;

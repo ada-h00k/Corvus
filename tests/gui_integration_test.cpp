@@ -6,6 +6,8 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QComboBox>
+#include <QInputDialog>
 #include <QDateTime>
 #include <QtTest/QTest>
 #include <QDir>
@@ -21,6 +23,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMenu>
 #include <QMimeData>
 #include <QPushButton>
 #include <QSettings>
@@ -93,6 +96,44 @@ static void selectItem(QListWidget *l, const QString &needle)
         }
 }
 
+static bool chooseChatExpiration(MainWindow &window, QListWidget *list, const QString &needle, int choice)
+{
+    QListWidgetItem *item = nullptr;
+    for (int i = 0; i < list->count(); ++i) {
+        if (list->item(i)->text().contains(needle)) {
+            item = list->item(i);
+            break;
+        }
+    }
+    if (!item) return false;
+
+    const QPoint pos = list->visualItemRect(item).center();
+    QTimer::singleShot(0, &window, [choice] {
+        for (QWidget *top : QApplication::topLevelWidgets()) {
+            auto *menu = qobject_cast<QMenu *>(top);
+            if (!menu) continue;
+            for (QAction *action : menu->actions()) {
+                if (!action->text().contains("Disappearing messages")) continue;
+                QTimer::singleShot(100, [choice] {
+                    auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                    if (!dialog) return;
+                    auto *combo = dialog->findChild<QComboBox *>();
+                    if (!combo || choice < 0 || choice >= combo->count()) {
+                        dialog->reject();
+                        return;
+                    }
+                    combo->setCurrentIndex(choice);
+                    dialog->accept();
+                });
+                action->trigger();
+                return;
+            }
+        }
+    });
+    QMetaObject::invokeMethod(list, "customContextMenuRequested", Qt::DirectConnection, Q_ARG(QPoint, pos));
+    return waitFor([] { return QApplication::activeModalWidget() == nullptr; }, 3000);
+}
+
 static QList<QJsonObject> readLog(const QString &path)
 {
     QList<QJsonObject> out;
@@ -155,8 +196,9 @@ int main(int argc, char **argv)
             if (b->text() == "Send") sendBtn = b;
         CHECK(list && view && input && sendBtn);
 
-        CHECK(waitFor([&] { return listHas(list, "Alice") && listHas(list, "Archived chats"); }));
+        CHECK(waitFor([&] { return listHas(list, "Archived chats") && listHas(list, "Team"); }));
         CHECK(listHas(list, "Archived chats (2)")); // Bob + Carol archived on the "phone"
+        CHECK(!listHas(list, "Alice")); // active contacts appear when a chat exists
         CHECK(!listHas(list, "Bob"));
         CHECK(!listHas(list, "Carol"));
         CHECK(listHas(list, "Team"));
@@ -171,6 +213,12 @@ int main(int argc, char **argv)
             }
             CHECK(found);
         }
+
+        CHECK(chooseChatExpiration(w, list, "Team", 4)); // 1 hour
+        CHECK(waitFor([&] { return !findCall(logFile, "updateGroup").isEmpty(); }));
+        QJsonObject groupTimer = findCall(logFile, "updateGroup")["params"].toObject();
+        CHECK(groupTimer["groupId"].toString() == "R1JPVVA=");
+        CHECK(groupTimer["expiration"].toInt() == 3600);
 
         // --- incoming message with quote and image attachment
         inject(injectFile, QJsonObject{
@@ -471,6 +519,24 @@ int main(int argc, char **argv)
         CHECK(buttons.size() > 100);
         buttons.first()->click();
         CHECK(!got.isEmpty());
+
+        // A message-specific timer begins when the visible chat receives it and removes
+        // the message from both the view and the encrypted history.
+        selectItem(list, "Alice");
+        CHECK(waitFor([&] { return view->messageCount() == 3; }));
+        CHECK(chooseChatExpiration(w, list, "Alice", 3)); // 5 minutes
+        CHECK(waitFor([&] { return !findCall(logFile, "updateContact").isEmpty(); }));
+        QJsonObject contactTimer = findCall(logFile, "updateContact")["params"].toObject();
+        CHECK(contactTimer["recipient"].toString() == "+49111");
+        CHECK(contactTimer["expiration"].toInt() == 300);
+        const qint64 expiringTs = QDateTime::currentMSecsSinceEpoch();
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+            {"timestamp", expiringTs},
+            {"dataMessage", QJsonObject{{"timestamp", expiringTs}, {"message", "vanish locally"},
+                                         {"expiresInSeconds", 3}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 4 && html(view).contains("vanish locally"); }));
+        CHECK(waitFor([&] { return view->messageCount() == 3 && !html(view).contains("vanish locally"); }, 7000));
 
         CHECK(g_unexpectedBox.isEmpty());
         w.close();

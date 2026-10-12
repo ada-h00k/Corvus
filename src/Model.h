@@ -42,6 +42,8 @@ struct Message {
     // which is remembered in editTs; peers refer to the message by that latest timestamp.
     qint64 editTs = 0;   // timestamp of the latest revision (0 = never edited)
     int editCount = 0;
+    int expiresInSeconds = 0;
+    qint64 expirationStartMs = 0;
 
     qint64 ts() const { return time.toMSecsSinceEpoch(); }
     qint64 latestTs() const { return editTs > 0 ? editTs : ts(); }
@@ -65,4 +67,5 @@ struct Conversation {
     bool archived = false;    // shown in the "Archived chats" folder
     bool sigArchived = false; // archive state last reported by signal-cli
     bool muted = false;       // local "mute notifications" (signal-cli does not report mute state)
+    int expirationSeconds = 0; // Signal disappearing-message timer; 0 = disabled
 };
