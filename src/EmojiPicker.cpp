@@ -1,6 +1,12 @@
 #include "EmojiPicker.h"
 
+#include <QAction>
+#include <QFile>
 #include <QGridLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMenu>
 #include <QScreen>
 #include <QScrollArea>
 #include <QTabWidget>
@@ -10,21 +16,20 @@
 
 namespace {
 struct Category {
+    const char *key;
+    const char *icon;
     const char *name;
-    const char *emojis; // space separated
 };
 
 const Category kCategories[] = {
-    {"😀 Smileys",
-     "😀 😃 😄 😁 😆 😅 😂 🤣 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😋 😛 😜 🤪 😝 🤗 🤔 🤨 😐 😑 😶 🙄 😏 😣 😥 😮 😯 😪 😫 🥱 😴 😌 😎 🤓 🥳 😕 😟 🙁 😲 😳 🥺 😢 😭 😱 😖 😞 😓 😩 😤 😡 😠 🤬 😈 💀 🤡 👻 🤖"},
-    {"👍 Gestures",
-     "👍 👎 👌 ✌️ 🤞 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ ✋ 🤚 🖐️ 🖖 👋 👏 🙌 👐 🤲 🙏 💪 🤝 ✍️ 🤳 👀 👁️ 👂 👃 🧠 👄"},
-    {"❤️ Symbols",
-     "❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 ✨ ⭐ 🌟 💫 🔥 💥 💯 ✅ ❌ ❓ ❗ ⚠️ 🎉 🎊 🏆 🥇"},
-    {"🐶 Nature & food",
-     "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦆 🦉 🐢 🐍 🐙 🐬 🐳 🌸 🌹 🌻 🌲 🍀 🍎 🍌 🍇 🍓 🍕 🍔 🍟 🌭 🍿 🍩 🍪 🎂 ☕ 🍺 🍷"},
-    {"⚽ Objects",
-     "⚽ 🏀 🏈 🎾 🎮 🎲 🎯 🎵 🎶 🎤 🎧 📱 💻 ⌚ 📷 💡 📚 ✏️ 📌 📎 🔑 🔒 🎁 🚗 ✈️ 🚀 🏠 ⏰ 💰 📅"},
+    {"Smileys & People", "😀", "Smileys & People"},
+    {"Animals & Nature", "🐻", "Animals & Nature"},
+    {"Food & Drink", "🍕", "Food & Drink"},
+    {"Travel & Places", "🚗", "Travel & Places"},
+    {"Activities", "⚽", "Activities"},
+    {"Objects", "💡", "Objects"},
+    {"Symbols", "🔣", "Symbols"},
+    {"Flags", "🏁", "Flags"},
 };
 } // namespace
 
@@ -42,13 +47,20 @@ EmojiPicker::EmojiPicker(QWidget *parent) : QFrame(parent, Qt::Popup)
     auto *tabs = new QTabWidget;
     lay->addWidget(tabs);
 
+    QFile catalogFile(QStringLiteral(":/emoji/catalog.json"));
+    if (!catalogFile.open(QIODevice::ReadOnly))
+        qFatal("Could not open embedded emoji catalog");
+    const QJsonObject catalog = QJsonDocument::fromJson(catalogFile.readAll()).object();
+
     for (const Category &cat : kCategories) {
         auto *page = new QWidget;
         auto *grid = new QGridLayout(page);
         grid->setSpacing(2);
-        const QStringList list = QString::fromUtf8(cat.emojis).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        const QJsonArray list = catalog.value(QString::fromUtf8(cat.key)).toArray();
         int i = 0;
-        for (const QString &e : list) {
+        for (const QJsonValue &item : list) {
+            const QJsonObject entry = item.toObject();
+            const QString e = entry.value(QStringLiteral("emoji")).toString();
             auto *b = new QToolButton;
             b->setText(e);
             b->setAutoRaise(true);
@@ -60,6 +72,21 @@ EmojiPicker::EmojiPicker(QWidget *parent) : QFrame(parent, Qt::Popup)
                 hide();
                 emit emojiSelected(e);
             });
+            const QJsonArray tones = entry.value(QStringLiteral("tones")).toArray();
+            if (!tones.isEmpty()) {
+                auto *menu = new QMenu(b);
+                for (const QJsonValue &tone : tones) {
+                    const QString variant = tone.toString();
+                    QAction *action = menu->addAction(variant);
+                    action->setFont(f);
+                    connect(action, &QAction::triggered, this, [this, variant] {
+                        hide();
+                        emit emojiSelected(variant);
+                    });
+                }
+                b->setMenu(menu);
+                b->setPopupMode(QToolButton::MenuButtonPopup);
+            }
             grid->addWidget(b, i / 8, i % 8);
             ++i;
         }
@@ -68,9 +95,8 @@ EmojiPicker::EmojiPicker(QWidget *parent) : QFrame(parent, Qt::Popup)
         scroll->setWidgetResizable(true);
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setWidget(page);
-        const QString title = QString::fromUtf8(cat.name);
-        tabs->addTab(scroll, title.section(QLatin1Char(' '), 0, 0)); // icon only
-        tabs->setTabToolTip(tabs->count() - 1, title.section(QLatin1Char(' '), 1));
+        tabs->addTab(scroll, QString::fromUtf8(cat.icon));
+        tabs->setTabToolTip(tabs->count() - 1, QString::fromUtf8(cat.name));
     }
     setFixedSize(8 * 38 + 36, 260);
 }

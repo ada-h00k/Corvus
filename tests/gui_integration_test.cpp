@@ -38,6 +38,7 @@
 #include <QTcpSocket>
 #include <QSignalSpy>
 #include <QSettings>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
@@ -749,9 +750,30 @@ int main(int argc, char **argv)
         QString got;
         QObject::connect(&picker, &EmojiPicker::emojiSelected, [&](const QString &e) { got = e; });
         auto buttons = picker.findChildren<QToolButton *>();
-        CHECK(buttons.size() > 100);
+        CHECK(buttons.size() > 1500);
+        const auto tabs = picker.findChildren<QTabWidget *>();
+        CHECK(!tabs.isEmpty() && tabs.first()->count() == 8);
+        QToolButton *germanyFlag = nullptr;
+        QToolButton *thumbsUp = nullptr;
+        for (QToolButton *button : buttons) {
+            if (button->text() == QStringLiteral("🇩🇪")) germanyFlag = button;
+            if (button->text() == QStringLiteral("👍")) thumbsUp = button;
+        }
+        CHECK(germanyFlag != nullptr);
+        CHECK(thumbsUp && thumbsUp->menu());
         buttons.first()->click();
         CHECK(!got.isEmpty());
+        if (thumbsUp && thumbsUp->menu()) {
+            QAction *darkThumbsUp = nullptr;
+            for (QAction *action : thumbsUp->menu()->actions()) {
+                if (action->text() == QStringLiteral("👍🏿")) darkThumbsUp = action;
+            }
+            CHECK(darkThumbsUp != nullptr);
+            if (darkThumbsUp) {
+                darkThumbsUp->trigger();
+                CHECK(got == QStringLiteral("👍🏿"));
+            }
+        }
 
         // A message-specific timer begins when the visible chat receives it and removes
         // the message from both the view and the encrypted history.
