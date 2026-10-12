@@ -50,6 +50,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
+#include <QUuid>
 #include <QVBoxLayout>
 #include <QVersionNumber>
 #include <algorithm>
@@ -797,6 +798,106 @@ bool MainWindow::addMessage(const QString &key, Message m, const QString &title,
     return true;
 }
 
+void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const Message *echo)
+{
+    auto pendingIt = m_pendingSends.find(id);
+    if (pendingIt == m_pendingSends.end()) return;
+
+    const PendingSend pending = pendingIt.value();
+    if (timestamp <= 0) timestamp = QDateTime::currentMSecsSinceEpoch();
+
+    Message confirmed = pending.message;
+    confirmed.time = QDateTime::fromMSecsSinceEpoch(timestamp);
+    if (echo) {
+        // Keep the local file paths and thumbnails, but copy the remote attachment IDs
+        // when signal-cli's own-message envelope reaches us before the RPC reply.
+        for (int i = 0; i < confirmed.attachments.size() && i < echo->attachments.size(); ++i) {
+            if (!echo->attachments[i].id.isEmpty())
+                confirmed.attachments[i].id = echo->attachments[i].id;
+        }
+    }
+
+    auto conversationIt = m_convs.find(pending.conversationKey);
+    if (conversationIt == m_convs.end()) {
+        if (echo) pendingIt->echoReceived = true;
+        else m_pendingSends.erase(pendingIt);
+        addMessage(pending.conversationKey, confirmed);
+        return;
+    }
+
+    Conversation &conversation = conversationIt.value();
+    int previewIndex = -1;
+    for (int i = 0; i < conversation.msgs.size(); ++i) {
+        if (conversation.msgs[i].ts() == pending.temporaryTimestamp &&
+            conversation.msgs[i].outgoing &&
+            conversation.msgs[i].authorKey == m_account) {
+            previewIndex = i;
+            break;
+        }
+    }
+
+    if (previewIndex < 0) {
+        if (echo) pendingIt->echoReceived = true;
+        else m_pendingSends.erase(pendingIt);
+        addMessage(pending.conversationKey, confirmed);
+        return;
+    }
+
+    // If an envelope already inserted the confirmed timestamp by another path, remove
+    // only our temporary preview rather than creating a duplicate chat bubble.
+    int duplicateIndex = -1;
+    for (int i = 0; i < conversation.msgs.size(); ++i) {
+        if (i == previewIndex) continue;
+        const Message &existing = conversation.msgs[i];
+        if (existing.ts() == timestamp && existing.outgoing && existing.authorKey == m_account) {
+            duplicateIndex = i;
+            break;
+        }
+    }
+
+    if (duplicateIndex >= 0) {
+        conversation.msgs.removeAt(previewIndex);
+    } else {
+        conversation.msgs[previewIndex] = confirmed;
+        std::stable_sort(conversation.msgs.begin(), conversation.msgs.end(),
+                         [](const Message &a, const Message &b) { return a.time < b.time; });
+        persist(Records::message(pending.conversationKey, confirmed));
+    }
+
+    // Sending a message brings an archived conversation back, just like receiving one.
+    if (conversation.archived) {
+        conversation.archived = false;
+        persist(Records::archive(pending.conversationKey, false, conversation.sigArchived));
+    }
+
+    if (echo)
+        pendingIt->echoReceived = true; // keep the entry until the corresponding RPC callback
+    else
+        m_pendingSends.erase(pendingIt);
+
+    if (pending.conversationKey == m_current) showConversation(true);
+    refreshList();
+}
+
+void MainWindow::removePendingPreview(const PendingSend &pending)
+{
+    auto conversationIt = m_convs.find(pending.conversationKey);
+    if (conversationIt == m_convs.end()) return;
+
+    Conversation &conversation = conversationIt.value();
+    for (int i = 0; i < conversation.msgs.size(); ++i) {
+        const Message &message = conversation.msgs[i];
+        if (message.ts() == pending.temporaryTimestamp && message.outgoing &&
+            message.authorKey == m_account) {
+            conversation.msgs.removeAt(i);
+            break;
+        }
+    }
+
+    if (pending.conversationKey == m_current) showConversation(true);
+    refreshList();
+}
+
 bool MainWindow::applyReaction(const QString &key, qint64 ts, const QStringList &authors, const QString &reactor,
                                const QString &emoji)
 {
@@ -1077,6 +1178,72 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         m.sender = display;
     }
 
+    if (pe.outgoing) {
+        // An envelope for an earlier send can arrive while another identical message is
+        // pending. Don't let that older echo consume the newer message's preview.
+        bool alreadyConfirmed = false;
+        const auto existingConversation = m_convs.constFind(key);
+        if (existingConversation != m_convs.constEnd()) {
+            for (const Message &existing : existingConversation->msgs) {
+                if (existing.ts() != m.ts() || !existing.outgoing || existing.authorKey != m_account)
+                    continue;
+                bool isPendingPreview = false;
+                for (auto pendingIt = m_pendingSends.cbegin(); pendingIt != m_pendingSends.cend(); ++pendingIt) {
+                    if (pendingIt->conversationKey == key &&
+                        pendingIt->temporaryTimestamp == existing.ts()) {
+                        isPendingPreview = true;
+                        break;
+                    }
+                }
+                if (!isPendingPreview) {
+                    alreadyConfirmed = true;
+                    break;
+                }
+            }
+        }
+
+        // signal-cli can publish our own message envelope before the send RPC returns.
+        // Reconcile it with the visible preview so the chat never shows two bubbles.
+        QString pendingId;
+        qint64 oldestPendingTimestamp = 0;
+        if (!alreadyConfirmed) {
+            for (auto it = m_pendingSends.cbegin(); it != m_pendingSends.cend(); ++it) {
+                const PendingSend &pending = it.value();
+                if (pending.echoReceived || pending.conversationKey != key || pending.message.text != m.text)
+                    continue;
+                if (!pending.message.attachments.isEmpty() && !m.attachments.isEmpty() &&
+                    pending.message.attachments.size() != m.attachments.size())
+                    continue;
+                if (pendingId.isEmpty() || pending.temporaryTimestamp < oldestPendingTimestamp) {
+                    pendingId = it.key();
+                    oldestPendingTimestamp = pending.temporaryTimestamp;
+                }
+            }
+        }
+        if (!pendingId.isEmpty()) {
+            auto pendingIt = m_pendingSends.find(pendingId);
+            if (pendingIt != m_pendingSends.end()) {
+                const qint64 temporaryTimestamp = pendingIt->temporaryTimestamp;
+                bool previewExists = false;
+                const auto conversationIt = m_convs.constFind(key);
+                if (conversationIt != m_convs.constEnd()) {
+                    for (const Message &message : conversationIt->msgs) {
+                        if (message.ts() == temporaryTimestamp && message.outgoing &&
+                            message.authorKey == m_account) {
+                            previewExists = true;
+                            break;
+                        }
+                    }
+                }
+                if (previewExists) {
+                    finalizePendingSend(pendingId, m.ts(), &m);
+                    fetchThumbnails(key, m.ts(), m.authorKey);
+                    return;
+                }
+            }
+        }
+    }
+
     const QString title = group ? tr("Group") : (pe.outgoing ? key : m.sender);
     if (!addMessage(key, m, title, group)) return;
     if (!pe.outgoing && !group && !pe.srcName.isEmpty()) learnName(key, pe.srcName);
@@ -1152,31 +1319,77 @@ void MainWindow::sendMessage()
     }
     addRecipient(p, c);
 
+    // Insert a temporary local message before waiting for signal-cli. It is kept out of
+    // encrypted history until the send succeeds, so a failed send leaves no stale record.
+    Message preview;
+    preview.time = QDateTime::currentDateTime();
+    qint64 temporaryTimestamp = preview.ts();
+    Conversation &target = m_convs[m_current];
+    while (findMessage(target, temporaryTimestamp, {}) >= 0) {
+        ++temporaryTimestamp;
+        preview.time = QDateTime::fromMSecsSinceEpoch(temporaryTimestamp);
+    }
+    preview.text = text;
+    preview.outgoing = true;
+    preview.authorKey = m_account;
+    preview.quote = quote;
+    preview.attachments = atts;
+
+    const QString key = c.key;
+    const QString pendingId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    PendingSend pending;
+    pending.conversationKey = key;
+    pending.temporaryTimestamp = temporaryTimestamp;
+    pending.message = preview;
+    m_pendingSends.insert(pendingId, pending);
+
+    int at = target.msgs.size();
+    while (at > 0 && target.msgs[at - 1].time > preview.time) --at;
+    target.msgs.insert(at, preview);
+
     m_input->clear();
     m_pendingFiles.clear();
     m_replyQuote = Quote();
     updateAttachBar();
     updateReplyBar();
     if (!files.isEmpty()) statusBar()->showMessage(tr("Sending …"));
+    if (key == m_current) showConversation(true);
 
-    const QString key = c.key;
-    m_cli.call(QStringLiteral("send"), p, [this, key, text, quote, atts](const QJsonValue &res, const QString &err) {
-        if (!err.isEmpty()) {
+    m_cli.call(QStringLiteral("send"), p,
+               [this, pendingId, key, text, files, quote](const QJsonValue &res, const QString &err) {
+        auto pendingIt = m_pendingSends.find(pendingId);
+        if (pendingIt == m_pendingSends.end()) return;
+
+        if (!err.isEmpty() && !pendingIt->echoReceived) {
+            const PendingSend pending = pendingIt.value();
+            removePendingPreview(pending);
+            m_pendingSends.erase(pendingIt);
             statusBar()->showMessage(tr("Sending failed: %1").arg(err), 10000);
-            if (m_input->text().isEmpty()) m_input->setText(text); // do not lose the typed text
+            const bool draftWasEmpty = m_input->text().isEmpty();
+            if (draftWasEmpty) m_input->setText(text); // don't overwrite a newer draft
+            if (draftWasEmpty && m_pendingFiles.isEmpty() && !files.isEmpty()) {
+                m_pendingFiles = files;
+                updateAttachBar();
+            }
+            if (draftWasEmpty && !m_replyQuote.valid && quote.valid) {
+                m_replyQuote = quote;
+                updateReplyBar();
+            }
             return;
         }
-        statusBar()->clearMessage();
+
+        // An outgoing envelope is stronger evidence than a failed/late RPC response.
+        // The preview is already confirmed and persisted in that case.
+        if (pendingIt->echoReceived) {
+            m_pendingSends.erase(pendingIt);
+            statusBar()->clearMessage();
+            return;
+        }
+
         qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
         if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
-        Message m;
-        m.time = QDateTime::fromMSecsSinceEpoch(ts);
-        m.text = text;
-        m.outgoing = true;
-        m.authorKey = m_account;
-        m.quote = quote;
-        m.attachments = atts;
-        addMessage(key, m);
+        statusBar()->clearMessage();
+        finalizePendingSend(pendingId, ts);
     });
 }
 

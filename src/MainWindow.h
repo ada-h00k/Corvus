@@ -90,6 +90,14 @@ private:
     void deleteConversation(const QString &key);
 
     // --- model
+    struct PendingSend {
+        QString conversationKey;
+        qint64 temporaryTimestamp = 0;
+        Message message;
+        bool echoReceived = false;
+    };
+    void finalizePendingSend(const QString &id, qint64 timestamp, const Message *echo = nullptr);
+    void removePendingPreview(const PendingSend &pending);
     Conversation &conv(const QString &key, const QString &title = QString(), bool group = false);
     QString resolveKey(const QString &id) const;
     QString displayName(const QString &key) const;
@@ -136,6 +144,7 @@ private:
     QNetworkAccessManager m_nam;
 
     QHash<QString, Conversation> m_convs;
+    QHash<QString, PendingSend> m_pendingSends; // visible previews until signal-cli confirms the send
     QHash<QString, QString> m_alias; // uuid -> number
     QHash<QString, QString> m_contactNames; // key -> contact name from signal-cli
     QString m_current;
