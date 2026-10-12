@@ -627,6 +627,13 @@ int main(int argc, char **argv)
             CHECK(input->text().isEmpty());
 
             input->setText("draft in progress");
+            input->setCursorPosition(5);
+            QTest::keyClick(input, Qt::Key_Up);
+            CHECK(input->cursorPosition() == 0);
+            CHECK(input->text() == "draft in progress");
+            CHECK(!labelWith("Editing message"));
+            QTest::keyClick(input, Qt::Key_Down);
+            CHECK(input->cursorPosition() == input->text().size());
             QTest::keyClick(input, Qt::Key_Up, Qt::ShiftModifier);
             CHECK(input->selectedText() == "draft in progress");
             QTest::keyClick(input, Qt::Key_Up);

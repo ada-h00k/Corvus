@@ -15,7 +15,17 @@ void MessageInput::keyPressEvent(QKeyEvent *e)
         return;
     }
     if (e->key() == Qt::Key_Up && e->modifiers() == Qt::NoModifier) {
+        if (!text().isEmpty()) {
+            setCursorPosition(0);
+            e->accept();
+            return;
+        }
         emit upPressed();
+        e->accept();
+        return;
+    }
+    if (e->key() == Qt::Key_Down && e->modifiers() == Qt::NoModifier && !text().isEmpty()) {
+        setCursorPosition(text().size());
         e->accept();
         return;
     }
