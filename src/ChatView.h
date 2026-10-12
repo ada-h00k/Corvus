@@ -48,6 +48,7 @@ public:
 signals:
     void replyRequested(int idx);
     void editRequested(int idx); // own text message within the edit window
+    void deleteRequested(int idx);
     void reactionChosen(int idx, const QString &emoji);
     void moreReactionsRequested(int idx, const QPoint &globalPos);
     void attachmentActivated(int msgIdx, int attIdx);     // click: view / open

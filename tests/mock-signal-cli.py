@@ -111,6 +111,8 @@ for line in sys.stdin:
             if p.get("groupId") == group["id"]:
                 group["messageExpirationTime"] = p.get("expiration", 0)
         res = {}
+    elif m == "remoteDelete":
+        res = {"timestamp": int(time.time() * 1000), "results": []}
     elif m == "send":
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}

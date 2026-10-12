@@ -85,6 +85,9 @@ it.
   synchronized with Signal for contacts and groups. New outgoing messages use that timer;
   incoming messages start their local timer when the chat is opened. Expired messages are
   removed from the encrypted history as well.
+- **Delete messages:** right-click a message to delete it from this device. Your own messages
+  can also be deleted for everyone within Signal's 24-hour window. Local deletion compacts the
+  encrypted history so the removed message and its reactions are no longer stored.
 - **Reactions:** react from the context menu (quick set or full picker);
   choose the same emoji again to take it back; incoming reactions are shown
   below the message
@@ -243,7 +246,7 @@ settings. It does **not** replace testing against a real signal-cli account.
 
 ## Known limitations
 
-- No voice notes, stickers, link previews, mentions or message deleting yet.
+- No voice notes, stickers, link previews or mentions yet.
 - Editing: only the text; the previous versions are not kept (no edit history view), and
   multi-line messages (sent from other devices) cannot be edited here because the input is
   single-line.

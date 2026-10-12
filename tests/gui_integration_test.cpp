@@ -44,6 +44,7 @@ static int g_failed = 0;
 
 static const char *kPass = "test-passphrase-1";
 static QString g_unexpectedBox;
+static QString g_deleteChoice;
 
 static bool waitFor(const std::function<bool()> &cond, int ms = 15000)
 {
@@ -66,6 +67,15 @@ static void autoDialogs()
         for (QLineEdit *e : pd->findChildren<QLineEdit *>()) e->setText(QString::fromLatin1(kPass));
         pd->accept();
     } else if (auto *mb = qobject_cast<QMessageBox *>(w)) {
+        if (mb->windowTitle() == QStringLiteral("Delete message") && !g_deleteChoice.isEmpty()) {
+            for (QAbstractButton *button : mb->buttons()) {
+                if (button->text() == g_deleteChoice) {
+                    g_deleteChoice.clear();
+                    button->click();
+                    return;
+                }
+            }
+        }
         g_unexpectedBox = mb->text();
         std::printf("  [unexpected message box] %s\n", qPrintable(mb->text()));
         std::fflush(stdout);
@@ -538,6 +548,32 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return view->messageCount() == 4 && html(view).contains("vanish locally"); }));
         CHECK(waitFor([&] { return view->messageCount() == 3 && !html(view).contains("vanish locally"); }, 7000));
 
+        const qint64 remoteDeleteTs = QDateTime::currentMSecsSinceEpoch();
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+491234567"}, {"timestamp", remoteDeleteTs},
+            {"syncMessage", QJsonObject{{"sentMessage", QJsonObject{
+                {"destinationNumber", "+49111"}, {"timestamp", remoteDeleteTs},
+                {"message", "delete for everyone"}}}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 4 && html(view).contains("delete for everyone"); }));
+        g_deleteChoice = QStringLiteral("Delete for everyone");
+        emit view->deleteRequested(3);
+        CHECK(waitFor([&] { return !findCall(logFile, "remoteDelete").isEmpty(); }));
+        const QJsonObject deleteParams = findCall(logFile, "remoteDelete")["params"].toObject();
+        CHECK(deleteParams["targetTimestamp"].toVariant().toLongLong() == remoteDeleteTs);
+        CHECK(deleteParams["recipients"].toArray().first().toString() == "+49111");
+        CHECK(waitFor([&] { return view->messageCount() == 3 && !html(view).contains("delete for everyone"); }));
+
+        const qint64 localDeleteTs = QDateTime::currentMSecsSinceEpoch();
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+            {"timestamp", localDeleteTs},
+            {"dataMessage", QJsonObject{{"timestamp", localDeleteTs}, {"message", "delete only here"}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 4 && html(view).contains("delete only here"); }));
+        g_deleteChoice = QStringLiteral("Delete for me");
+        emit view->deleteRequested(3);
+        CHECK(waitFor([&] { return view->messageCount() == 3 && !html(view).contains("delete only here"); }));
+        CHECK(findCall(logFile, "remoteDelete")["params"].toObject()["targetTimestamp"].toVariant().toLongLong() == remoteDeleteTs);
+
         CHECK(g_unexpectedBox.isEmpty());
         w.close();
     }
@@ -561,6 +597,8 @@ int main(int argc, char **argv)
         CHECK(h.contains("earlier question"));
         CHECK(h.contains("my reply"));
         CHECK(h.contains("sent from phone"));
+        CHECK(!h.contains("delete only here"));
+        CHECK(!h.contains("delete for everyone"));
         CHECK(h.contains("❤"));
         CHECK(h.count("[image:") >= 2);       // incoming thumbnail + own thumbnail, restored without signal-cli
         CHECK(!h.contains("👍"));          // removed reaction stays removed

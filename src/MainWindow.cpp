@@ -195,6 +195,7 @@ MainWindow::MainWindow()
     // Chat view actions
     connect(m_view, &ChatView::replyRequested, this, &MainWindow::startReply);
     connect(m_view, &ChatView::editRequested, this, &MainWindow::startEdit);
+    connect(m_view, &ChatView::deleteRequested, this, &MainWindow::deleteMessage);
     connect(m_view, &ChatView::reactionChosen, this, &MainWindow::sendReaction);
     connect(m_view, &ChatView::moreReactionsRequested, this, [this](int idx, const QPoint &gp) {
         m_pickAction = [this, idx](const QString &e) { sendReaction(idx, e); };
@@ -745,6 +746,76 @@ void MainWindow::deleteConversation(const QString &key)
         statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
     refreshList();
     showConversation();
+}
+
+void MainWindow::deleteMessage(int idx)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Conversation &conversation = m_convs[m_current];
+    const Message message = conversation.msgs[idx];
+    for (auto it = m_pendingSends.cbegin(); it != m_pendingSends.cend(); ++it) {
+        if (it->conversationKey == conversation.key && it->temporaryTimestamp == message.ts()) {
+            statusBar()->showMessage(tr("Wait until the message has finished sending before deleting it."), 6000);
+            return;
+        }
+    }
+
+    const qint64 age = QDateTime::currentMSecsSinceEpoch() - message.ts();
+    const bool canDeleteForEveryone = message.outgoing && age >= 0 && age <= 24LL * 60 * 60 * 1000;
+    QMessageBox box(QMessageBox::Question, tr("Delete message"),
+                    canDeleteForEveryone ? tr("Delete this message from this device or for everyone?")
+                                         : tr("Delete this message from this device?"),
+                    QMessageBox::NoButton, this);
+    QPushButton *local = box.addButton(tr("Delete for me"), QMessageBox::DestructiveRole);
+    QPushButton *remote = canDeleteForEveryone
+                              ? box.addButton(tr("Delete for everyone"), QMessageBox::DestructiveRole)
+                              : nullptr;
+    box.addButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() == local) {
+        removeMessage(conversation.key, message.ts());
+        return;
+    }
+    if (box.clickedButton() != remote || !remote) return;
+
+    QJsonObject params{{QStringLiteral("targetTimestamp"), QJsonValue(static_cast<qint64>(message.ts()))}};
+    if (conversation.isGroup)
+        params[QStringLiteral("groupIds")] = QJsonArray{conversation.key.mid(2)};
+    else
+        params[QStringLiteral("recipients")] = QJsonArray{resolveKey(conversation.key)};
+
+    const QString key = conversation.key;
+    const qint64 timestamp = message.ts();
+    m_cli.call(QStringLiteral("remoteDelete"), params, [this, key, timestamp](const QJsonValue &, const QString &err) {
+        if (!err.isEmpty()) {
+            statusBar()->showMessage(tr("Could not delete message for everyone: %1").arg(err), 10000);
+            return;
+        }
+        if (!removeMessage(key, timestamp)) return;
+        statusBar()->showMessage(tr("Message deleted for everyone."), 5000);
+    });
+}
+
+bool MainWindow::removeMessage(const QString &key, qint64 timestamp)
+{
+    auto conversation = m_convs.find(key);
+    if (conversation == m_convs.end()) return false;
+    const int index = findMessage(conversation.value(), timestamp, {});
+    if (index < 0) return false;
+    const Message removed = conversation->msgs.takeAt(index);
+    if (m_editKey == key && m_editTs == removed.ts()) cancelEdit();
+
+    const int rc = m_store.rewrite(allRecords());
+    if (rc != SC_OK) {
+        int at = conversation->msgs.size();
+        while (at > 0 && conversation->msgs[at - 1].time > removed.time) --at;
+        conversation->msgs.insert(at, removed);
+        statusBar()->showMessage(tr("Could not remove message from history: %1").arg(HistoryStore::errorText(rc)), 10000);
+        return false;
+    }
+    if (key == m_current) showConversation(true);
+    refreshList();
+    return true;
 }
 
 // --------------------------------------------------------------- Model
