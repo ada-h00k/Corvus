@@ -8,10 +8,44 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPixmap>
+#include <QPainter>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
+#include <QSizePolicy>
 #include <QVBoxLayout>
+
+namespace {
+class FittedImageLabel : public QLabel
+{
+public:
+    using QLabel::QLabel;
+
+    void setSource(const QPixmap &pixmap)
+    {
+        m_source = pixmap;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QLabel::paintEvent(event);
+        if (m_source.isNull()) return;
+
+        QSize fitted = m_source.size();
+        fitted.scale(size(), Qt::KeepAspectRatio);
+        const QRect target((width() - fitted.width()) / 2, (height() - fitted.height()) / 2,
+                           fitted.width(), fitted.height());
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.drawPixmap(target, m_source);
+    }
+
+private:
+    QPixmap m_source;
+};
+} // namespace
 
 ImageViewer::ImageViewer(const QByteArray &data, const QString &filename, QWidget *parent)
     : QDialog(parent), m_data(data), m_filename(filename)
@@ -22,14 +56,15 @@ ImageViewer::ImageViewer(const QByteArray &data, const QString &filename, QWidge
 
     auto *lay = new QVBoxLayout(this);
     auto *scroll = new QScrollArea;
-    auto *label = new QLabel;
+    auto *label = new FittedImageLabel;
     label->setAlignment(Qt::AlignCenter);
+    label->setMinimumSize(1, 1);
+    label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    QSize maxSize(900, 650);
+    if (const QScreen *s = QGuiApplication::primaryScreen()) maxSize = s->availableSize() * 0.8;
+    maxSize = maxSize.boundedTo(QSize(1100, 800));
     if (m_valid) {
-        QSize maxSize(900, 650);
-        if (const QScreen *s = QGuiApplication::primaryScreen()) maxSize = s->availableSize() * 0.8;
-        if (img.width() > maxSize.width() || img.height() > maxSize.height())
-            img = img.scaled(maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        label->setPixmap(QPixmap::fromImage(img));
+        label->setSource(QPixmap::fromImage(img));
     } else {
         label->setText(tr("This image cannot be displayed."));
     }
@@ -48,5 +83,5 @@ ImageViewer::ImageViewer(const QByteArray &data, const QString &filename, QWidge
         if (!f.open(QIODevice::WriteOnly) || f.write(m_data) != m_data.size())
             QMessageBox::warning(this, tr("Save image"), tr("The file could not be written."));
     });
-    resize(qMin(img.width() + 60, 1100), qMin(img.height() + 110, 800));
+    resize(qMin(img.width() + 60, maxSize.width()), qMin(img.height() + 110, maxSize.height()));
 }
