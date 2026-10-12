@@ -206,6 +206,21 @@ QRect ChatView::textRect(int idx) const
     return m_items[idx].textRect.translated(0, m_items[idx].y - verticalScrollBar()->value());
 }
 
+void ChatView::setAudioPlayback(int messageIndex, int attachmentIndex, bool loading, bool playing,
+                               qint64 positionMs, qint64 durationMs)
+{
+    m_audioMessage = messageIndex;
+    m_audioAttachment = attachmentIndex;
+    m_audioLoading = loading;
+    m_audioPlaying = playing;
+    m_audioPositionMs = qMax<qint64>(0, positionMs);
+    m_audioDurationMs = qMax<qint64>(0, durationMs);
+    if (messageIndex >= 0 && messageIndex < m_items.size()) {
+        viewport()->update(m_items[messageIndex].attRects.value(attachmentIndex)
+                               .translated(0, m_items[messageIndex].y - verticalScrollBar()->value()));
+    }
+}
+
 QString ChatView::selectedText() const
 {
     if (m_selItem < 0 || !m_selCursor.hasSelection()) return {};
@@ -345,7 +360,7 @@ void ChatView::layoutItem(int i, int y)
             const QString name = att.filename.isEmpty() ? att.contentType : att.filename;
             const int tw = qMax(fm.horizontalAdvance(fm.elidedText(name, Qt::ElideMiddle, innerMax - 44)),
                                 fms.horizontalAdvance(AttachmentUtil::humanSize(att.size)));
-            sz = QSize(qMin(innerMax, qMax(170, tw + 44)), 40);
+            sz = QSize(qMin(innerMax, qMax(170, tw + (att.isAudio() ? 64 : 44))), att.isAudio() ? 56 : 40);
         }
         attSizes << sz;
         contentW = qMax(contentW, sz.width());
@@ -556,16 +571,46 @@ void ChatView::paintItem(QPainter &p, int i)
             p.drawEllipse(icon);
             p.setFont(base);
             p.setPen(fg);
-            p.drawText(icon, Qt::AlignCenter, att.isImage() ? QStringLiteral("🖼") : QStringLiteral("📎"));
+            const bool audio = att.isAudio();
+            const bool active = audio && m_audioMessage == i && m_audioAttachment == a;
+            p.drawText(icon, Qt::AlignCenter, att.isImage() ? QStringLiteral("🖼")
+                                                            : (audio ? (active && m_audioPlaying ? QStringLiteral("Ⅱ") : QStringLiteral("▶"))
+                                                                     : QStringLiteral("📎")));
             const QString name = att.filename.isEmpty() ? att.contentType : att.filename;
             const QFontMetrics fm(base);
-            p.drawText(QRect(rc.left() + 40, rc.top() + 3, rc.width() - 46, 18), Qt::AlignLeft | Qt::AlignVCenter,
-                       fm.elidedText(name, Qt::ElideMiddle, rc.width() - 46));
+            const int textLeft = audio ? 42 : 40;
+            const int textWidth = rc.width() - textLeft - 6;
+            p.drawText(QRect(rc.left() + textLeft, rc.top() + 3, textWidth, 18), Qt::AlignLeft | Qt::AlignVCenter,
+                       fm.elidedText(name, Qt::ElideMiddle, textWidth));
             p.setFont(small);
             p.setPen(alpha(fg, 190));
             QString info = att.size > 0 ? AttachmentUtil::humanSize(att.size) : att.contentType;
             if (att.isImage()) info += tr(" – loading …");
-            p.drawText(QRect(rc.left() + 40, rc.top() + 20, rc.width() - 46, 16), Qt::AlignLeft | Qt::AlignVCenter, info);
+            if (audio) {
+                const qint64 shownMs = active ? m_audioPositionMs : 0;
+                const qint64 totalMs = active && m_audioDurationMs > 0 ? m_audioDurationMs : 0;
+                const auto formatTime = [](qint64 ms) {
+                    const qint64 seconds = ms / 1000;
+                    return QStringLiteral("%1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'));
+                };
+                const QString clock = formatTime(shownMs) + QStringLiteral(" / ") +
+                                      (totalMs > 0 ? formatTime(totalMs) : QStringLiteral("--:--"));
+                const QRect bar(rc.left() + textLeft, rc.bottom() - 13, textWidth, 3);
+                p.setPen(Qt::NoPen);
+                p.setBrush(alpha(fg, 65));
+                p.drawRoundedRect(bar, 1, 1);
+                if (active && totalMs > 0) {
+                    QRect progress = bar;
+                    progress.setWidth(qRound(bar.width() * qBound<qreal>(0.0, qreal(shownMs) / totalMs, 1.0)));
+                    p.setBrush(m.outgoing ? m_ap.outText : m_ap.inText);
+                    p.drawRoundedRect(progress, 1, 1);
+                }
+                p.setPen(alpha(fg, 190));
+                p.drawText(QRect(rc.left() + textLeft, rc.top() + 22, textWidth, 16), Qt::AlignLeft | Qt::AlignVCenter,
+                           m_audioLoading && active ? tr("Loading audio …") : clock);
+            } else {
+                p.drawText(QRect(rc.left() + textLeft, rc.top() + 20, textWidth, 16), Qt::AlignLeft | Qt::AlignVCenter, info);
+            }
         }
     }
 

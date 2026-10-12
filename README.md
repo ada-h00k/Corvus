@@ -75,6 +75,8 @@ it.
   Files of risky types (`.exe`, `.sh`, …) are never opened directly, only saved
 - **Inline images:** received and sent pictures are shown in the chat;
   click for the full size
+- **Audio messages and files:** play received audio directly from its chat attachment;
+  click again to pause or resume. The chat shows playback progress and duration.
 - **Edit messages:** right-click one of your own text messages → *Edit*. The text moves into the
   input field (or press ↑ with an empty input; Shift+↑ selects the whole current draft).
   Enter saves, Esc or ✕ cancels and restores what you had typed. Same limits as the
@@ -154,12 +156,12 @@ Linux x86_64 only. Remember to install signal-cli as well.
 
 ## Build from source
 
-Requirements: C++17 compiler, CMake ≥ 3.16, Qt 6 (Widgets, Network),
+Requirements: C++17 compiler, CMake ≥ 3.16, Qt 6 (Widgets, Network, Multimedia),
 **Rust ≥ 1.75 with cargo** (e.g. via [rustup](https://rustup.rs) or your distro).
 
 ```sh
 # Debian/Ubuntu
-sudo apt install build-essential cmake qt6-base-dev cargo qrencode
+sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev cargo qrencode
 
 cmake -S . -B build
 cmake --build build -j

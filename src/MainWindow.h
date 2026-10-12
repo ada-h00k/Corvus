@@ -8,6 +8,7 @@
 
 #include <QHash>
 #include <QMainWindow>
+#include <QMediaPlayer>
 #include <QNetworkAccessManager>
 #include <QSet>
 #include <QTimer>
@@ -29,6 +30,7 @@ class QShowEvent;
 class QLabel;
 class QLineEdit;
 class QMimeData;
+class QAudioOutput;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
@@ -143,6 +145,8 @@ private:
     void fetchAttachmentData(const QString &key, const Attachment &att,
                              std::function<void(const QByteArray &, const QString &)> cb);
     void openAttachment(int msgIdx, int attIdx);
+    void toggleAudioAttachment(int msgIdx, int attIdx);
+    void updateAudioPlaybackView();
     void saveAttachment(int msgIdx, int attIdx);
     // Files or an image (e.g. a screenshot) from drag & drop / the clipboard -> pending attachments.
     bool attachFromMimeData(const QMimeData *md);
@@ -150,6 +154,8 @@ private:
     SignalCli m_cli;
     HistoryStore m_store;
     QNetworkAccessManager m_nam;
+    QMediaPlayer *m_audioPlayer = nullptr;
+    QAudioOutput *m_audioOutput = nullptr;
 
     QHash<QString, Conversation> m_convs;
     QHash<QString, PendingSend> m_pendingSends; // visible previews until signal-cli confirms the send
@@ -169,6 +175,12 @@ private:
     bool m_quitting = false;
     qint64 m_lastSoundMs = 0;
     int m_trayUnread = -1;
+    QString m_audioKey;
+    qint64 m_audioMessageTs = 0;
+    int m_audioAttachmentIndex = -1;
+    bool m_audioLoading = false;
+    qint64 m_audioPositionMs = 0;
+    qint64 m_audioDurationMs = 0;
 
     Quote m_replyQuote;
     // Message being edited (original timestamp + conversation); m_editKey empty = not editing.

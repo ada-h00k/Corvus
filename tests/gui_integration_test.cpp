@@ -27,6 +27,7 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QMimeData>
+#include <QMediaPlayer>
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
@@ -164,6 +165,15 @@ static QJsonObject findCall(const QString &log, const QString &method, int nth =
     for (const QJsonObject &o : readLog(log))
         if (o["method"].toString() == method && n++ == nth) return o;
     return {};
+}
+
+static bool loggedAttachmentFetch(const QString &log, const QString &attachmentId)
+{
+    for (const QJsonObject &request : readLog(log))
+        if (request["method"].toString() == QStringLiteral("getAttachment") &&
+            request["params"].toObject()["id"].toString() == attachmentId)
+            return true;
+    return false;
 }
 
 static void inject(const QString &file, const QJsonObject &env)
@@ -633,6 +643,25 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return view->messageCount() == 3 && !html(view).contains("delete only here"); }));
         CHECK(findCall(logFile, "remoteDelete")["params"].toObject()["targetTimestamp"].toVariant().toLongLong() == remoteDeleteTs);
 
+        const qint64 audioTs = QDateTime::currentMSecsSinceEpoch();
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+            {"timestamp", audioTs},
+            {"dataMessage", QJsonObject{{"timestamp", audioTs}, {"attachments", QJsonArray{
+                QJsonObject{{"id", "voice1"}, {"contentType", "audio/wav"},
+                             {"filename", "voice.wav"}, {"size", 32044}}}}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 4; }));
+        QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, view->attachmentRect(3, 0).center());
+        CHECK(waitFor([&] { return loggedAttachmentFetch(logFile, QStringLiteral("voice1")); }));
+        auto *audioPlayer = w.findChild<QMediaPlayer *>(QStringLiteral("chatAudioPlayer"));
+        CHECK(audioPlayer != nullptr);
+        CHECK(waitFor([&] { return audioPlayer && audioPlayer->source().isLocalFile() && audioPlayer->duration() > 0; }, 5000));
+        CHECK(waitFor([&] { return audioPlayer && audioPlayer->playbackState() == QMediaPlayer::PlayingState; }, 3000));
+        QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, view->attachmentRect(3, 0).center());
+        CHECK(waitFor([&] { return audioPlayer && audioPlayer->playbackState() == QMediaPlayer::PausedState; }));
+        QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, view->attachmentRect(3, 0).center());
+        CHECK(waitFor([&] { return audioPlayer && audioPlayer->playbackState() == QMediaPlayer::PlayingState; }));
+
         CHECK(g_unexpectedBox.isEmpty());
         w.close();
     }
@@ -650,12 +679,13 @@ int main(int argc, char **argv)
         CHECK(listHas(list, "Bob"));
         CHECK(waitFor([&] { return w.findChild<QLabel *>() != nullptr; }));
         selectItem(list, "Alice");
-        CHECK(waitFor([&] { return view->messageCount() == 3; }));
+        CHECK(waitFor([&] { return view->messageCount() == 4; }));
         const QString h = html(view);
         CHECK(h.contains("look at this"));
         CHECK(h.contains("earlier question"));
         CHECK(h.contains("my reply"));
         CHECK(h.contains("sent from phone"));
+        CHECK(h.contains("[file: voice.wav]"));
         CHECK(!h.contains("delete only here"));
         CHECK(!h.contains("delete for everyone"));
         CHECK(h.contains("❤"));
