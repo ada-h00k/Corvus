@@ -62,6 +62,8 @@ set(APP_SOURCES
     src/Envelope.cpp
     src/EmojiPicker.h
     src/EmojiPicker.cpp
+    src/GiphyPicker.h
+    src/GiphyPicker.cpp
     src/ChatView.h
     src/ChatView.cpp
     src/ImageViewer.h

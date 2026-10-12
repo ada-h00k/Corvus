@@ -1,6 +1,7 @@
 // Headless end-to-end test: real MainWindow + encrypted Rust store + mock signal-cli.
 #include "ChatView.h"
 #include "EmojiPicker.h"
+#include "GiphyPicker.h"
 #include "ImageViewer.h"
 #include "MainWindow.h"
 #include "PassphraseDialog.h"
@@ -27,10 +28,14 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QMimeData>
+#include <QMovie>
 #include <QMediaPlayer>
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QSignalSpy>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -195,6 +200,64 @@ int main(int argc, char **argv)
     CHECK(tmp.isValid());
 
     {
+        QTcpServer server;
+        CHECK(server.listen(QHostAddress::LocalHost));
+        const QByteArray previewData = QByteArray::fromBase64(
+            "R0lGODlhEAAQAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAEAAQAAACDoSP"
+            "qcvtD6OctNqLsz4FACH5BAAKAAAALAAAAAAQABAAgAAA/wAAAAIOhI+py+0Po5y02ouzPgUAOw==");
+        const QString base = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
+        QObject::connect(&server, &QTcpServer::newConnection, &server, [&server, base, previewData] {
+            while (server.hasPendingConnections()) {
+                QTcpSocket *socket = server.nextPendingConnection();
+                QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket, base, previewData] {
+                    const QByteArray request = socket->readAll();
+                    const QByteArray path = request.left(request.indexOf("\r\n")).split(' ').value(1);
+                    QByteArray body;
+                    QByteArray type = "application/json";
+                    if (path.startsWith("/v1/gifs/trending")) {
+                        if (path.contains("rating=")) {
+                            body = QJsonDocument(QJsonObject{{"data", QJsonArray{}}}).toJson(QJsonDocument::Compact);
+                            socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+                                          QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                            socket->disconnectFromHost();
+                            return;
+                        }
+                        const QJsonObject gif{
+                            {"title", "local test gif"},
+                            {"images", QJsonObject{
+                                {"fixed_width_small", QJsonObject{{"url", base + "/preview.gif"}}},
+                                {"original", QJsonObject{{"url", base + "/original.gif"}}}}}};
+                        body = QJsonDocument(QJsonObject{{"data", QJsonArray{gif}}}).toJson(QJsonDocument::Compact);
+                    } else if (path.startsWith("/preview.gif")) {
+                        body = previewData;
+                        type = "image/gif";
+                    }
+                    socket->write("HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\nContent-Length: " +
+                                  QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
+
+        GiphyPicker picker(QStringLiteral("local-test-key"), nullptr, QUrl(base));
+        QSignalSpy selected(&picker, &GiphyPicker::gifSelected);
+        picker.show();
+        CHECK(waitFor([&] {
+            auto *button = picker.findChild<QPushButton *>(QStringLiteral("giphyResult0"));
+            return button && button->isEnabled();
+        }));
+        auto *resultButton = picker.findChild<QPushButton *>(QStringLiteral("giphyResult0"));
+        auto *movie = resultButton ? resultButton->findChild<QMovie *>() : nullptr;
+        CHECK(movie && movie->isValid());
+        CHECK(waitFor([&] { return movie && movie->state() == QMovie::Running; }));
+        if (auto *button = picker.findChild<QPushButton *>(QStringLiteral("giphyResult0"))) button->click();
+        CHECK(selected.size() == 1);
+        if (!selected.isEmpty())
+            CHECK(selected.first().at(0).toUrl() == QUrl(base + QStringLiteral("/original.gif")));
+        picker.close();
+    }
+
+    {
         QImage source(2000, 1500, QImage::Format_RGB32);
         source.fill(Qt::darkCyan);
         {
@@ -257,10 +320,21 @@ int main(int argc, char **argv)
         auto *list = w.findChild<QListWidget *>();
         auto *view = w.findChild<ChatView *>();
         auto *input = w.findChild<QLineEdit *>();
-        QPushButton *sendBtn = nullptr;
-        for (auto *b : w.findChildren<QPushButton *>())
-            if (b->text() == "Send") sendBtn = b;
-        CHECK(list && view && input && sendBtn);
+        CHECK(list && view && input);
+        QToolButton *attachBtn = nullptr;
+        QToolButton *emojiBtn = nullptr;
+        QToolButton *gifBtn = nullptr;
+        for (QToolButton *button : w.findChildren<QToolButton *>()) {
+            if (button->toolTip() == QStringLiteral("Attach files")) attachBtn = button;
+            else if (button->toolTip() == QStringLiteral("Emoji")) emojiBtn = button;
+            else if (button->toolTip() == QStringLiteral("Search GIPHY GIFs")) gifBtn = button;
+        }
+        CHECK(attachBtn && emojiBtn && gifBtn);
+        if (attachBtn && emojiBtn && gifBtn && input) {
+            CHECK(attachBtn->size() == emojiBtn->size());
+            CHECK(gifBtn->size() == emojiBtn->size());
+            CHECK(attachBtn->mapTo(&w, QPoint()).x() >= input->mapTo(&w, QPoint()).x() + input->width());
+        }
 
         CHECK(waitFor([&] { return listHas(list, "Archived chats") && listHas(list, "Team"); }));
         CHECK(listHas(list, "Archived chats (2)")); // Bob + Carol archived on the "phone"
@@ -322,7 +396,7 @@ int main(int argc, char **argv)
         emit view->replyRequested(0);
         w.addPendingFiles({imgPath});
         input->setText("my reply 😀");
-        sendBtn->click();
+        QTest::keyClick(input, Qt::Key_Return);
         CHECK(waitFor([&] { return !findCall(logFile, "send").isEmpty(); }));
         const QJsonObject sendParams = findCall(logFile, "send")["params"].toObject();
         CHECK(sendParams["message"].toString() == "my reply 😀");
@@ -430,7 +504,7 @@ int main(int argc, char **argv)
                 QApplication::clipboard()->setImage(screenshot);
                 QTest::keyClick(input, Qt::Key_V, Qt::ControlModifier);
                 CHECK(waitFor([&] { return labelWith("pasted-"); }, 3000));
-                sendBtn->click();
+                QTest::keyClick(input, Qt::Key_Return);
                 CHECK(waitFor([&] { return !findCall(logFile, "send", 1).isEmpty(); }));
                 const QJsonObject sp = findCall(logFile, "send", 1)["params"].toObject();
                 CHECK(sp["recipient"].toArray().first().toString() == "+49222");
@@ -490,7 +564,7 @@ int main(int argc, char **argv)
             // Edit and send: signal-cli `send` with editTimestamp = the message being edited
             emit view->editRequested(idx);
             input->setText("hello world");
-            sendBtn->click();
+            QTest::keyClick(input, Qt::Key_Return);
             CHECK(waitFor([&] { return !findCall(logFile, "send", 2).isEmpty(); }));
             const QJsonObject ep = findCall(logFile, "send", 2)["params"].toObject();
             CHECK(ep["message"].toString() == "hello world");
@@ -506,7 +580,7 @@ int main(int argc, char **argv)
             // Second edit targets the latest revision (what the recipient knows now)
             emit view->editRequested(idx);
             input->setText("hello world!");
-            sendBtn->click();
+            QTest::keyClick(input, Qt::Key_Return);
             CHECK(waitFor([&] { return !findCall(logFile, "send", 3).isEmpty(); }));
             CHECK(findCall(logFile, "send", 3)["params"].toObject()["editTimestamp"].toVariant().toLongLong() == now + 1000);
             CHECK(waitFor([&] { return html(view).contains("You: hello world! (edited)"); }));
@@ -514,12 +588,12 @@ int main(int argc, char **argv)
             // Empty and unchanged edits send nothing
             emit view->editRequested(idx);
             input->setText("   ");
-            sendBtn->click();
+            QTest::keyClick(input, Qt::Key_Return);
             QTest::qWait(100);
             CHECK(labelWith("Editing message"));
             CHECK(findCall(logFile, "send", 4).isEmpty());
             input->setText("hello world!");
-            sendBtn->click();
+            QTest::keyClick(input, Qt::Key_Return);
             QTest::qWait(100);
             CHECK(!labelWith("Editing message"));
             CHECK(findCall(logFile, "send", 4).isEmpty());
@@ -662,6 +736,20 @@ int main(int argc, char **argv)
         QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, view->attachmentRect(3, 0).center());
         CHECK(waitFor([&] { return audioPlayer && audioPlayer->playbackState() == QMediaPlayer::PlayingState; }));
 
+        const qint64 gifTs = QDateTime::currentMSecsSinceEpoch();
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+            {"timestamp", gifTs},
+            {"dataMessage", QJsonObject{{"timestamp", gifTs}, {"attachments", QJsonArray{
+                QJsonObject{{"id", "chatgif"}, {"contentType", "image/gif"},
+                             {"filename", "animated.gif"}, {"size", 1000}}}}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 5; }));
+        CHECK(waitFor([&] { return view->hasAnimatedAttachment(4, 0); }, 5000));
+        bool chatGifPlaying = false;
+        for (QMovie *movie : view->findChildren<QMovie *>())
+            if (movie->state() == QMovie::Running) chatGifPlaying = true;
+        CHECK(chatGifPlaying);
+
         CHECK(g_unexpectedBox.isEmpty());
         w.close();
     }
@@ -679,13 +767,14 @@ int main(int argc, char **argv)
         CHECK(listHas(list, "Bob"));
         CHECK(waitFor([&] { return w.findChild<QLabel *>() != nullptr; }));
         selectItem(list, "Alice");
-        CHECK(waitFor([&] { return view->messageCount() == 4; }));
+        CHECK(waitFor([&] { return view->messageCount() == 5; }));
         const QString h = html(view);
         CHECK(h.contains("look at this"));
         CHECK(h.contains("earlier question"));
         CHECK(h.contains("my reply"));
         CHECK(h.contains("sent from phone"));
         CHECK(h.contains("[file: voice.wav]"));
+        CHECK(h.contains("[image: animated.gif]"));
         CHECK(!h.contains("delete only here"));
         CHECK(!h.contains("delete for everyone"));
         CHECK(h.contains("❤"));
