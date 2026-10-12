@@ -1,5 +1,9 @@
 # signal-cli Qt
 
+| Hell (Breeze Light) | Dunkel (Breeze Dark) |
+| --- | --- |
+| ![Hell](docs/screenshots/light.png) | ![Dunkel](docs/screenshots/dark.png) |
+
 A native Qt 6 GUI for [signal-cli](https://github.com/AsamK/signal-cli) with
 an **encrypted local chat history**.
 
