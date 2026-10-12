@@ -2,6 +2,7 @@
 #include "ChatView.h"
 #include "EmojiPicker.h"
 #include "GiphyPicker.h"
+#include "HistoryKeychain.h"
 #include "ImageViewer.h"
 #include "MainWindow.h"
 #include "PassphraseDialog.h"
@@ -77,6 +78,20 @@ static void autoDialogs()
         for (QLineEdit *e : pd->findChildren<QLineEdit *>()) e->setText(QString::fromLatin1(kPass));
         pd->accept();
     } else if (auto *mb = qobject_cast<QMessageBox *>(w)) {
+        if (mb->windowTitle() == QStringLiteral("Protect chat history")) {
+            QPushButton *keychain = nullptr;
+            QPushButton *passphrase = nullptr;
+            for (QAbstractButton *button : mb->buttons()) {
+                if (button->text().contains(QStringLiteral("System keychain")))
+                    keychain = qobject_cast<QPushButton *>(button);
+                if (button->text() == QStringLiteral("Use a passphrase"))
+                    passphrase = qobject_cast<QPushButton *>(button);
+            }
+            CHECK(passphrase != nullptr);
+            if (keychain) CHECK(mb->defaultButton() == keychain);
+            if (passphrase) passphrase->click();
+            return;
+        }
         if (mb->windowTitle() == QStringLiteral("Delete message") && !g_deleteChoice.isEmpty()) {
             for (QAbstractButton *button : mb->buttons()) {
                 if (button->text() == g_deleteChoice) {
@@ -196,6 +211,12 @@ int main(int argc, char **argv)
     QApplication::setOrganizationName(QStringLiteral("signal-cli-qt"));
     QApplication::setApplicationName(QStringLiteral("signal-cli-qt"));
 
+    const QString firstHistorySecret = HistoryKeychain::generateSecret();
+    const QString secondHistorySecret = HistoryKeychain::generateSecret();
+    CHECK(firstHistorySecret.size() == 64);
+    CHECK(firstHistorySecret != secondHistorySecret);
+    for (const QChar ch : firstHistorySecret) CHECK(ch.isDigit() || (ch >= QLatin1Char('a') && ch <= QLatin1Char('f')));
+
     QTemporaryDir tmp;
     CHECK(tmp.isValid());
 
@@ -302,6 +323,7 @@ int main(int argc, char **argv)
     qputenv("XDG_CONFIG_HOME", (tmp.path() + "/config").toUtf8());
     QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, tmp.path() + "/config");
     QSettings().setValue("executable", QStringLiteral(MOCK_CLI));
+    QSettings().setValue("historyProtectionMode", QStringLiteral("passphrase"));
 
     const QString logFile = tmp.path() + "/rpc.log";
     const QString injectFile = tmp.path() + "/inject.jsonl";

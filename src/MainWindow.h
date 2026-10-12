@@ -69,7 +69,7 @@ private slots:
     void chooseExecutable();
     void checkForUpdates(bool silent);
     void showAbout();
-    void changePassphrase();
+    void changeHistoryProtection();
     void editAppearance();
     void editNotifications();
     void searchGifs();
@@ -171,6 +171,7 @@ private:
     QString m_current;
     QString m_account;
     QString m_version; // e.g. "0.13.12"
+    QString m_historyProtectionMode;
     bool m_showArchived = false;
     int m_connectGen = 0; // invalidates callbacks of an older connect attempt
     Appearance m_appearance;

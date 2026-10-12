@@ -8,6 +8,7 @@
 #include "GiphyPicker.h"
 #include "GiphyApiKeyStore.h"
 #include "Envelope.h"
+#include "HistoryKeychain.h"
 #include "ImageViewer.h"
 #include "LinkDialog.h"
 #include "MessageInput.h"
@@ -162,13 +163,12 @@ MainWindow::MainWindow()
     file->addAction(tr("Link device …"), this, &MainWindow::linkDevice);
     file->addAction(tr("Reconnect"), QKeySequence(Qt::CTRL | Qt::Key_R), this, &MainWindow::reconnect);
     file->addSeparator();
-    file->addAction(tr("Change history passphrase …"), this, &MainWindow::changePassphrase);
-    file->addSeparator();
     file->addAction(tr("Quit"), QKeySequence::Quit, this, &MainWindow::quitApplication);
 
     QMenu *settings = menuBar()->addMenu(tr("&Settings"));
     settings->addAction(tr("Appearance …"), this, &MainWindow::editAppearance);
     settings->addAction(tr("Notifications && sound …"), this, &MainWindow::editNotifications);
+    settings->addAction(tr("History protection …"), this, &MainWindow::changeHistoryProtection);
     settings->addAction(tr("GIPHY API key …"), this, &MainWindow::configureGiphyApiKey);
     settings->addAction(tr("Path to signal-cli …"), this, &MainWindow::chooseExecutable);
 
@@ -621,6 +621,106 @@ bool MainWindow::unlockHistory()
 {
     const QString path = historyPath();
     const bool exists = HistoryStore::exists(path);
+    QSettings settings;
+    m_historyProtectionMode = settings.value(QStringLiteral("historyProtectionMode")).toString();
+    if (exists && m_historyProtectionMode.isEmpty())
+        m_historyProtectionMode = QStringLiteral("passphrase");
+    if (!exists && m_historyProtectionMode.isEmpty()) {
+        m_historyProtectionMode = QStringLiteral("keychain");
+        QMessageBox choice(this);
+        choice.setWindowTitle(tr("Protect chat history"));
+        QPushButton *keychain = nullptr;
+        if (HistoryKeychain::isAvailable()) {
+            choice.setText(tr("Choose how to protect your new chat history."));
+            keychain = choice.addButton(tr("System keychain (recommended)"), QMessageBox::AcceptRole);
+        } else {
+            choice.setText(tr("No system keychain is available. Choose a passphrase to protect your chat history."));
+        }
+        QPushButton *passphrase = choice.addButton(tr("Use a passphrase"), QMessageBox::ActionRole);
+        choice.addButton(QMessageBox::Cancel);
+        choice.setDefaultButton(keychain ? keychain : passphrase);
+        choice.exec();
+        if (choice.clickedButton() == passphrase)
+            m_historyProtectionMode = QStringLiteral("passphrase");
+        else if (!keychain || choice.clickedButton() != keychain)
+            return false;
+    }
+
+    if (exists && settings.value(QStringLiteral("historyProtectionMode")).toString().isEmpty()) {
+        QString secret;
+        QString error;
+        if (HistoryKeychain::isAvailable() && HistoryKeychain::load(secret, error)) {
+            QJsonArray records;
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            const int rc = m_store.open(path, secret, &records);
+            QApplication::restoreOverrideCursor();
+            if (rc == SC_OK) {
+                m_historyProtectionMode = QStringLiteral("keychain");
+                settings.setValue(QStringLiteral("historyProtectionMode"), m_historyProtectionMode);
+                settings.sync();
+                loadHistory(records);
+                return true;
+            }
+        }
+        m_historyProtectionMode = QStringLiteral("passphrase");
+    }
+
+    if (m_historyProtectionMode == QLatin1String("keychain")) {
+        QString secret;
+        QString error;
+        if (!HistoryKeychain::isAvailable()) {
+            QMessageBox::warning(this, tr("Chat history"),
+                                 tr("A system keychain is required to protect this history."));
+            return false;
+        }
+
+        if (exists) {
+            if (!HistoryKeychain::load(secret, error)) {
+                QMessageBox::critical(this, tr("Chat history"),
+                                      tr("Could not read the history key from the system keychain:\n%1").arg(error));
+                return false;
+            }
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            QJsonArray records;
+            const int rc = m_store.open(path, secret, &records);
+            QApplication::restoreOverrideCursor();
+            if (rc != SC_OK) {
+                if (rc != SC_ERR_WRONG_PASSPHRASE) {
+                    QMessageBox::critical(this, tr("Chat history"), HistoryStore::errorText(rc));
+                    return false;
+                }
+                error = tr("The keychain key did not unlock this history. Try its previous passphrase if protection was just changed.");
+                m_historyProtectionMode = QStringLiteral("passphrase");
+            }
+            if (rc == SC_OK) {
+                loadHistory(records);
+                return true;
+            }
+        } else {
+            secret = HistoryKeychain::generateSecret();
+            if (!HistoryKeychain::save(secret, error)) {
+                QMessageBox::critical(this, tr("Chat history"),
+                                      tr("Could not save the history key in the system keychain:\n%1").arg(error));
+                return false;
+            }
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            const int rc = m_store.create(path, secret);
+            QApplication::restoreOverrideCursor();
+            if (rc != SC_OK) {
+                HistoryKeychain::clear(error);
+                QMessageBox::critical(this, tr("Chat history"), HistoryStore::errorText(rc));
+                return false;
+            }
+            settings.setValue(QStringLiteral("historyProtectionMode"), m_historyProtectionMode);
+            settings.sync();
+            if (settings.status() != QSettings::NoError) {
+                QMessageBox::warning(this, tr("Chat history"),
+                                     tr("Could not save the history protection setting."));
+            }
+            return true;
+        }
+    }
+
     QString error;
     for (;;) {
         PassphraseDialog dlg(exists ? PassphraseDialog::Unlock : PassphraseDialog::Create, this);
@@ -633,6 +733,13 @@ bool MainWindow::unlockHistory()
         QApplication::restoreOverrideCursor();
 
         if (rc == SC_OK) {
+            m_historyProtectionMode = QStringLiteral("passphrase");
+            settings.setValue(QStringLiteral("historyProtectionMode"), m_historyProtectionMode);
+            settings.sync();
+            if (settings.status() != QSettings::NoError) {
+                QMessageBox::warning(this, tr("Chat history"),
+                                     tr("Could not save the history protection setting."));
+            }
             loadHistory(records);
             return true;
         }
@@ -742,9 +849,110 @@ void MainWindow::learnName(const QString &key, const QString &name)
     refreshList();
 }
 
-void MainWindow::changePassphrase()
+void MainWindow::changeHistoryProtection()
 {
+    QMessageBox choice(this);
+    choice.setWindowTitle(tr("Chat history protection"));
+    choice.setText(tr("Choose how to protect the encrypted chat history."));
+    QPushButton *keychain = choice.addButton(tr("System keychain"), QMessageBox::AcceptRole);
+    QPushButton *passphrase = choice.addButton(tr("Passphrase"), QMessageBox::ActionRole);
+    choice.addButton(QMessageBox::Cancel);
+    choice.setDefaultButton(m_historyProtectionMode == QLatin1String("keychain") ? keychain : passphrase);
+    choice.exec();
+
+    const bool useKeychain = choice.clickedButton() == keychain;
+    if (!useKeychain && choice.clickedButton() != passphrase) return;
+    if (useKeychain == (m_historyProtectionMode == QLatin1String("keychain"))) return;
+
     QString error;
+    if (useKeychain) {
+        if (!HistoryKeychain::isAvailable()) {
+            QMessageBox::warning(this, tr("Chat history"),
+                                 tr("No system keychain is available."));
+            return;
+        }
+        for (;;) {
+            PassphraseDialog oldDialog(PassphraseDialog::Unlock, this);
+            if (!error.isEmpty()) oldDialog.setError(error);
+            if (oldDialog.exec() != QDialog::Accepted) return;
+
+            const QString newSecret = HistoryKeychain::generateSecret();
+            if (!HistoryKeychain::save(newSecret, error)) {
+                QMessageBox::critical(this, tr("Chat history"), error);
+                return;
+            }
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            const int rc = m_store.changePassphrase(oldDialog.passphrase(), newSecret);
+            QApplication::restoreOverrideCursor();
+            if (rc == SC_ERR_WRONG_PASSPHRASE) {
+                HistoryKeychain::clear(error);
+                error = HistoryStore::errorText(rc);
+                continue;
+            }
+            if (rc != SC_OK) {
+                HistoryKeychain::clear(error);
+                QMessageBox::critical(this, tr("Chat history"), HistoryStore::errorText(rc));
+                return;
+            }
+
+            QSettings settings;
+            settings.setValue(QStringLiteral("historyProtectionMode"), QStringLiteral("keychain"));
+            settings.sync();
+            if (settings.status() != QSettings::NoError) {
+                const int rollbackRc = m_store.changePassphrase(newSecret, oldDialog.passphrase());
+                if (rollbackRc != SC_OK) {
+                    m_historyProtectionMode = QStringLiteral("keychain");
+                    settings.setValue(QStringLiteral("historyProtectionMode"), m_historyProtectionMode);
+                    settings.sync();
+                    QMessageBox::critical(this, tr("Chat history"),
+                                          tr("The history key was changed, but the protection setting could not be saved. "
+                                             "The keychain entry was retained so the history remains accessible."));
+                    return;
+                }
+                HistoryKeychain::clear(error);
+                QMessageBox::critical(this, tr("Chat history"),
+                                      tr("Could not save the history protection setting."));
+                return;
+            }
+            m_historyProtectionMode = QStringLiteral("keychain");
+            QMessageBox::information(this, tr("Chat history"),
+                                     tr("The history is now protected by the system keychain."));
+            return;
+        }
+    }
+
+    QString oldSecret;
+    if (m_historyProtectionMode == QLatin1String("keychain")) {
+        if (!HistoryKeychain::load(oldSecret, error)) {
+            QMessageBox::critical(this, tr("Chat history"), error);
+            return;
+        }
+        PassphraseDialog newDialog(PassphraseDialog::Create, this);
+        if (newDialog.exec() != QDialog::Accepted) return;
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        const int rc = m_store.changePassphrase(oldSecret, newDialog.passphrase());
+        QApplication::restoreOverrideCursor();
+        if (rc != SC_OK) {
+            QMessageBox::critical(this, tr("Chat history"), HistoryStore::errorText(rc));
+            return;
+        }
+        QSettings settings;
+        settings.setValue(QStringLiteral("historyProtectionMode"), QStringLiteral("passphrase"));
+        settings.sync();
+        if (settings.status() != QSettings::NoError) {
+            m_store.changePassphrase(newDialog.passphrase(), oldSecret);
+            QMessageBox::critical(this, tr("Chat history"),
+                                  tr("Could not save the history protection setting."));
+            return;
+        }
+        m_historyProtectionMode = QStringLiteral("passphrase");
+        if (!HistoryKeychain::clear(error))
+            QMessageBox::warning(this, tr("Chat history"), error);
+        QMessageBox::information(this, tr("Chat history"),
+                                 tr("The history is now protected by your passphrase."));
+        return;
+    }
+
     for (;;) {
         PassphraseDialog dlg(PassphraseDialog::Change, this);
         if (!error.isEmpty()) dlg.setError(error);

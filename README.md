@@ -32,12 +32,13 @@ signal-cli does not keep a chat history, so the GUI stores one itself in
 
 - A random 256-bit **data key** encrypts every message with
   **XChaCha20-Poly1305** (random 192-bit nonce per record).
-- The data key is wrapped with a key derived from your passphrase using
-  **Argon2id** (64 MiB, 3 passes). Changing the passphrase only re-wraps the key.
+- The data key is wrapped using **Argon2id** (64 MiB, 3 passes). By default, the
+  secret is random and kept in the system keychain; alternatively, you can use a
+  passphrase. Changing the protection only re-wraps the key.
 - Every record is authenticated together with its sequence number: modified,
   swapped or removed (non-final) records are detected and refused.
 - Writes are append-only and `fsync`ed; compaction (deleting a conversation)
-  and passphrase changes use atomic temp-file + rename. A torn last record
+  and protection changes use atomic temp-file + rename. A torn last record
   after a crash is dropped automatically.
 - The file is created with mode `0600`; keys are zeroized when dropped
   (best effort).
@@ -45,8 +46,11 @@ signal-cli does not keep a chat history, so the GUI stores one itself in
   (`history-store/include/history_store.h`), covered by unit and FFI tests
   (`cargo test`).
 
-The passphrase is asked at every start. **There is no recovery** if you forget
-it.
+With keychain protection, the history unlocks automatically while the system
+keychain is available. With passphrase protection, you enter the passphrase at
+every start. A passphrase cannot be recovered if forgotten; keychain-protected
+history depends on retaining access to the system keychain. Use
+`Settings → History protection …` to switch protection methods.
 
 #### What is *not* protected
 
@@ -120,7 +124,8 @@ it.
   folder (see below), like the official client
 - Persistent, encrypted history; delete single conversations (right-click) –
   the file is compacted so the old ciphertext is gone
-- Change the history passphrase (`File → Change history passphrase …`)
+- Protect the history with the system keychain by default, or use a passphrase
+  instead (`Settings → History protection …`)
 
 ### Archived chats
 
@@ -180,9 +185,11 @@ Without it only the link URI is shown. `Cargo.lock` is committed and the build
 uses `--locked`; some dependencies are pinned to versions that still build on
 older Rust toolchains.
 
-The GIPHY API key is stored in the operating system credential store through
-QtKeychain. On Linux, a Secret Service provider such as GNOME Keyring or KWallet
-must be available. Existing keys in `QSettings` are migrated when first read.
+The GIPHY API key and the default history key are stored in the operating system
+credential store through QtKeychain. On Linux, a Secret Service provider such as
+GNOME Keyring or KWallet must be available. Existing GIPHY keys in `QSettings`
+are migrated when first read. Existing history files protected by a passphrase
+remain passphrase-protected until you switch them using the File menu.
 
 ## CI / release workflow
 
