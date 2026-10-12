@@ -279,6 +279,26 @@ int main(int argc, char **argv)
         QScrollBar *sb = view.verticalScrollBar();
         CHECK(sb->maximum() > 1000);
         CHECK(sb->value() == sb->maximum()); // starts at the newest message
+        sb->setValue(0);
+        const QPoint anchor(view.viewport()->width() / 2, view.viewport()->height() / 2);
+        mouse(view.viewport(), QEvent::MouseButtonPress, anchor, Qt::MiddleButton);
+        mouse(view.viewport(), QEvent::MouseButtonRelease, anchor, Qt::MiddleButton);
+        const QPoint belowAnchor(anchor.x(), anchor.y() + 120);
+        QMouseEvent autoScrollMove(QEvent::MouseMove, QPointF(belowAnchor),
+                       QPointF(view.viewport()->mapToGlobal(belowAnchor)),
+                       Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(view.viewport(), &autoScrollMove);
+        pump();
+        CHECK(sb->value() > 0); // middle-click and move scroll down
+        mouse(view.viewport(), QEvent::MouseButtonPress, belowAnchor, Qt::MiddleButton);
+        const int stoppedAt = sb->value();
+        QMouseEvent afterStopMove(QEvent::MouseMove, QPointF(anchor),
+                      QPointF(view.viewport()->mapToGlobal(anchor)),
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(view.viewport(), &afterStopMove);
+        pump();
+        CHECK(sb->value() == stoppedAt); // middle-click again stops scrolling
+        sb->setValue(sb->maximum());
         // find the message that quotes another one (index of the image message)
         int qi = -1;
         for (int i = 0; i < many.size(); ++i) if (many[i].quote.valid) qi = i;

@@ -123,6 +123,7 @@ private:
     QString nameOf(const QString &key) const;
     void clearSelection();
     void updateCursorShape(const QPoint &vp);
+    void stopAutoScroll();
     bool atBottom() const;
     void updateVideoGeometry();
 
@@ -154,5 +155,9 @@ private:
     bool m_dragging = false;
     QPoint m_pressPos;
     Hit m_pressHit;
+    QTimer *m_autoScrollTimer = nullptr;
+    QPoint m_autoScrollAnchor;
+    QPoint m_autoScrollPos;
+    bool m_autoScrolling = false;
     int m_flash = -1;
 };
