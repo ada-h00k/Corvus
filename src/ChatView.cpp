@@ -94,6 +94,15 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     setFocusPolicy(Qt::StrongFocus);
     m_ap = Appearance::defaults(palette());
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { updateVideoGeometry(); });
+    m_autoScrollTimer = new QTimer(this);
+    m_autoScrollTimer->setInterval(16);
+    connect(m_autoScrollTimer, &QTimer::timeout, this, [this] {
+        if (!m_autoScrolling) return;
+        const int offset = m_autoScrollPos.y() - m_autoScrollAnchor.y();
+        if (qAbs(offset) < 8) return;
+        const int speed = qBound(1, qAbs(offset) / 4, 60);
+        verticalScrollBar()->setValue(verticalScrollBar()->value() + (offset > 0 ? speed : -speed));
+    });
 }
 
 ChatView::~ChatView() = default;
@@ -905,6 +914,10 @@ ChatView::Hit ChatView::hitTest(const QPoint &vp) const
 
 void ChatView::updateCursorShape(const QPoint &vp)
 {
+    if (m_autoScrolling) {
+        viewport()->setCursor(Qt::SizeVerCursor);
+        return;
+    }
     const Hit h = hitTest(vp);
     Qt::CursorShape shape = Qt::ArrowCursor;
     if (h.kind == Hit::Text) shape = Qt::IBeamCursor;
@@ -914,6 +927,20 @@ void ChatView::updateCursorShape(const QPoint &vp)
 
 void ChatView::mousePressEvent(QMouseEvent *e)
 {
+    if (e->button() == Qt::MiddleButton) {
+        if (m_autoScrolling) {
+            stopAutoScroll();
+        } else {
+            m_autoScrollAnchor = e->pos();
+            m_autoScrollPos = e->pos();
+            m_autoScrolling = true;
+            viewport()->setCursor(Qt::SizeVerCursor);
+            m_autoScrollTimer->start();
+        }
+        e->accept();
+        return;
+    }
+    if (m_autoScrolling) stopAutoScroll();
     if (e->button() != Qt::LeftButton) {
         QAbstractScrollArea::mousePressEvent(e);
         return;
@@ -933,6 +960,11 @@ void ChatView::mousePressEvent(QMouseEvent *e)
 
 void ChatView::mouseMoveEvent(QMouseEvent *e)
 {
+    if (m_autoScrolling) {
+        m_autoScrollPos = e->pos();
+        e->accept();
+        return;
+    }
     if (m_dragging && (e->buttons() & Qt::LeftButton) && m_selItem >= 0 && m_selItem < m_items.size()) {
         const Item &it = m_items[m_selItem];
         const QPointF local(e->pos().x() - it.textRect.left(),
@@ -947,6 +979,10 @@ void ChatView::mouseMoveEvent(QMouseEvent *e)
 
 void ChatView::mouseReleaseEvent(QMouseEvent *e)
 {
+    if (e->button() == Qt::MiddleButton && m_autoScrolling) {
+        e->accept();
+        return;
+    }
     if (e->button() != Qt::LeftButton) {
         QAbstractScrollArea::mouseReleaseEvent(e);
         return;
@@ -980,6 +1016,13 @@ void ChatView::mouseReleaseEvent(QMouseEvent *e)
         break;
     }
     viewport()->update();
+}
+
+void ChatView::stopAutoScroll()
+{
+    m_autoScrolling = false;
+    m_autoScrollTimer->stop();
+    updateCursorShape(m_autoScrollPos);
 }
 
 void ChatView::mouseDoubleClickEvent(QMouseEvent *e)
