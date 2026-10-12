@@ -95,6 +95,9 @@ it.
   choose the same emoji again to take it back; incoming reactions are shown
   below the message
 - **Emoji:** picker next to the input field
+- **GIF search:** use the *GIF* button beside the composer to search GIPHY or browse trending
+  GIFs, then select a result to send it in the current chat. Configure a GIPHY API key under
+  `Settings → GIPHY API key …`; the picker includes GIPHY attribution.
 - **Rounded message bubbles** like the official client: own messages on the
   right, received ones on the left, date separators, timestamps, clickable
   links, text selection within a message (double-click selects a word,

@@ -8,6 +8,8 @@
 #include <QKeyEvent>
 #include <QLocale>
 #include <QMenu>
+#include <QMovie>
+#include <QBuffer>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -135,6 +137,9 @@ void ChatView::clearSelection()
 
 void ChatView::clearView()
 {
+    for (Item &item : m_items)
+        for (QMovie *movie : item.movies)
+            delete movie;
     m_msgs.clear();
     m_items.clear();
     clearSelection();
@@ -148,6 +153,9 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll)
 {
     const bool bottom = atBottom();
     const int old = verticalScrollBar()->value();
+    for (Item &item : m_items)
+        for (QMovie *movie : item.movies)
+            delete movie;
     m_msgs = msgs;
     m_items = QList<Item>(msgs.size());
     clearSelection();
@@ -221,6 +229,36 @@ void ChatView::setAudioPlayback(int messageIndex, int attachmentIndex, bool load
     }
 }
 
+void ChatView::setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data)
+{
+    if (messageIndex < 0 || messageIndex >= m_items.size() || attachmentIndex < 0 ||
+        attachmentIndex >= m_msgs[messageIndex].attachments.size() || !m_msgs[messageIndex].attachments[attachmentIndex].isGif())
+        return;
+
+    Item &item = m_items[messageIndex];
+    if (attachmentIndex >= item.movies.size() || item.movies[attachmentIndex]) return;
+    auto *movie = new QMovie(this);
+    auto *buffer = new QBuffer(movie);
+    buffer->setData(data);
+    buffer->open(QIODevice::ReadOnly);
+    movie->setDevice(buffer);
+    movie->setCacheMode(QMovie::CacheNone);
+    if (!movie->isValid()) {
+        delete movie;
+        return;
+    }
+    item.movies[attachmentIndex] = movie;
+    connect(movie, &QMovie::frameChanged, this, [this] { viewport()->update(); });
+    movie->start();
+    viewport()->update();
+}
+
+bool ChatView::hasAnimatedAttachment(int messageIndex, int attachmentIndex) const
+{
+    return messageIndex >= 0 && messageIndex < m_items.size() && attachmentIndex >= 0 &&
+           attachmentIndex < m_items[messageIndex].movies.size() && m_items[messageIndex].movies[attachmentIndex];
+}
+
 QString ChatView::selectedText() const
 {
     if (m_selItem < 0 || !m_selCursor.hasSelection()) return {};
@@ -259,6 +297,11 @@ void ChatView::buildItem(int i)
 {
     Item &it = m_items[i];
     if (it.built) return;
+    for (QMovie *movie : it.movies)
+        delete movie;
+    it.movies.clear();
+    it.animationRequested.clear();
+    it.pix.clear();
     it.built = true;
     const Message &m = m_msgs[i];
 
@@ -280,8 +323,11 @@ void ChatView::buildItem(int i)
         it.doc->setDefaultStyleSheet(QStringLiteral("a { color: %1; text-decoration: underline; }").arg(fg.name()));
         it.doc->setHtml(linkify(m.text));
     }
-    for (const Attachment &a : m.attachments)
+    for (const Attachment &a : m.attachments) {
         it.pix << ((a.isImage() && !a.thumb.isEmpty()) ? QPixmap::fromImage(QImage::fromData(a.thumb)) : QPixmap());
+        it.movies << nullptr;
+        it.animationRequested << false;
+    }
 }
 
 void ChatView::layoutItem(int i, int y)
@@ -553,7 +599,22 @@ void ChatView::paintItem(QPainter &p, int i)
     for (int a = 0; a < m.attachments.size() && a < it.attRects.size(); ++a) {
         const QRect rc = it.attRects[a];
         const Attachment &att = m.attachments[a];
-        if (!it.pix[a].isNull()) {
+        if (att.isGif() && !it.movies[a] && !it.animationRequested[a]) {
+            it.animationRequested[a] = true;
+            emit animatedAttachmentRequested(i, a);
+        }
+        if (att.isGif() && it.movies[a]) {
+            QPixmap frame = it.movies[a]->currentPixmap();
+            if (!frame.isNull()) {
+                QPainterPath ip;
+                const qreal ir = qMin<qreal>(qMin(m_ap.radius, 14), qMin(rc.width(), rc.height()) / 2.0);
+                ip.addRoundedRect(QRectF(rc), ir, ir);
+                p.save();
+                p.setClipPath(ip);
+                p.drawPixmap(rc, frame);
+                p.restore();
+            }
+        } else if (!it.pix[a].isNull()) {
             QPainterPath ip;
             const qreal ir = qMin<qreal>(qMin(m_ap.radius, 14), qMin(rc.width(), rc.height()) / 2.0);
             ip.addRoundedRect(QRectF(rc), ir, ir);

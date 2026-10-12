@@ -17,6 +17,7 @@
 
 class ChatView;
 class EmojiPicker;
+class GiphyPicker;
 class MessageInput;
 class Notifier;
 class SoundPlayer;
@@ -71,6 +72,8 @@ private slots:
     void changePassphrase();
     void editAppearance();
     void editNotifications();
+    void searchGifs();
+    void configureGiphyApiKey();
     void quitApplication();
     void toggleWindow();
     void activateConversation(const QString &key);
@@ -142,11 +145,14 @@ private:
     void sendReaction(int idx, const QString &emoji);
     void addRecipient(QJsonObject &params, const Conversation &c) const;
     void fetchThumbnails(const QString &key, qint64 ts, const QString &author, int attempt = 0);
+    void loadAnimatedAttachment(int messageIndex, int attachmentIndex);
     void fetchAttachmentData(const QString &key, const Attachment &att,
                              std::function<void(const QByteArray &, const QString &)> cb);
     void openAttachment(int msgIdx, int attIdx);
     void toggleAudioAttachment(int msgIdx, int attIdx);
     void updateAudioPlaybackView();
+    void downloadAndSendGif(const QString &conversationKey, const QUrl &url, const QUrl &sentAnalyticsUrl);
+    void registerGiphyAnalytics(const QUrl &url);
     void saveAttachment(int msgIdx, int attIdx);
     // Files or an image (e.g. a screenshot) from drag & drop / the clipboard -> pending attachments.
     bool attachFromMimeData(const QMimeData *md);
@@ -156,6 +162,7 @@ private:
     QNetworkAccessManager m_nam;
     QMediaPlayer *m_audioPlayer = nullptr;
     QAudioOutput *m_audioOutput = nullptr;
+    QUrl m_pendingGifAnalyticsUrl;
 
     QHash<QString, Conversation> m_convs;
     QHash<QString, PendingSend> m_pendingSends; // visible previews until signal-cli confirms the send
@@ -189,6 +196,7 @@ private:
     QString m_editDraft; // what was typed before editing started
     QStringList m_pendingFiles;
     QSet<QString> m_thumbPending;
+    QSet<QString> m_gifPending;
     std::function<void(const QString &)> m_pickAction;
     QTemporaryDir m_tmp;
     QTimer m_expirationTimer;
@@ -206,7 +214,7 @@ private:
     MessageInput *m_input;
     QToolButton *m_attachBtn;
     QToolButton *m_emojiBtn;
-    QPushButton *m_send;
+    QToolButton *m_gifBtn;
     EmojiPicker *m_picker;
     QLabel *m_statusLabel;
     QLabel *m_updateLabel;

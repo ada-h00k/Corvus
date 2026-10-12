@@ -5,6 +5,7 @@
 #include "Attachments.h"
 #include "ChatView.h"
 #include "EmojiPicker.h"
+#include "GiphyPicker.h"
 #include "Envelope.h"
 #include "ImageViewer.h"
 #include "LinkDialog.h"
@@ -112,6 +113,7 @@ MainWindow::MainWindow()
     });
     m_attachBar = makeBar(m_attachLabel, [this] {
         m_pendingFiles.clear();
+        m_pendingGifAnalyticsUrl.clear();
         updateAttachBar();
     });
     m_attachThumb = new QLabel;
@@ -124,16 +126,21 @@ MainWindow::MainWindow()
     m_attachBtn = new QToolButton;
     m_attachBtn->setText(QStringLiteral("📎"));
     m_attachBtn->setToolTip(tr("Attach files"));
+    m_attachBtn->setFixedSize(40, 40);
     m_emojiBtn = new QToolButton;
     m_emojiBtn->setText(QStringLiteral("😊"));
     m_emojiBtn->setToolTip(tr("Emoji"));
+    m_emojiBtn->setFixedSize(40, 40);
+    m_gifBtn = new QToolButton;
+    m_gifBtn->setText(QStringLiteral("GIF"));
+    m_gifBtn->setToolTip(tr("Search GIPHY GIFs"));
+    m_gifBtn->setFixedSize(40, 40);
     m_input = new MessageInput;
     m_input->setPlaceholderText(tr("Write a message …"));
-    m_send = new QPushButton(tr("Send"));
-    h->addWidget(m_attachBtn);
     h->addWidget(m_emojiBtn);
+    h->addWidget(m_gifBtn);
     h->addWidget(m_input, 1);
-    h->addWidget(m_send);
+    h->addWidget(m_attachBtn);
     v->addLayout(h);
     split->addWidget(right);
     split->setStretchFactor(1, 1);
@@ -161,6 +168,7 @@ MainWindow::MainWindow()
     QMenu *settings = menuBar()->addMenu(tr("&Settings"));
     settings->addAction(tr("Appearance …"), this, &MainWindow::editAppearance);
     settings->addAction(tr("Notifications && sound …"), this, &MainWindow::editNotifications);
+    settings->addAction(tr("GIPHY API key …"), this, &MainWindow::configureGiphyApiKey);
     settings->addAction(tr("Path to signal-cli …"), this, &MainWindow::chooseExecutable);
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
@@ -203,6 +211,7 @@ MainWindow::MainWindow()
         m_picker->popup(gp);
     });
     connect(m_view, &ChatView::attachmentActivated, this, &MainWindow::openAttachment);
+    connect(m_view, &ChatView::animatedAttachmentRequested, this, &MainWindow::loadAnimatedAttachment);
     connect(m_view, &ChatView::linkClicked, this, [this](const QString &url) {
         const QUrl u(url);
         if (u.scheme() == QLatin1String("http") || u.scheme() == QLatin1String("https")) QDesktopServices::openUrl(u);
@@ -210,7 +219,6 @@ MainWindow::MainWindow()
     connect(m_view, &ChatView::attachmentSaveRequested, this, &MainWindow::saveAttachment);
 
     // Input actions
-    connect(m_send, &QPushButton::clicked, this, &MainWindow::sendMessage);
     connect(m_input, &QLineEdit::returnPressed, this, &MainWindow::sendMessage);
     connect(m_input, &MessageInput::escapePressed, this, [this] { cancelEdit(); });
     connect(m_input, &MessageInput::upPressed, this, &MainWindow::editLastMessage);
@@ -227,6 +235,7 @@ MainWindow::MainWindow()
     connect(m_picker, &EmojiPicker::emojiSelected, this, [this](const QString &e) {
         if (m_pickAction) m_pickAction(e);
     });
+    connect(m_gifBtn, &QToolButton::clicked, this, &MainWindow::searchGifs);
     // Ctrl+V / Shift+Insert / context menu: screenshots and copied files become attachments
     m_input->setPasteHook([this](const QMimeData *md) { return attachFromMimeData(md); });
 
@@ -519,9 +528,9 @@ void MainWindow::linkDevice()
 void MainWindow::setConnected(bool connected, const QString &info)
 {
     m_input->setEnabled(connected);
-    m_send->setEnabled(connected);
     m_attachBtn->setEnabled(connected);
     m_emojiBtn->setEnabled(connected);
+    m_gifBtn->setEnabled(connected);
     if (connected) {
         m_statusLabel->setText(tr("Connected · signal-cli %1").arg(m_version));
     } else {
@@ -1511,6 +1520,7 @@ void MainWindow::sendMessage()
     const Conversation c = m_convs[m_current];
     const QStringList files = m_pendingFiles;
     const Quote quote = m_replyQuote;
+    const QUrl giphySentAnalyticsUrl = m_pendingGifAnalyticsUrl;
 
     QJsonObject p;
     if (!text.isEmpty()) p[QStringLiteral("message")] = text;
@@ -1582,7 +1592,7 @@ void MainWindow::sendMessage()
     if (key == m_current) showConversation(true);
 
     m_cli.call(QStringLiteral("send"), p,
-               [this, pendingId, key, text, files, quote](const QJsonValue &res, const QString &err) {
+               [this, pendingId, key, text, files, quote, giphySentAnalyticsUrl](const QJsonValue &res, const QString &err) {
         auto pendingIt = m_pendingSends.find(pendingId);
         if (pendingIt == m_pendingSends.end()) return;
 
@@ -1609,6 +1619,8 @@ void MainWindow::sendMessage()
         if (pendingIt->echoReceived) {
             m_pendingSends.erase(pendingIt);
             statusBar()->clearMessage();
+            registerGiphyAnalytics(giphySentAnalyticsUrl);
+            if (m_pendingGifAnalyticsUrl == giphySentAnalyticsUrl) m_pendingGifAnalyticsUrl.clear();
             return;
         }
 
@@ -1616,6 +1628,8 @@ void MainWindow::sendMessage()
         if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
         statusBar()->clearMessage();
         finalizePendingSend(pendingId, ts);
+        registerGiphyAnalytics(giphySentAnalyticsUrl);
+        if (m_pendingGifAnalyticsUrl == giphySentAnalyticsUrl) m_pendingGifAnalyticsUrl.clear();
     });
 }
 
@@ -1808,6 +1822,34 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
                        if (key == m_current) showConversation(true);
                    });
     }
+}
+
+void MainWindow::loadAnimatedAttachment(int messageIndex, int attachmentIndex)
+{
+    if (!m_convs.contains(m_current) || messageIndex < 0 || messageIndex >= m_convs[m_current].msgs.size()) return;
+    const Conversation &conversation = m_convs[m_current];
+    const Message &message = conversation.msgs[messageIndex];
+    if (attachmentIndex < 0 || attachmentIndex >= message.attachments.size()) return;
+    const Attachment attachment = message.attachments[attachmentIndex];
+    if (!attachment.isGif() || attachment.size > kMaxThumbSource) return;
+
+    const QString key = conversation.key;
+    const QString author = effectiveAuthor(conversation, message);
+    const qint64 timestamp = message.ts();
+    const QString token = QStringLiteral("%1|%2|%3|%4").arg(key).arg(timestamp).arg(author).arg(attachmentIndex);
+    if (m_gifPending.contains(token) || m_view->hasAnimatedAttachment(messageIndex, attachmentIndex)) return;
+    m_gifPending.insert(token);
+
+    fetchAttachmentData(key, attachment, [this, key, author, timestamp, attachmentIndex, token]
+                        (const QByteArray &data, const QString &error) {
+        m_gifPending.remove(token);
+        if (!error.isEmpty() || data.isEmpty()) return;
+        QTimer::singleShot(0, this, [this, key, author, timestamp, attachmentIndex, data] {
+            if (m_current != key || !m_convs.contains(key)) return;
+            const int index = findMessage(m_convs[key], timestamp, {author});
+            if (index >= 0) m_view->setAnimatedAttachment(index, attachmentIndex, data);
+        });
+    });
 }
 
 void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
@@ -2169,4 +2211,105 @@ void MainWindow::editNotifications()
     m_notify = dlg.settings();
     m_notify.save();
     applyNotificationSettings();
+}
+
+void MainWindow::configureGiphyApiKey()
+{
+    const QString setting = QStringLiteral("giphyApiKey");
+    const QString currentKey = QSettings().value(setting).toString();
+    bool accepted = false;
+    const QString apiKey = QInputDialog::getText(
+        this, tr("GIPHY API key"),
+        tr("Enter your GIPHY API key. Create one at developers.giphy.com/dashboard."),
+        QLineEdit::Password, currentKey, &accepted).trimmed();
+    if (!accepted) return;
+    if (apiKey.isEmpty()) QSettings().remove(setting);
+    else QSettings().setValue(setting, apiKey);
+}
+
+void MainWindow::searchGifs()
+{
+    if (m_current.isEmpty() || !m_convs.contains(m_current)) {
+        statusBar()->showMessage(tr("Open a conversation before searching for GIFs."), 5000);
+        return;
+    }
+    QString apiKey = QSettings().value(QStringLiteral("giphyApiKey")).toString().trimmed();
+    if (apiKey.isEmpty()) {
+        QMessageBox box(this);
+        box.setWindowTitle(tr("GIPHY API key required"));
+        box.setText(tr("GIPHY requires an API key to search and send GIFs."));
+        QPushButton *configure = box.addButton(tr("Configure API key …"), QMessageBox::AcceptRole);
+        QPushButton *open = box.addButton(tr("Get an API key"), QMessageBox::ActionRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if (box.clickedButton() == open) {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://developers.giphy.com/dashboard/")));
+            return;
+        }
+        if (box.clickedButton() != configure) return;
+        configureGiphyApiKey();
+        apiKey = QSettings().value(QStringLiteral("giphyApiKey")).toString().trimmed();
+        if (apiKey.isEmpty()) return;
+    }
+
+    GiphyPicker picker(apiKey, this);
+    const QString conversationKey = m_current;
+    connect(&picker, &GiphyPicker::gifSelected, this,
+            [this, conversationKey](const QUrl &url, const QUrl &analytics) {
+                downloadAndSendGif(conversationKey, url, analytics);
+            });
+    picker.exec();
+}
+
+void MainWindow::downloadAndSendGif(const QString &conversationKey, const QUrl &url, const QUrl &sentAnalyticsUrl)
+{
+    if (!m_convs.contains(conversationKey) || url.scheme() != QLatin1String("https") || !m_tmp.isValid()) {
+        statusBar()->showMessage(tr("The selected GIF could not be downloaded."), 8000);
+        return;
+    }
+    QNetworkRequest request(url);
+    request.setRawHeader("User-Agent", "signal-cli-qt");
+    QNetworkReply *reply = m_nam.get(request);
+    connect(reply, &QNetworkReply::metaDataChanged, this, [this, reply] {
+        const qint64 length = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+        if (length > kMaxAttachment) reply->abort();
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, sentAnalyticsUrl, conversationKey] {
+        const QByteArray data = reply->readAll();
+        const QString error = reply->errorString();
+        const bool ok = reply->error() == QNetworkReply::NoError && !data.isEmpty() && data.size() <= kMaxAttachment;
+        reply->deleteLater();
+        if (m_current != conversationKey) {
+            statusBar()->showMessage(tr("GIF sending cancelled because the active conversation changed."), 8000);
+            return;
+        }
+        if (!ok) {
+            statusBar()->showMessage(tr("Could not download the selected GIF: %1").arg(error), 10000);
+            return;
+        }
+
+        QString suffix = QFileInfo(reply->url().path()).suffix().toLower();
+        if (suffix != QLatin1String("gif")) suffix = QStringLiteral("gif");
+        const QString path = m_tmp.path() + QStringLiteral("/giphy-") +
+                             QUuid::createUuid().toString(QUuid::WithoutBraces) + QLatin1Char('.') + suffix;
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size()) {
+            statusBar()->showMessage(tr("Could not prepare the selected GIF for sending."), 10000);
+            return;
+        }
+        file.close();
+        m_pendingGifAnalyticsUrl = sentAnalyticsUrl;
+        addPendingFiles({path});
+        sendMessage();
+    });
+    statusBar()->showMessage(tr("Downloading GIF …"));
+}
+
+void MainWindow::registerGiphyAnalytics(const QUrl &url)
+{
+    if (url.scheme() != QLatin1String("https")) return;
+    QNetworkRequest request(url);
+    request.setRawHeader("User-Agent", "signal-cli-qt");
+    QNetworkReply *reply = m_nam.get(request);
+    connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
 }

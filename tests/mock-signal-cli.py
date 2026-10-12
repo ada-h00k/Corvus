@@ -135,7 +135,14 @@ for line in sys.stdin:
         if p.get("id") == "missing":
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find attachment"}})
             continue
-        payload = wav() if p.get("id") == "voice1" else png()
+        if p.get("id") == "voice1":
+            payload = wav()
+        elif p.get("id") == "chatgif":
+            payload = base64.b64decode(
+                "R0lGODlhEAAQAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAEAAQAAACDoSP"
+                "qcvtD6OctNqLsz4FACH5BAAKAAAALAAAAAAQABAAgAAA/wAAAAIOhI+py+0Po5y02ouzPgUAOw==")
+        else:
+            payload = png()
         res = {"data": base64.b64encode(payload).decode()}
     else:
         emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "unknown method " + str(m)}})

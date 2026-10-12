@@ -10,6 +10,7 @@
 #include "Model.h"
 
 class QTextDocument;
+class QMovie;
 
 // Message list that paints rounded bubbles itself: quotes, inline images,
 // file rows, reactions, date separators, links and per-message text selection.
@@ -31,6 +32,8 @@ public:
     void appendMessage(const Message &m);                                   // fast path
     void setAudioPlayback(int messageIndex, int attachmentIndex, bool loading, bool playing,
                           qint64 positionMs, qint64 durationMs);
+    void setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data);
+    bool hasAnimatedAttachment(int messageIndex, int attachmentIndex) const;
     void clearView();
     void scrollToMessage(int idx);
 
@@ -55,6 +58,7 @@ signals:
     void moreReactionsRequested(int idx, const QPoint &globalPos);
     void attachmentActivated(int msgIdx, int attIdx);     // click: view / open
     void attachmentSaveRequested(int msgIdx, int attIdx); // context menu
+    void animatedAttachmentRequested(int msgIdx, int attIdx);
     void linkClicked(const QString &url);
 
 protected:
@@ -78,6 +82,8 @@ private:
         // content (built once)
         std::shared_ptr<QTextDocument> doc;
         QList<QPixmap> pix;
+        QList<QMovie *> movies;
+        mutable QList<bool> animationRequested;
         QString sender, quoteAuthor, quoteText, timeText, dateLabel;
         QString quoteNote;
         bool showSender = false;

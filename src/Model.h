@@ -26,6 +26,11 @@ struct Attachment {
                            QStringLiteral("opus"), QStringLiteral("wav"), QStringLiteral("weba"),
                            QStringLiteral("webm")}.contains(suffix);
     }
+    bool isGif() const
+    {
+        return contentType.compare(QLatin1String("image/gif"), Qt::CaseInsensitive) == 0 ||
+               filename.endsWith(QLatin1String(".gif"), Qt::CaseInsensitive);
+    }
 };
 
 struct Quote {
