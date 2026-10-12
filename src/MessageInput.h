@@ -20,6 +20,9 @@ public:
     explicit MessageInput(QWidget *parent = nullptr) : QLineEdit(parent) {}
     void setPasteHook(PasteHook hook) { m_hook = std::move(hook); }
 
+signals:
+    void escapePressed(); // used to cancel editing
+
 protected:
     void keyPressEvent(QKeyEvent *e) override;
     void contextMenuEvent(QContextMenuEvent *e) override;

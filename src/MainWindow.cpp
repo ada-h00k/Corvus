@@ -102,6 +102,7 @@ MainWindow::MainWindow()
         v->addWidget(bar);
         return bar;
     };
+    m_editBar = makeBar(m_editLabel, [this] { cancelEdit(); });
     m_replyBar = makeBar(m_replyLabel, [this] {
         m_replyQuote = Quote();
         updateReplyBar();
@@ -190,6 +191,7 @@ MainWindow::MainWindow()
 
     // Chat view actions
     connect(m_view, &ChatView::replyRequested, this, &MainWindow::startReply);
+    connect(m_view, &ChatView::editRequested, this, &MainWindow::startEdit);
     connect(m_view, &ChatView::reactionChosen, this, &MainWindow::sendReaction);
     connect(m_view, &ChatView::moreReactionsRequested, this, [this](int idx, const QPoint &gp) {
         m_pickAction = [this, idx](const QString &e) { sendReaction(idx, e); };
@@ -205,6 +207,7 @@ MainWindow::MainWindow()
     // Input actions
     connect(m_send, &QPushButton::clicked, this, &MainWindow::sendMessage);
     connect(m_input, &QLineEdit::returnPressed, this, &MainWindow::sendMessage);
+    connect(m_input, &MessageInput::escapePressed, this, [this] { cancelEdit(); });
     connect(m_attachBtn, &QToolButton::clicked, this, [this] {
         addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
     });
@@ -705,6 +708,7 @@ void MainWindow::deleteConversation(const QString &key)
                               tr("Delete “%1” and its stored messages from this computer?").arg(m_convs[key].title))
         != QMessageBox::Yes)
         return;
+    if (key == m_editKey) cancelEdit();
     m_convs.remove(key);
     if (key == m_current) m_current.clear();
     const int rc = m_store.rewrite(allRecords()); // compacts the file, old ciphertext is gone
@@ -757,7 +761,7 @@ int MainWindow::findMessage(const Conversation &c, qint64 ts, const QStringList 
     for (const QString &a : authors)
         if (!a.isEmpty()) nonEmpty << a;
     for (int i = c.msgs.size() - 1; i >= 0; --i) {
-        if (c.msgs[i].ts() != ts) continue;
+        if (c.msgs[i].ts() != ts && !(c.msgs[i].editTs > 0 && c.msgs[i].editTs == ts)) continue;
         if (nonEmpty.isEmpty() || authorMatches(c, c.msgs[i], nonEmpty)) return i;
     }
     return -1;
@@ -803,8 +807,27 @@ bool MainWindow::applyReaction(const QString &key, qint64 ts, const QStringList 
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (emoji.isEmpty()) m.reactions.remove(reactor); else m.reactions[reactor] = emoji;
-    persist(Records::reaction(key, ts, effectiveAuthor(c, m), reactor, emoji));
+    persist(Records::reaction(key, m.ts(), effectiveAuthor(c, m), reactor, emoji)); // original ts = stable identity
     if (key == m_current) showConversation(true);
+    return true;
+}
+
+bool MainWindow::applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text,
+                           qint64 newTs)
+{
+    auto it = m_convs.find(key);
+    if (it == m_convs.end()) return false;
+    Conversation &c = it.value();
+    const int i = findMessage(c, targetTs, authors);
+    if (i < 0) return false;
+    Message &m = c.msgs[i];
+    if (newTs <= m.latestTs()) return false; // already applied / outdated revision
+    m.text = text;
+    m.editTs = newTs;
+    m.editCount++;
+    persist(Records::edit(key, m));
+    if (key == m_current) showConversation(true);
+    refreshList();
     return true;
 }
 
@@ -889,6 +912,7 @@ void MainWindow::onSelectionChanged(QListWidgetItem *item)
 void MainWindow::openConversation(const QString &key)
 {
     if (!m_convs.contains(key)) return;
+    if (key != m_current) cancelEdit();
     m_current = key;
     m_convs[m_current].unread = 0;
     m_replyQuote = Quote();
@@ -1034,6 +1058,14 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         return;
     }
 
+    if (pe.kind == ParsedEnvelope::Edit) {
+        // Like the official clients: an edit is only applied to a known message written by the
+        // same author. Anything else (unknown target, someone else's message) is dropped.
+        const QString author = pe.outgoing ? m_account : srcKey;
+        applyEdit(key, pe.targetTs, {author}, pe.msg.text, pe.msg.ts());
+        return;
+    }
+
     Message m = pe.msg;
     m.outgoing = pe.outgoing;
     m.authorKey = pe.outgoing ? m_account : srcKey;
@@ -1067,7 +1099,7 @@ void MainWindow::startReply(int idx)
     const Message &m = c.msgs[idx];
     m_replyQuote = Quote();
     m_replyQuote.valid = true;
-    m_replyQuote.id = m.ts();
+    m_replyQuote.id = m.latestTs(); // peers know an edited message by its latest timestamp
     m_replyQuote.authorKey = effectiveAuthor(c, m);
     m_replyQuote.text = m.text;
     if (m.text.isEmpty() && !m.attachments.isEmpty()) m_replyQuote.attachmentNote = m.attachments.first().contentType;
@@ -1077,6 +1109,10 @@ void MainWindow::startReply(int idx)
 
 void MainWindow::sendMessage()
 {
+    if (!m_editKey.isEmpty()) {
+        sendEdit(m_input->text().trimmed());
+        return;
+    }
     const QString text = m_input->text().trimmed();
     if ((text.isEmpty() && m_pendingFiles.isEmpty()) || !m_convs.contains(m_current)) return;
 
@@ -1144,6 +1180,102 @@ void MainWindow::sendMessage()
     });
 }
 
+void MainWindow::startEdit(int idx)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Conversation &c = m_convs[m_current];
+    const Message &m = c.msgs[idx];
+    if (m.text.contains(QLatin1Char('\n'))) {
+        statusBar()->showMessage(tr("Multi-line messages cannot be edited here yet."), 6000);
+        return;
+    }
+    if (!m.canEdit(QDateTime::currentMSecsSinceEpoch())) {
+        statusBar()->showMessage(tr("This message can no longer be edited (3 hours / 10 edits)."), 6000);
+        return;
+    }
+    if (m_editKey.isEmpty()) m_editDraft = m_input->text(); // keep an already running edit's draft
+    m_editKey = c.key;
+    m_editTs = m.ts();
+    m_input->setText(m.text);
+    m_input->setCursorPosition(m.text.size());
+    updateEditBar();
+    m_input->setFocus();
+}
+
+void MainWindow::cancelEdit(bool restoreDraft)
+{
+    if (m_editKey.isEmpty()) return;
+    m_editKey.clear();
+    m_editTs = 0;
+    if (restoreDraft) m_input->setText(m_editDraft);
+    m_editDraft.clear();
+    updateEditBar();
+}
+
+void MainWindow::updateEditBar()
+{
+    if (m_editKey.isEmpty()) {
+        m_editBar->hide();
+        return;
+    }
+    m_editLabel->setText(tr("✎ Editing message – Enter to save, Esc to cancel"));
+    m_editBar->show();
+}
+
+void MainWindow::sendEdit(const QString &text)
+{
+    auto it = m_convs.find(m_editKey);
+    if (it == m_convs.end()) {
+        cancelEdit();
+        return;
+    }
+    const Conversation c = it.value();
+    const int i = findMessage(c, m_editTs, {m_account});
+    if (i < 0) {
+        cancelEdit();
+        return;
+    }
+    const Message m = c.msgs[i];
+    if (text.isEmpty()) {
+        statusBar()->showMessage(tr("A message cannot be empty."), 6000);
+        return;
+    }
+    if (text == m.text) { // nothing changed
+        cancelEdit();
+        return;
+    }
+    if (!m.canEdit(QDateTime::currentMSecsSinceEpoch())) {
+        statusBar()->showMessage(tr("This message can no longer be edited (3 hours / 10 edits)."), 6000);
+        cancelEdit();
+        return;
+    }
+
+    // signal-cli: `send --edit-timestamp <ts>`; the target is the latest revision the peers know.
+    QJsonObject p{{QStringLiteral("message"), text},
+                  {QStringLiteral("editTimestamp"), QJsonValue(static_cast<qint64>(m.latestTs()))}};
+    if (m.quote.valid && !m.quote.authorKey.isEmpty()) { // an edit keeps the reply it belongs to
+        p[QStringLiteral("quoteTimestamp")] = QJsonValue(static_cast<qint64>(m.quote.id));
+        p[QStringLiteral("quoteAuthor")] = m.quote.authorKey;
+        p[QStringLiteral("quoteMessage")] = m.quote.text;
+    }
+    addRecipient(p, c);
+
+    const QString key = c.key;
+    const qint64 origTs = m.ts();
+    m_cli.call(QStringLiteral("send"), p, [this, key, origTs, text](const QJsonValue &res, const QString &err) {
+        if (!err.isEmpty()) {
+            // stay in edit mode with the typed text so nothing is lost
+            statusBar()->showMessage(tr("Editing failed: %1").arg(err), 10000);
+            return;
+        }
+        statusBar()->clearMessage();
+        qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
+        if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
+        applyEdit(key, origTs, {m_account}, text, ts);
+        if (m_editKey == key && m_editTs == origTs) cancelEdit();
+    });
+}
+
 void MainWindow::sendReaction(int idx, const QString &emoji)
 {
     if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
@@ -1154,7 +1286,7 @@ void MainWindow::sendReaction(int idx, const QString &emoji)
 
     QJsonObject p{{QStringLiteral("emoji"), emoji},
                   {QStringLiteral("targetAuthor"), author},
-                  {QStringLiteral("targetTimestamp"), QJsonValue(static_cast<qint64>(m.ts()))},
+                  {QStringLiteral("targetTimestamp"), QJsonValue(static_cast<qint64>(m.latestTs()))},
                   {QStringLiteral("remove"), remove}};
     addRecipient(p, c);
 

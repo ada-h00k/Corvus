@@ -75,6 +75,11 @@ it.
   Files of risky types (`.exe`, `.sh`, …) are never opened directly, only saved
 - **Inline images:** received and sent pictures are shown in the chat;
   click for the full size
+- **Edit messages:** right-click one of your own text messages → *Edit*. The text moves into the
+  input field (Enter saves, Esc or ✕ cancels and restores what you had typed). Same limits as the
+  official clients: up to 3 hours after sending and at most 10 edits. Edited messages show
+  *edited* next to the time. Edits by contacts and edits made on your phone are applied as well
+  (only to a known message of the same author). The edit is stored in the encrypted history.
 - **Reactions:** react from the context menu (quick set or full picker);
   choose the same emoji again to take it back; incoming reactions are shown
   below the message
@@ -233,8 +238,11 @@ settings. It does **not** replace testing against a real signal-cli account.
 
 ## Known limitations
 
-- No voice notes, stickers, link previews, mentions, message editing/deleting
+- No voice notes, stickers, link previews, mentions, message deleting
   or disappearing-message timers yet.
+- Editing: only the text; the previous versions are not kept (no edit history view), and
+  multi-line messages (sent from other devices) cannot be edited here because the input is
+  single-line.
 - Text can be selected within one message only (not across messages); use
   *Copy message text* in the context menu otherwise.
 - Only one account is connected at a time; messages are single-line input.

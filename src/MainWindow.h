@@ -115,6 +115,12 @@ private:
 
     // --- actions on messages
     void startReply(int idx);
+    void startEdit(int idx);
+    void cancelEdit(bool restoreDraft = true);
+    void sendEdit(const QString &text);
+    // Applies an edit (own or received). author = who must have written the message.
+    bool applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text, qint64 newTs);
+    void updateEditBar();
     void sendReaction(int idx, const QString &emoji);
     void addRecipient(QJsonObject &params, const Conversation &c) const;
     void fetchThumbnails(const QString &key, qint64 ts, const QString &author, int attempt = 0);
@@ -148,6 +154,10 @@ private:
     int m_trayUnread = -1;
 
     Quote m_replyQuote;
+    // Message being edited (original timestamp + conversation); m_editKey empty = not editing.
+    QString m_editKey;
+    qint64 m_editTs = 0;
+    QString m_editDraft; // what was typed before editing started
     QStringList m_pendingFiles;
     QSet<QString> m_thumbPending;
     std::function<void(const QString &)> m_pickAction;
@@ -156,6 +166,8 @@ private:
     QListWidget *m_list;
     QLabel *m_title;
     ChatView *m_view;
+    QWidget *m_editBar;
+    QLabel *m_editLabel;
     QWidget *m_replyBar;
     QLabel *m_replyLabel;
     QWidget *m_attachBar;

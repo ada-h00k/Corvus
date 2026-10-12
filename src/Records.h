@@ -10,9 +10,11 @@ namespace Records {
 
 QJsonObject message(const QString &conv, const Message &m);
 Message messageFromRecord(const QJsonObject &rec);
-// Extras ("d": quote + attachments) as stored in message / update records.
+// Extras ("d": quote, attachments, edit state) as stored in message / update records.
 void applyExtras(Message &m, const QJsonObject &d);
 
+// Text edit of a message (an "update" record with the extra "ed"); ts = original timestamp.
+QJsonObject edit(const QString &conv, const Message &m);
 QJsonObject attachmentsUpdate(const QString &conv, const Message &m);
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji);
 QJsonObject archive(const QString &conv, bool archived, bool sigArchived);
