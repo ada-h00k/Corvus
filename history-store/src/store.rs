@@ -107,6 +107,9 @@ pub enum Record {
     /// Display name learnt from an incoming message.
     #[serde(rename = "n")]
     Name { c: String, n: String },
+    /// Locally assigned contact nickname.
+    #[serde(rename = "p")]
+    Nickname { c: String, n: String },
     /// Conversation deleted (only used if a log is not compacted).
     #[serde(rename = "d")]
     Del { c: String },
@@ -544,6 +547,7 @@ mod tests {
                 au: "+49".into(),
                 d: serde_json::json!({"q": {"id": 3, "a": "+1", "t": "quoted"}, "at": [{"id": "abc", "ct": "image/png"}]}),
             },
+            Record::Nickname { c: "+49".into(), n: "Bobby".into() },
             Record::Upd { c: "+49".into(), ts: 10, au: "+49".into(), d: serde_json::json!({"at": [{"id": "abc", "th": "AAAA"}]}) },
             Record::React { c: "+49".into(), ts: 10, au: "+49".into(), by: "+1".into(), e: "👍".into() },
             Record::Archive { c: "+49".into(), v: true, s: false },
