@@ -212,6 +212,7 @@ MainWindow::MainWindow()
     connect(m_send, &QPushButton::clicked, this, &MainWindow::sendMessage);
     connect(m_input, &QLineEdit::returnPressed, this, &MainWindow::sendMessage);
     connect(m_input, &MessageInput::escapePressed, this, [this] { cancelEdit(); });
+    connect(m_input, &MessageInput::upPressed, this, &MainWindow::editLastMessage);
     connect(m_attachBtn, &QToolButton::clicked, this, [this] {
         addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
     });
@@ -1615,6 +1616,28 @@ void MainWindow::startEdit(int idx)
     m_input->setCursorPosition(m.text.size());
     updateEditBar();
     m_input->setFocus();
+}
+
+void MainWindow::editLastMessage()
+{
+    if (!m_input->text().isEmpty() || !m_editKey.isEmpty() || !m_pendingFiles.isEmpty() || !m_convs.contains(m_current))
+        return;
+
+    const Conversation &conversation = m_convs[m_current];
+    for (int i = conversation.msgs.size() - 1; i >= 0; --i) {
+        const Message &message = conversation.msgs[i];
+        if (!message.outgoing || message.authorKey != m_account) continue;
+        bool pending = false;
+        for (auto it = m_pendingSends.cbegin(); it != m_pendingSends.cend(); ++it) {
+            if (it->conversationKey == conversation.key && it->temporaryTimestamp == message.ts()) {
+                pending = true;
+                break;
+            }
+        }
+        if (pending) continue;
+        startEdit(i);
+        return;
+    }
 }
 
 void MainWindow::cancelEdit(bool restoreDraft)

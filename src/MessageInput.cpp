@@ -9,6 +9,16 @@
 
 void MessageInput::keyPressEvent(QKeyEvent *e)
 {
+    if (e->key() == Qt::Key_Up && e->modifiers() == Qt::ShiftModifier) {
+        selectAll();
+        e->accept();
+        return;
+    }
+    if (e->key() == Qt::Key_Up && e->modifiers() == Qt::NoModifier) {
+        emit upPressed();
+        e->accept();
+        return;
+    }
     if (e->key() == Qt::Key_Escape) {
         emit escapePressed();
         e->accept();
