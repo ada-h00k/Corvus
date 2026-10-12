@@ -75,6 +75,8 @@ set(APP_SOURCES
     src/SignalCli.cpp
     src/HistoryStore.h
     src/HistoryStore.cpp
+    src/HistoryKeychain.h
+    src/HistoryKeychain.cpp
     src/PassphraseDialog.h
     src/PassphraseDialog.cpp
     src/MessageInput.h
