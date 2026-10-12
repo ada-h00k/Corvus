@@ -122,6 +122,9 @@ pub enum Record {
     /// Local "mute notifications" flag of a conversation.
     #[serde(rename = "k")]
     Mute { c: String, v: bool },
+    /// Signal disappearing-message timer in seconds (0 = disabled).
+    #[serde(rename = "e")]
+    Expiration { c: String, v: i64 },
 }
 
 #[derive(Clone)]
@@ -545,6 +548,7 @@ mod tests {
             Record::React { c: "+49".into(), ts: 10, au: "+49".into(), by: "+1".into(), e: "👍".into() },
             Record::Archive { c: "+49".into(), v: true, s: false },
             Record::Mute { c: "+49".into(), v: true },
+            Record::Expiration { c: "+49".into(), v: 300 },
         ];
         let mut s = Store::create(&p, "pw", FAST).unwrap();
         for r in &recs {

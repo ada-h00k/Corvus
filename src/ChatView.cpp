@@ -775,6 +775,7 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
     react->addAction(tr("More …"), this, [this, idx, gp] { emit moreReactionsRequested(idx, gp); });
     if (m.canEdit(QDateTime::currentMSecsSinceEpoch()) && !m.text.contains(QLatin1Char('\n')))
         menu.addAction(tr("Edit"), this, [this, idx] { emit editRequested(idx); });
+    menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });
     if (!m.text.isEmpty())
         menu.addAction(tr("Copy message text"), this, [m] { QApplication::clipboard()->setText(m.text); });
     for (int a = 0; a < m.attachments.size(); ++a) {

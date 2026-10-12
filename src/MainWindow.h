@@ -89,6 +89,8 @@ private:
     void persist(const QJsonObject &record);
     void learnName(const QString &key, const QString &name);
     void deleteConversation(const QString &key);
+    void deleteMessage(int idx);
+    bool removeMessage(const QString &key, qint64 timestamp);
 
     // --- model
     struct PendingSend {
