@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QContextMenuEvent>
+#include <QDateTime>
 #include <QKeyEvent>
 #include <QLocale>
 #include <QMenu>
@@ -227,7 +228,7 @@ QString ChatView::plainText() const
             else
                 lines << QStringLiteral("[file: %1]").arg(n);
         }
-        lines << (who + QStringLiteral(": ") + m.text);
+        lines << (who + QStringLiteral(": ") + m.text + (m.isEdited() ? tr(" (edited)") : QString()));
         if (!m.reactions.isEmpty()) {
             QStringList e = m.reactions.values();
             e.sort();
@@ -247,6 +248,7 @@ void ChatView::buildItem(int i)
     const Message &m = m_msgs[i];
 
     it.timeText = QLocale().toString(m.time.time(), QLocale::ShortFormat);
+    if (m.isEdited()) it.timeText = tr("edited") + QStringLiteral(" · ") + it.timeText;
     if (!m.outgoing) it.sender = m.sender.isEmpty() ? nameOf(m.authorKey) : m.sender;
     if (m.quote.valid) {
         it.quoteAuthor = nameOf(m.quote.authorKey);
@@ -695,7 +697,7 @@ void ChatView::mouseReleaseEvent(QMouseEvent *e)
     case Hit::Quote: {
         const qint64 id = m_msgs[h.msg].quote.id;
         for (int i = 0; i < m_msgs.size(); ++i)
-            if (m_msgs[i].ts() == id) {
+            if (m_msgs[i].ts() == id || (id > 0 && m_msgs[i].editTs == id)) {
                 scrollToMessage(i);
                 break;
             }
@@ -771,6 +773,8 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
     }
     const QPoint gp = e->globalPos();
     react->addAction(tr("More …"), this, [this, idx, gp] { emit moreReactionsRequested(idx, gp); });
+    if (m.canEdit(QDateTime::currentMSecsSinceEpoch()) && !m.text.contains(QLatin1Char('\n')))
+        menu.addAction(tr("Edit"), this, [this, idx] { emit editRequested(idx); });
     if (!m.text.isEmpty())
         menu.addAction(tr("Copy message text"), this, [m] { QApplication::clipboard()->setText(m.text); });
     for (int a = 0; a < m.attachments.size(); ++a) {

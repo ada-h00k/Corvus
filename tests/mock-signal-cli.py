@@ -104,6 +104,8 @@ for line in sys.stdin:
     elif m == "send":
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}
+        if "editTimestamp" in p:  # an edit gets a newer timestamp than the revision it edits
+            res["timestamp"] = int(p["editTimestamp"]) + 1000
     elif m == "sendReaction":
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}

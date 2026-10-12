@@ -9,6 +9,11 @@
 
 void MessageInput::keyPressEvent(QKeyEvent *e)
 {
+    if (e->key() == Qt::Key_Escape) {
+        emit escapePressed();
+        e->accept();
+        return;
+    }
     // Ctrl+V, Shift+Insert, Cmd+V ...
     if (e->matches(QKeySequence::Paste) && m_hook && m_hook(QApplication::clipboard()->mimeData())) {
         e->accept();

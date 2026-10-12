@@ -40,6 +40,12 @@ static QJsonArray attachmentsToJson(const QList<Attachment> &list)
     return arr;
 }
 
+// Edit state: x = current text, et = timestamp of the latest revision, ec = number of edits.
+static QJsonObject editToJson(const Message &m)
+{
+    return {{"x", m.text}, {"et", QJsonValue(static_cast<qint64>(m.editTs))}, {"ec", m.editCount}};
+}
+
 QJsonObject message(const QString &conv, const Message &m)
 {
     QJsonObject d;
@@ -58,8 +64,20 @@ QJsonObject message(const QString &conv, const Message &m)
                     {"x", m.text},
                     {"o", m.outgoing},
                     {"au", m.authorKey}};
+    if (m.editCount > 0) d["ed"] = editToJson(m);
     if (!d.isEmpty()) rec["d"] = d;
     return rec;
+}
+
+QJsonObject edit(const QString &conv, const Message &m)
+{
+    // Stored as an "update" record (merged into the extras of the message): the history file
+    // format needs no new record type, and older versions simply ignore the "ed" extra.
+    return {{"t", "u"},
+            {"c", conv},
+            {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
+            {"au", m.authorKey},
+            {"d", QJsonObject{{"ed", editToJson(m)}}}};
 }
 
 void applyExtras(Message &m, const QJsonObject &d)
@@ -71,6 +89,12 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.quote.authorKey = q["a"].toString();
         m.quote.text = q["t"].toString();
         m.quote.attachmentNote = q["n"].toString();
+    }
+    if (d.contains("ed")) {
+        const QJsonObject e = d["ed"].toObject();
+        if (e.contains("x")) m.text = e["x"].toString();
+        m.editTs = e["et"].toVariant().toLongLong();
+        m.editCount = e["ec"].toInt();
     }
     if (d.contains("at")) {
         m.attachments.clear();

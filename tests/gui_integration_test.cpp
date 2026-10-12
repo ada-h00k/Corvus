@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QDateTime>
 #include <QtTest/QTest>
 #include <QDir>
 #include <QDragEnterEvent>
@@ -327,6 +328,141 @@ int main(int argc, char **argv)
             }
         }
 
+        // --- editing messages
+        {
+            auto labelWith = [&](const QString &needle) {
+                for (QLabel *l : w.findChildren<QLabel *>())
+                    if (l->isVisible() && l->text().contains(needle)) return true;
+                return false;
+            };
+            // Only own messages can be edited; received ones are refused.
+            input->clear();
+            emit view->editRequested(0);
+            CHECK(!labelWith("Editing message"));
+            CHECK(input->text().isEmpty());
+
+            // A message we sent from the phone, just now.
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+491234567"}, {"timestamp", now},
+                {"syncMessage", QJsonObject{{"sentMessage", QJsonObject{
+                    {"destinationNumber", "+49222"}, {"timestamp", now}, {"message", "hello wrold"}}}}}});
+            CHECK(waitFor([&] { return view->messageCount() == 3; }));
+            const int idx = 2;
+
+            // Edit mode: text is loaded, Esc cancels and restores what was typed before
+            input->setText("draft in progress");
+            emit view->editRequested(idx);
+            CHECK(input->text() == "hello wrold");
+            CHECK(labelWith("Editing message"));
+            QTest::keyClick(input, Qt::Key_Escape);
+            CHECK(input->text() == "draft in progress");
+            CHECK(!labelWith("Editing message"));
+            input->clear();
+
+            // Edit and send: signal-cli `send` with editTimestamp = the message being edited
+            emit view->editRequested(idx);
+            input->setText("hello world");
+            sendBtn->click();
+            CHECK(waitFor([&] { return !findCall(logFile, "send", 2).isEmpty(); }));
+            const QJsonObject ep = findCall(logFile, "send", 2)["params"].toObject();
+            CHECK(ep["message"].toString() == "hello world");
+            CHECK(ep["editTimestamp"].toVariant().toLongLong() == now);
+            CHECK(ep["recipient"].toArray().first().toString() == "+49222");
+            CHECK(!ep.contains("attachments"));
+            CHECK(waitFor([&] { return html(view).contains("You: hello world (edited)"); }));
+            CHECK(!html(view).contains("wrold"));
+            CHECK(view->messageCount() == 3);        // edited in place, not added
+            CHECK(!labelWith("Editing message"));
+            CHECK(input->text().isEmpty());
+
+            // Second edit targets the latest revision (what the recipient knows now)
+            emit view->editRequested(idx);
+            input->setText("hello world!");
+            sendBtn->click();
+            CHECK(waitFor([&] { return !findCall(logFile, "send", 3).isEmpty(); }));
+            CHECK(findCall(logFile, "send", 3)["params"].toObject()["editTimestamp"].toVariant().toLongLong() == now + 1000);
+            CHECK(waitFor([&] { return html(view).contains("You: hello world! (edited)"); }));
+
+            // Empty and unchanged edits send nothing
+            emit view->editRequested(idx);
+            input->setText("   ");
+            sendBtn->click();
+            QTest::qWait(100);
+            CHECK(labelWith("Editing message"));
+            CHECK(findCall(logFile, "send", 4).isEmpty());
+            input->setText("hello world!");
+            sendBtn->click();
+            QTest::qWait(100);
+            CHECK(!labelWith("Editing message"));
+            CHECK(findCall(logFile, "send", 4).isEmpty());
+
+            // Bob edits his message (incoming edit)
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+49222"}, {"sourceUuid", "u-bob"}, {"timestamp", 1700000060000LL},
+                {"editMessage", QJsonObject{{"targetSentTimestamp", 1700000050000LL},
+                    {"dataMessage", QJsonObject{{"timestamp", 1700000060000LL}, {"message", "hi from bob, corrected"}}}}}});
+            CHECK(waitFor([&] { return html(view).contains("Bob: hi from bob, corrected (edited)"); }));
+            CHECK(view->messageCount() == 3);
+            // the same envelope again (e.g. redelivery) changes nothing
+            const QString before = html(view);
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+49222"}, {"sourceUuid", "u-bob"}, {"timestamp", 1700000060000LL},
+                {"editMessage", QJsonObject{{"targetSentTimestamp", 1700000050000LL},
+                    {"dataMessage", QJsonObject{{"timestamp", 1700000060000LL}, {"message", "hi from bob, corrected"}}}}}});
+            QTest::qWait(200);
+            CHECK(html(view) == before);
+
+            // Bob cannot edit *our* message
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+49222"}, {"sourceUuid", "u-bob"}, {"timestamp", now + 9000},
+                {"editMessage", QJsonObject{{"targetSentTimestamp", now},
+                    {"dataMessage", QJsonObject{{"timestamp", now + 9000}, {"message", "forged"}}}}}});
+            QTest::qWait(300);
+            CHECK(html(view).contains("You: hello world! (edited)"));
+            CHECK(!html(view).contains("forged"));
+            CHECK(view->messageCount() == 3);
+
+            // Edit made on another of our devices (sync), addressed to the latest revision ...
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+491234567"}, {"timestamp", now + 5000},
+                {"syncMessage", QJsonObject{{"sentMessage", QJsonObject{
+                    {"destinationNumber", "+49222"}, {"timestamp", now + 5000},
+                    {"editMessage", QJsonObject{{"targetSentTimestamp", now + 2000},
+                        {"dataMessage", QJsonObject{{"timestamp", now + 5000}, {"message", "edited on the phone"}}}}}}}}}});
+            CHECK(waitFor([&] { return html(view).contains("You: edited on the phone (edited)"); }));
+            // ... or to the original timestamp
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+491234567"}, {"timestamp", now + 6000},
+                {"syncMessage", QJsonObject{{"sentMessage", QJsonObject{
+                    {"destinationNumber", "+49222"}, {"timestamp", now + 6000},
+                    {"editMessage", QJsonObject{{"targetSentTimestamp", now},
+                        {"dataMessage", QJsonObject{{"timestamp", now + 6000}, {"message", "phone, via original ts"}}}}}}}}}});
+            CHECK(waitFor([&] { return html(view).contains("You: phone, via original ts (edited)"); }));
+            CHECK(view->messageCount() == 3);
+
+            // Reactions and replies address the latest revision
+            emit view->reactionChosen(idx, QStringLiteral("👍"));
+            CHECK(waitFor([&] { return !findCall(logFile, "sendReaction", 2).isEmpty(); }));
+            CHECK(findCall(logFile, "sendReaction", 2)["params"].toObject()["targetTimestamp"].toVariant().toLongLong() == now + 6000);
+
+            // Limits: 3 hours and 10 edits; received and attachment-only messages never
+            Message lim;
+            lim.outgoing = true;
+            lim.text = "x";
+            lim.time = QDateTime::fromMSecsSinceEpoch(now);
+            CHECK(lim.canEdit(now + 2LL * 3600 * 1000));
+            CHECK(!lim.canEdit(now + 3LL * 3600 * 1000 + 1));
+            lim.editCount = Message::kMaxEdits;
+            CHECK(!lim.canEdit(now));
+            lim.editCount = 0;
+            lim.outgoing = false;
+            CHECK(!lim.canEdit(now));
+            lim.outgoing = true;
+            lim.text.clear();
+            CHECK(!lim.canEdit(now));
+        }
+
         // --- emoji picker emits what was clicked
         EmojiPicker picker;
         QString got;
@@ -363,6 +499,12 @@ int main(int argc, char **argv)
         CHECK(h.count("[image:") >= 2);       // incoming thumbnail + own thumbnail, restored without signal-cli
         CHECK(!h.contains("👍"));          // removed reaction stays removed
         CHECK(waitFor([&] { return listHas(list, "Team"); })); // title arrives with listGroups
+        // edits survive a restart (stored as records of the encrypted history)
+        selectItem(list, "Bob");
+        CHECK(waitFor([&] { return view->messageCount() == 3; }));
+        CHECK(html(view).contains("Bob: hi from bob, corrected (edited)"));
+        CHECK(html(view).contains("You: phone, via original ts (edited)"));
+        CHECK(!html(view).contains("wrold"));
         selectItem(list, "Team");
         CHECK(waitFor([&] { return view->messageCount() == 1; }));
         CHECK(html(view).contains("doc.pdf"));

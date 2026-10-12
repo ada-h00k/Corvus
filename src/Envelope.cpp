@@ -62,6 +62,25 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
     out.kind = ParsedEnvelope::Message_;
 }
 
+// signal-cli: {"editMessage": {"targetSentTimestamp": ..., "dataMessage": {...}}}
+// (top level for incoming edits, inside syncMessage.sentMessage for edits from our other devices).
+// Only the text is taken over; attachments of an edit are not changed by the official clients either.
+static bool parseEdit(const QJsonObject &edit, ParsedEnvelope &out, qint64 envelopeTs)
+{
+    const QJsonObject dm = edit["dataMessage"].toObject();
+    const qint64 target = edit["targetSentTimestamp"].toVariant().toLongLong();
+    const QString text = dm["message"].toString();
+    if (dm.isEmpty() || target <= 0 || text.isEmpty()) return false;
+    qint64 ts = dm["timestamp"].toVariant().toLongLong();
+    if (ts <= 0) ts = envelopeTs;
+    out.kind = ParsedEnvelope::Edit;
+    out.targetTs = target;
+    out.msg.text = text;
+    out.msg.time = ts > 0 ? QDateTime::fromMSecsSinceEpoch(ts) : QDateTime::currentDateTime();
+    out.groupId = dm["groupInfo"].toObject()["groupId"].toString();
+    return true;
+}
+
 ParsedEnvelope parseEnvelope(const QJsonObject &env)
 {
     ParsedEnvelope out;
@@ -77,13 +96,23 @@ ParsedEnvelope parseEnvelope(const QJsonObject &env)
         return out;
     }
 
+    const QJsonObject edit = env["editMessage"].toObject();
+    if (!edit.isEmpty()) {
+        parseEdit(edit, out, envTs);
+        return out;
+    }
+
     const QJsonObject sent = env["syncMessage"].toObject()["sentMessage"].toObject();
     if (!sent.isEmpty()) {
         out.outgoing = true;
         out.destination = sent["destinationNumber"].toString();
         if (out.destination.isEmpty()) out.destination = sent["destination"].toString();
         if (out.destination.isEmpty()) out.destination = sent["destinationUuid"].toString();
-        parseBody(sent, out, envTs);
+        const QJsonObject sentEdit = sent["editMessage"].toObject();
+        if (!sentEdit.isEmpty())
+            parseEdit(sentEdit, out, envTs);
+        else
+            parseBody(sent, out, envTs);
         out.msg.outgoing = true;
     }
     return out;

@@ -37,7 +37,22 @@ struct Message {
     QList<Attachment> attachments;
     QHash<QString, QString> reactions; // reactor key -> emoji
 
+    // Editing: `time` stays the timestamp of the original message (its identity in the
+    // history and its place in the list). An edit arrives as a new message timestamp,
+    // which is remembered in editTs; peers refer to the message by that latest timestamp.
+    qint64 editTs = 0;   // timestamp of the latest revision (0 = never edited)
+    int editCount = 0;
+
     qint64 ts() const { return time.toMSecsSinceEpoch(); }
+    qint64 latestTs() const { return editTs > 0 ? editTs : ts(); }
+    bool isEdited() const { return editCount > 0; }
+    // Same limits as the official clients: own text messages, 3 hours after sending, 10 edits.
+    static constexpr qint64 kEditWindowMs = 3LL * 60 * 60 * 1000;
+    static constexpr int kMaxEdits = 10;
+    bool canEdit(qint64 nowMs) const
+    {
+        return outgoing && !text.isEmpty() && editCount < kMaxEdits && nowMs - ts() <= kEditWindowMs;
+    }
 };
 
 struct Conversation {

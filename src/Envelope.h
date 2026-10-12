@@ -6,7 +6,7 @@
 
 // A signal-cli "receive" envelope reduced to what the GUI needs.
 struct ParsedEnvelope {
-    enum Kind { None, Message_, Reaction } kind = None;
+    enum Kind { None, Message_, Reaction, Edit } kind = None;
     bool outgoing = false;   // sent by one of our own other devices (sync message)
     QString src;             // sender number / UUID (incoming)
     QString srcName;         // sender's profile name
@@ -18,7 +18,8 @@ struct ParsedEnvelope {
     QString emoji;
     bool remove = false;
     QString targetNumber, targetUuid;
-    qint64 targetTs = 0;
+    qint64 targetTs = 0;   // Reaction: reacted message; Edit: timestamp of the message being edited
+    // Edit: new text in msg.text, timestamp of the edit in msg.time
 };
 
 ParsedEnvelope parseEnvelope(const QJsonObject &env);
