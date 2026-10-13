@@ -158,15 +158,36 @@ history depends on retaining access to the system keychain. Use
 
 ## Downloads
 
-Every commit to `main`/`master` is built by GitHub Actions and published as a
-release (`build-<run number>`):
+Every commit pushed to `main` or `master` is built by GitHub Actions and published
+as a release tagged `build-<commit SHA>`:
 
 | File | Description |
 |------|-------------|
-| `signal-cli-qt-<sha>-x86_64.AppImage` | Self-contained (bundles Qt and the Rust library). `chmod +x` and run. |
-| `signal-cli-qt-<sha>-linux-x86_64` | Plain binary. Requires Qt ≥ 6.5 (Widgets, Network), `libqt6keychain1`, and a system credential store. |
+| `signal-cli-qt-linux-x86_64` | Linux x86_64 executable. Dynamically links to Qt; it does not bundle runtime libraries. |
+| `install.sh` | Per-user installer; expects the executable, desktop file and icon alongside it. |
+| `signal-cli-qt.desktop`, `signal-cli-qt.svg` | Application-menu launcher and icon used by the installer. |
+| `SHA256SUMS` | SHA-256 checksums for the executable and installer resources. |
 
-Linux x86_64 only. Remember to install signal-cli as well.
+Linux x86_64 only. Install Qt 6 runtime libraries (Widgets, Network, Multimedia
+and MultimediaWidgets), QtKeychain 0.14 or newer, and a system credential store.
+The installer does not install dependencies or `signal-cli`; install
+`signal-cli` separately and make sure its executable is on `PATH`.
+
+To install, download the executable, `install.sh`, `signal-cli-qt.desktop` and
+`signal-cli-qt.svg` into the same directory. From that directory, verify and
+run the installer:
+
+```sh
+sha256sum -c SHA256SUMS
+chmod +x install.sh
+./install.sh
+```
+
+The installer adds the application to your desktop's application menu, installs
+its icon, places the executable in `~/.local/opt/signal-cli-qt/`, and creates a
+command link at `~/.local/bin/signal-cli-qt`. It makes no system-wide changes
+and does not require `sudo`. Run it again after downloading a newer release to
+update the installation.
 
 ## Build from source
 
@@ -199,13 +220,13 @@ remain passphrase-protected until you switch them using the File menu.
 
 ## CI / release workflow
 
-`.github/workflows/release.yml` runs on every push to `main`/`master`
-(pull requests build only, no release):
+`.github/workflows/release.yml` runs on pushes to `main` or `master`, and can
+also be started manually:
 
-1. install Qt 6.5.3 and Rust, run `cargo test` for the history store
+1. install Qt 6.12 and Rust, run `cargo test` for the history store
 2. build with CMake (which invokes cargo)
-3. package the plain binary and an AppImage (linuxdeploy + Qt plugin)
-4. publish both as a GitHub release tagged `build-<run number>`
+3. package the executable, per-user installer, desktop launcher, icon and checksums
+4. publish the files as a GitHub release tagged `build-<commit SHA>`
 
 No secrets are needed (default `GITHUB_TOKEN` with `contents: write`).
 One release per commit accumulates quickly – delete old ones from time to time.
@@ -238,9 +259,6 @@ One release per commit accumulates quickly – delete old ones from time to time
   'signal-cli-qt'` is harmless. It appears when a desktop application ID is announced
   but no matching `.desktop` file is installed; the app now announces its ID only if
   one exists.
-- Inside the AppImage, library/plugin paths pointing into the bundle are removed from
-  the environment of signal-cli, so a system Java is not confused by bundled libraries.
-
 ## Tests
 
 ```sh
