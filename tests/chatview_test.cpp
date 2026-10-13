@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QImage>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScrollBar>
@@ -19,6 +20,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QToolButton>
+#include <QTest>
 #include <cstdio>
 
 static int g_failed = 0;
@@ -270,8 +272,17 @@ int main(int argc, char **argv)
         videoView.playVideoAttachment(0, 0, QStringLiteral("/missing-test-video.mp4"));
         auto *progress = videoView.findChild<QSlider *>(QStringLiteral("videoProgress"));
         CHECK(progress != nullptr);
-        if (progress) CHECK(progress->maximum() == 1000);
+        if (progress) {
+            CHECK(progress->maximum() == 1000);
+            QTest::mouseClick(progress, Qt::LeftButton, Qt::NoModifier,
+                              QPoint(progress->width() - 5, progress->height() / 2));
+            CHECK(progress->value() > 700);
+        }
         CHECK(videoView.findChild<QToolButton *>(QStringLiteral("videoPlayPause")) != nullptr);
+        auto *elapsed = videoView.findChild<QLabel *>(QStringLiteral("videoElapsed"));
+        auto *remaining = videoView.findChild<QLabel *>(QStringLiteral("videoRemaining"));
+        CHECK(elapsed && elapsed->text() == QStringLiteral("00:00"));
+        CHECK(remaining && remaining->text() == QStringLiteral("-00:00"));
         videoView.stopVideoPlayback();
         QSignalSpy spy(&videoView, &ChatView::attachmentActivated);
         click(videoView.viewport(), videoRect.center());
