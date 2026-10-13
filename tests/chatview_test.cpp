@@ -6,6 +6,7 @@
 #include "ChatView.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QDir>
 #include <QElapsedTimer>
@@ -368,6 +369,22 @@ int main(int argc, char **argv)
         CHECK(s.contains("outBg") && !s.contains("inBg"));
         Appearance::reset();
         CHECK(Appearance::load(pal) == Appearance::defaults(pal));
+
+        // avatar switch: on by default, stored only when switched off
+        CHECK(Appearance::defaults(pal).showAvatars);
+        Appearance off = Appearance::defaults(pal);
+        off.showAvatars = false;
+        CHECK(!(off == Appearance::defaults(pal)));
+        off.save(pal);
+        CHECK(!Appearance::load(pal).showAvatars);
+        Appearance on = off;
+        on.showAvatars = true;
+        on.save(pal);
+        QSettings s2;
+        s2.beginGroup("appearance");
+        CHECK(!s2.contains("showAvatars"));
+        CHECK(Appearance::load(pal).showAvatars);
+        Appearance::reset();
     }
 
     std::printf("appearance dialog\n");
@@ -385,6 +402,14 @@ int main(int argc, char **argv)
         CHECK(dlg.appearance() == changed);
         CHECK(pv->appearance() == changed); // live preview follows
         dlg.grab().save(shots + "/appearance_dialog.png");
+        auto *avatarBox = dlg.findChild<QCheckBox *>("showAvatars");
+        CHECK(avatarBox && avatarBox->isChecked());
+        if (avatarBox) {
+            avatarBox->click(); // switch avatars off
+            CHECK(!dlg.appearance().showAvatars);
+            avatarBox->click();
+            CHECK(dlg.appearance().showAvatars);
+        }
         dlg.setAppearance(Appearance::defaults(dlg.palette()));
         CHECK(dlg.appearance() == Appearance::defaults(dlg.palette()));
     }

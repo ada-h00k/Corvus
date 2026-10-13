@@ -10,6 +10,8 @@
 #include <QMainWindow>
 #include <QMediaPlayer>
 #include <QNetworkAccessManager>
+#include <QIcon>
+#include <QPixmap>
 #include <QPointer>
 #include <QSet>
 #include <QTimer>
@@ -136,6 +138,10 @@ private:
 
     // --- list / view
     void refreshList();
+    // Avatars in the chat list (signal-cli getAvatar, cached in memory only).
+    QIcon avatarIcon(const Conversation &c) const;
+    void fetchMissingAvatars();
+    void fetchAvatar(const QString &key);
     void showConversation(bool keepScroll = false);
     void openMessageSearch();
     void closeMessageSearch();
@@ -215,6 +221,9 @@ private:
     QStringList m_pendingFiles;
     QSet<QString> m_thumbPending;
     QSet<QString> m_gifPending;
+    QHash<QString, QPixmap> m_avatars;   // conversation key -> circular avatar (64 px)
+    QSet<QString> m_avatarTried;         // already requested since the last (re)connect
+    int m_avatarInFlight = 0;
     std::function<void(const QString &)> m_pickAction;
     QTemporaryDir m_tmp;
     QTimer m_expirationTimer;

@@ -115,6 +115,12 @@ for line in sys.stdin:
             res = [{"number": self_account, "uuid": "self-uuid", "username": current_username}]
         else:
             res = CONTACTS
+    elif m == "getAvatar":
+        # contact / group avatars exist, profile avatars do not (exercises the fallback path)
+        if "profile" in p:
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find avatar"}})
+            continue
+        res = {"data": base64.b64encode(png(48, 48)).decode()}
     elif m == "updateAccount":
         current_username = p.get("username", current_username)
         if "." not in current_username:

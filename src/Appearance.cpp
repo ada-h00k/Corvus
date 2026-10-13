@@ -12,6 +12,7 @@ Appearance Appearance::defaults(const QPalette &pal)
     a.inBg = dark ? QColor(0x3a, 0x3a, 0x3c) : QColor(0xe9, 0xe9, 0xeb);
     a.inText = dark ? QColor(0xee, 0xee, 0xee) : QColor(0x1b, 0x1b, 0x1b);
     a.radius = 16;
+    a.showAvatars = true;
     return a;
 }
 
@@ -38,6 +39,7 @@ Appearance Appearance::load(const QPalette &pal)
     bool ok = false;
     const int r = s.value(QStringLiteral("radius")).toInt(&ok);
     if (ok) a.radius = qBound(0, r, 28);
+    if (s.contains(QStringLiteral("showAvatars"))) a.showAvatars = s.value(QStringLiteral("showAvatars")).toBool();
     return a;
 }
 
@@ -56,6 +58,10 @@ void Appearance::save(const QPalette &pal) const
         s.remove(QStringLiteral("radius"));
     else
         s.setValue(QStringLiteral("radius"), radius);
+    if (showAvatars == def.showAvatars)
+        s.remove(QStringLiteral("showAvatars"));
+    else
+        s.setValue(QStringLiteral("showAvatars"), showAvatars);
 }
 
 void Appearance::reset()
@@ -66,5 +72,5 @@ void Appearance::reset()
 bool Appearance::operator==(const Appearance &o) const
 {
     return background == o.background && outBg == o.outBg && outText == o.outText && inBg == o.inBg &&
-           inText == o.inText && radius == o.radius;
+           inText == o.inText && radius == o.radius && showAvatars == o.showAvatars;
 }
