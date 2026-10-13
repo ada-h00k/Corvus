@@ -164,22 +164,21 @@ as a release tagged `build-<commit SHA>`:
 | File | Description |
 |------|-------------|
 | `signal-cli-qt-linux-x86_64` | Linux x86_64 executable. Dynamically links to Qt; it does not bundle runtime libraries. |
-| `install.sh` | Per-user installer; expects the executable, desktop file and icon alongside it. |
-| `signal-cli-qt.desktop`, `signal-cli-qt.svg` | Application-menu launcher and icon used by the installer. |
-| `SHA256SUMS` | SHA-256 checksums for the executable and installer resources. |
+| `signal-cli-qt-linux-x86_64-installer.tar.gz` | Install bundle containing the executable, `install.sh`, desktop launcher, and icon. |
+| `SHA256SUMS` | SHA-256 checksums for the executable and installer archive. |
 
 Linux x86_64 only. Install Qt 6 runtime libraries (Widgets, Network, Multimedia
 and MultimediaWidgets), QtKeychain 0.14 or newer, and a system credential store.
 The installer does not install dependencies or `signal-cli`; install
 `signal-cli` separately and make sure its executable is on `PATH`.
 
-To install, download the executable, `install.sh`, `signal-cli-qt.desktop` and
-`signal-cli-qt.svg` into the same directory. From that directory, verify and
-run the installer:
+To install, download the standalone executable, installer archive, and
+`SHA256SUMS`. Verify the downloads, extract the archive, and run the included
+installer:
 
 ```sh
 sha256sum -c SHA256SUMS
-chmod +x install.sh
+tar -xzf signal-cli-qt-linux-x86_64-installer.tar.gz
 ./install.sh
 ```
 
@@ -225,8 +224,8 @@ also be started manually:
 
 1. install Qt 6.12 and Rust, run `cargo test` for the history store
 2. build with CMake (which invokes cargo)
-3. package the executable, per-user installer, desktop launcher, icon and checksums
-4. publish the files as a GitHub release tagged `build-<commit SHA>`
+3. package the standalone executable and an installer archive with its menu resources
+4. publish both, with checksums, as a GitHub release tagged `build-<commit SHA>`
 
 No secrets are needed (default `GITHUB_TOKEN` with `contents: write`).
 One release per commit accumulates quickly – delete old ones from time to time.

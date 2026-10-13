@@ -181,10 +181,14 @@ jobs:
 
           cp "$BINARY" dist/signal-cli-qt-linux-x86_64
           chmod +x dist/signal-cli-qt-linux-x86_64
-          cp packaging/install.sh dist/install.sh
-          cp packaging/signal-cli-qt.desktop dist/signal-cli-qt.desktop
-          cp packaging/signal-cli-qt.svg dist/signal-cli-qt.svg
-          chmod +x dist/install.sh
+
+          mkdir -p "$RUNNER_TEMP/signal-cli-qt-installer"
+          cp dist/signal-cli-qt-linux-x86_64 "$RUNNER_TEMP/signal-cli-qt-installer/"
+          cp packaging/install.sh packaging/signal-cli-qt.desktop packaging/signal-cli-qt.svg \
+            "$RUNNER_TEMP/signal-cli-qt-installer/"
+          chmod +x "$RUNNER_TEMP/signal-cli-qt-installer/install.sh"
+          tar -czf "$GITHUB_WORKSPACE/dist/signal-cli-qt-linux-x86_64-installer.tar.gz" \
+            -C "$RUNNER_TEMP/signal-cli-qt-installer" .
 
       # --------------------------------------------------
       # Validate output and checksums
@@ -195,9 +199,9 @@ jobs:
           set -euo pipefail
 
           test -s dist/signal-cli-qt-linux-x86_64
-          test -s dist/install.sh
-          test -s dist/signal-cli-qt.desktop
-          test -s dist/signal-cli-qt.svg
+          test -s dist/signal-cli-qt-linux-x86_64-installer.tar.gz
+
+          tar -tzf dist/signal-cli-qt-linux-x86_64-installer.tar.gz
 
           file dist/signal-cli-qt-linux-x86_64
 
@@ -205,9 +209,7 @@ jobs:
             cd dist
             sha256sum \
               signal-cli-qt-linux-x86_64 \
-              install.sh \
-              signal-cli-qt.desktop \
-              signal-cli-qt.svg \
+              signal-cli-qt-linux-x86_64-installer.tar.gz \
               > SHA256SUMS
           )
 
@@ -242,8 +244,8 @@ jobs:
 
             Files:
             - `signal-cli-qt-linux-x86_64` — plain executable
-            - `install.sh`, `signal-cli-qt.desktop`, `signal-cli-qt.svg` — per-user installer and its menu resources
-            - `SHA256SUMS` — SHA-256 checksums for the files above
+            - `signal-cli-qt-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
+            - `SHA256SUMS` — SHA-256 checksums for the executable and installer archive
 
             `signal-cli` must be installed separately.
           draft: false
@@ -252,7 +254,5 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/signal-cli-qt-linux-x86_64
-            dist/install.sh
-            dist/signal-cli-qt.desktop
-            dist/signal-cli-qt.svg
+            dist/signal-cli-qt-linux-x86_64-installer.tar.gz
             dist/SHA256SUMS
