@@ -181,6 +181,10 @@ jobs:
 
           cp "$BINARY" dist/signal-cli-qt-linux-x86_64
           chmod +x dist/signal-cli-qt-linux-x86_64
+          cp packaging/install.sh dist/install.sh
+          cp packaging/signal-cli-qt.desktop dist/signal-cli-qt.desktop
+          cp packaging/signal-cli-qt.svg dist/signal-cli-qt.svg
+          chmod +x dist/install.sh
 
       # --------------------------------------------------
       # Validate output and checksums
@@ -191,6 +195,9 @@ jobs:
           set -euo pipefail
 
           test -s dist/signal-cli-qt-linux-x86_64
+          test -s dist/install.sh
+          test -s dist/signal-cli-qt.desktop
+          test -s dist/signal-cli-qt.svg
 
           file dist/signal-cli-qt-linux-x86_64
 
@@ -198,6 +205,9 @@ jobs:
             cd dist
             sha256sum \
               signal-cli-qt-linux-x86_64 \
+              install.sh \
+              signal-cli-qt.desktop \
+              signal-cli-qt.svg \
               > SHA256SUMS
           )
 
@@ -232,7 +242,8 @@ jobs:
 
             Files:
             - `signal-cli-qt-linux-x86_64` — plain executable
-            - `SHA256SUMS` — SHA-256 checksums
+            - `install.sh`, `signal-cli-qt.desktop`, `signal-cli-qt.svg` — per-user installer and its menu resources
+            - `SHA256SUMS` — SHA-256 checksums for the files above
 
             `signal-cli` must be installed separately.
           draft: false
@@ -241,4 +252,7 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/signal-cli-qt-linux-x86_64
+            dist/install.sh
+            dist/signal-cli-qt.desktop
+            dist/signal-cli-qt.svg
             dist/SHA256SUMS
