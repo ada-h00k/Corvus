@@ -1743,15 +1743,15 @@ bool MainWindow::attachFromMimeData(const QMimeData *md)
 void MainWindow::newConversation()
 {
     bool ok = false;
-    const QString number = QInputDialog::getText(this, tr("New conversation"),
-                                                 tr("Phone number (international format, e.g. +4915112345678):"),
+    const QString recipient = QInputDialog::getText(this, tr("New conversation"),
+                                                 tr("Phone number or Signal username (e.g. username.1234):"),
                                                  QLineEdit::Normal, QString(), &ok)
                                .trimmed();
-    if (!ok || number.isEmpty()) return;
-    Conversation &c = conv(number);
-    if (c.archived) setArchived(number, false);
+    if (!ok || recipient.isEmpty()) return;
+    Conversation &c = conv(recipient);
+    if (c.archived) setArchived(recipient, false);
     m_showArchived = false;
-    m_current = number;
+    m_current = recipient;
     refreshList();
     showConversation();
 }
