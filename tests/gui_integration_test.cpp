@@ -28,6 +28,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMimeData>
 #include <QMovie>
 #include <QMediaPlayer>
@@ -208,6 +209,45 @@ static bool chooseChatNickname(MainWindow &window, QListWidget *list, const QStr
         }
     });
     QMetaObject::invokeMethod(list, "customContextMenuRequested", Qt::DirectConnection, Q_ARG(QPoint, pos));
+    return waitFor([&] { return answered && QApplication::activeModalWidget() == nullptr; }, 3000);
+}
+
+static bool startConversation(MainWindow &window, const QString &recipient)
+{
+    QMenu *fileMenu = nullptr;
+    for (QAction *menuAction : window.menuBar()->actions()) {
+        if (menuAction->text().contains(QStringLiteral("File"))) {
+            fileMenu = menuAction->menu();
+            break;
+        }
+    }
+    if (!fileMenu) return false;
+
+    QAction *newConversationAction = nullptr;
+    for (QAction *action : fileMenu->actions()) {
+        if (action->text().contains(QStringLiteral("New conversation"))) {
+            newConversationAction = action;
+            break;
+        }
+    }
+    if (!newConversationAction) return false;
+
+    bool answered = false;
+    QTimer::singleShot(100, &window, [&] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        if (!dialog) return;
+        CHECK(dialog->labelText().contains(QStringLiteral("Signal username")));
+        auto *edit = dialog->findChild<QLineEdit *>();
+        if (!edit) {
+            dialog->reject();
+            answered = true;
+            return;
+        }
+        edit->setText(recipient);
+        answered = true;
+        dialog->accept();
+    });
+    newConversationAction->trigger();
     return waitFor([&] { return answered && QApplication::activeModalWidget() == nullptr; }, 3000);
 }
 
@@ -861,6 +901,9 @@ int main(int argc, char **argv)
 
         CHECK(chooseChatNickname(w, list, "Bob", "Bobby"));
         CHECK(listHas(list, "Bobby"));
+
+        CHECK(startConversation(w, QStringLiteral("alice.1234")));
+                CHECK(listHas(list, "alice.1234"));
 
         CHECK(g_unexpectedBox.isEmpty());
         w.close();
