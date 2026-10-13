@@ -224,6 +224,25 @@ MainWindow::MainWindow()
     help->addAction(tr("Check for signal-cli update"), this, [this] { checkForUpdates(false); });
     help->addAction(tr("About"), this, &MainWindow::showAbout);
 
+    for (int index = 0; index < 9; ++index) {
+        auto *action = new QAction(this);
+        action->setShortcut(QKeySequence(Qt::CTRL | (Qt::Key_1 + index)));
+        action->setShortcutContext(Qt::WindowShortcut);
+        addAction(action);
+        connect(action, &QAction::triggered, this, [this, index] {
+            int conversationIndex = 0;
+            for (int row = 0; row < m_list->count(); ++row) {
+                QListWidgetItem *item = m_list->item(row);
+                const QString key = item->data(Qt::UserRole).toString();
+                if (key == kFolderKey || key == kBackKey) continue;
+                if (conversationIndex++ == index) {
+                    m_list->setCurrentItem(item);
+                    return;
+                }
+            }
+        });
+    }
+
     // List: selection, folder navigation, context menu
     connect(m_list, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem *cur, QListWidgetItem *) { onSelectionChanged(cur); });
