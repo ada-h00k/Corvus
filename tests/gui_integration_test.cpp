@@ -269,6 +269,39 @@ static QJsonObject findCall(const QString &log, const QString &method, int nth =
     return {};
 }
 
+static QJsonObject lastCall(const QString &log, const QString &method)
+{
+    QJsonObject last;
+    for (const QJsonObject &o : readLog(log))
+        if (o["method"].toString() == method) last = o;
+    return last;
+}
+
+static QAction *profileAction(MainWindow &window, const QString &label)
+{
+    QMenu *settingsMenu = nullptr;
+    for (QAction *menuAction : window.menuBar()->actions()) {
+        if (menuAction->text().contains(QStringLiteral("Settings"))) {
+            settingsMenu = menuAction->menu();
+            break;
+        }
+    }
+    if (!settingsMenu) return nullptr;
+
+    QMenu *profileMenu = nullptr;
+    for (QAction *action : settingsMenu->actions()) {
+        if (action->text().contains(QStringLiteral("Profile settings"))) {
+            profileMenu = action->menu();
+            break;
+        }
+    }
+    if (!profileMenu) return nullptr;
+
+    for (QAction *action : profileMenu->actions())
+        if (action->text().contains(label)) return action;
+    return nullptr;
+}
+
 static bool loggedAttachmentFetch(const QString &log, const QString &attachmentId)
 {
     for (const QJsonObject &request : readLog(log))
@@ -276,6 +309,93 @@ static bool loggedAttachmentFetch(const QString &log, const QString &attachmentI
             request["params"].toObject()["id"].toString() == attachmentId)
             return true;
     return false;
+}
+
+static bool changeSignalUsername(MainWindow &window, const QString &username, const QString &logFile)
+{
+    QAction *usernameAction = profileAction(window, QStringLiteral("Signal username"));
+    if (!usernameAction) return false;
+
+    bool answered = false;
+    bool showedCurrentUsername = false;
+    QTimer dialogPoll;
+    QObject::connect(&dialogPoll, &QTimer::timeout, &window, [&] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        if (!dialog) return;
+        showedCurrentUsername = dialog->labelText().contains(QStringLiteral("oldname.1234"));
+        auto *edit = dialog->findChild<QLineEdit *>();
+        if (!edit) {
+            dialog->reject();
+            answered = true;
+            dialogPoll.stop();
+            return;
+        }
+        edit->setText(username);
+        answered = true;
+        dialogPoll.stop();
+        dialog->accept();
+    });
+    dialogPoll.start(10);
+    usernameAction->trigger();
+    const bool dialogClosed = waitFor([&] { return answered && !QApplication::activeModalWidget(); }, 5000);
+    dialogPoll.stop();
+    CHECK(dialogClosed);
+    CHECK(showedCurrentUsername);
+    if (!dialogClosed || !showedCurrentUsername) return false;
+    const bool updated = waitFor([&] {
+        const QJsonObject call = lastCall(logFile, "updateAccount");
+        return call["params"].toObject()["username"].toString() == username;
+    }, 5000);
+    CHECK(updated);
+    return updated;
+}
+
+static bool changeProfileDisplayName(MainWindow &window, const QString &displayName, const QString &logFile)
+{
+    QAction *nameAction = profileAction(window, QStringLiteral("Display name"));
+    if (!nameAction) return false;
+
+    bool answered = false;
+    QTimer dialogPoll;
+    QObject::connect(&dialogPoll, &QTimer::timeout, &window, [&] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        if (!dialog) return;
+        auto *edit = dialog->findChild<QLineEdit *>();
+        if (!edit) {
+            dialog->reject();
+            answered = true;
+            dialogPoll.stop();
+            return;
+        }
+        edit->setText(displayName);
+        answered = true;
+        dialogPoll.stop();
+        dialog->accept();
+    });
+    dialogPoll.start(10);
+    nameAction->trigger();
+    const bool closed = waitFor([&] { return answered && !QApplication::activeModalWidget(); }, 5000);
+    dialogPoll.stop();
+    const bool updated = waitFor([&] {
+        const QJsonObject params = lastCall(logFile, "updateProfile")["params"].toObject();
+        return params["givenName"].toString() == displayName && params["familyName"].toString().isEmpty();
+    }, 5000);
+    CHECK(closed);
+    CHECK(updated);
+    return closed && updated;
+}
+
+static bool removeProfileAvatar(MainWindow &window, const QString &logFile)
+{
+    QAction *removeAction = profileAction(window, QStringLiteral("Remove avatar"));
+    if (!removeAction) return false;
+    removeAction->trigger();
+    const bool removed = waitFor([&] {
+        const QJsonObject params = lastCall(logFile, "updateProfile")["params"].toObject();
+        return params["removeAvatar"].toBool();
+    }, 5000);
+    CHECK(removed);
+    return removed;
 }
 
 static void inject(const QString &file, const QJsonObject &env)
@@ -457,6 +577,10 @@ int main(int argc, char **argv)
             }
             CHECK(found);
         }
+        CHECK(changeSignalUsername(w, QStringLiteral("newname"), logFile));
+        CHECK(changeProfileDisplayName(w, QStringLiteral("New Display Name"), logFile));
+        CHECK(profileAction(w, QStringLiteral("Choose avatar")) != nullptr);
+        CHECK(removeProfileAvatar(w, logFile));
 
         CHECK(chooseChatExpiration(w, list, "Team", 4)); // 1 hour
         CHECK(waitFor([&] { return !findCall(logFile, "updateGroup").isEmpty(); }));

@@ -75,6 +75,10 @@ private slots:
     void changeHistoryProtection();
     void editAppearance();
     void editNotifications();
+    void editSignalUsername();
+    void editProfileDisplayName();
+    void chooseProfileAvatar();
+    void removeProfileAvatar();
     void searchGifs();
     void configureGiphyApiKey();
     void quitApplication();
@@ -164,6 +168,7 @@ private:
     void saveAttachment(int msgIdx, int attIdx);
     // Files or an image (e.g. a screenshot) from drag & drop / the clipboard -> pending attachments.
     bool attachFromMimeData(const QMimeData *md);
+    void sendProfileUpdate(const QJsonObject &params, const QString &successMessage);
 
     SignalCli m_cli;
     HistoryStore m_store;

@@ -95,6 +95,9 @@ CONTACTS = [
     {"number": "+49333", "uuid": "u-carol", "name": "Carol", "isArchived": True, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
 ]
 GROUPS = [{"id": "R1JPVVA=", "name": "Team", "isMember": True, "isBlocked": False, "messageExpirationTime": 0}]
+current_username = "oldname.1234"
+account_index = args.index("-a") + 1 if "-a" in args else -1
+self_account = args[account_index] if account_index > 0 else ""
 sent = 0
 log = os.environ.get("MOCK_LOG")
 
@@ -108,7 +111,17 @@ for line in sys.stdin:
             f.write(json.dumps(req) + "\n")
     m, p, rid = req.get("method"), req.get("params", {}), req.get("id")
     if m == "listContacts":
-        res = CONTACTS
+        if self_account in p.get("recipients", []):
+            res = [{"number": self_account, "uuid": "self-uuid", "username": current_username}]
+        else:
+            res = CONTACTS
+    elif m == "updateAccount":
+        current_username = p.get("username", current_username)
+        if "." not in current_username:
+            current_username += ".5678"
+        res = {"username": current_username, "usernameLink": "https://signal.me/#eu/test-link"}
+    elif m == "updateProfile":
+        res = {}
     elif m == "listGroups":
         res = GROUPS
     elif m == "updateContact":
