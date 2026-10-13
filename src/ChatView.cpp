@@ -17,6 +17,7 @@
 #include <QPainterPath>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QSlider>
 #include <QTextDocument>
 #include <QTimer>
 #include <QToolButton>
@@ -295,14 +296,38 @@ void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const 
     m_videoAudioOutput = new QAudioOutput(this);
     m_videoWidget = new QVideoWidget(viewport());
     m_videoToggle = new QToolButton(viewport());
+    m_videoProgress = new QSlider(Qt::Horizontal, viewport());
     m_videoToggle->setText(QStringLiteral("Ⅱ"));
+    m_videoToggle->setObjectName(QStringLiteral("videoPlayPause"));
     m_videoToggle->setToolTip(tr("Pause video"));
     m_videoToggle->setAccessibleName(tr("Pause video"));
     m_videoToggle->setFixedSize(32, 28);
     m_videoToggle->setStyleSheet(QStringLiteral("QToolButton { background: rgba(0,0,0,180); color: white; border: 0; }"));
+    m_videoProgress->setObjectName(QStringLiteral("videoProgress"));
+    m_videoProgress->setRange(0, 1000);
+    m_videoProgress->setToolTip(tr("Video position"));
+    m_videoProgress->setAccessibleName(tr("Video position"));
+    m_videoProgress->setFixedHeight(28);
+    m_videoProgress->setStyleSheet(QStringLiteral(
+        "QSlider { background: rgba(0,0,0,180); padding: 0 8px; }"
+        "QSlider::groove:horizontal { height: 4px; background: rgba(255,255,255,100); }"
+        "QSlider::sub-page:horizontal { background: white; }"
+        "QSlider::handle:horizontal { width: 12px; margin: -5px 0; border-radius: 6px; background: white; }"));
     m_videoPlayer->setAudioOutput(m_videoAudioOutput);
     m_videoPlayer->setVideoOutput(m_videoWidget);
     connect(m_videoToggle, &QToolButton::clicked, this, &ChatView::toggleVideoPlayback);
+    connect(m_videoProgress, &QSlider::sliderMoved, this, [this](int value) {
+        if (m_videoPlayer && m_videoPlayer->duration() > 0)
+            m_videoPlayer->setPosition(qint64(value) * m_videoPlayer->duration() / 1000);
+    });
+    connect(m_videoPlayer, &QMediaPlayer::positionChanged, this, [this](qint64 position) {
+        if (m_videoProgress && m_videoPlayer && !m_videoProgress->isSliderDown() && m_videoPlayer->duration() > 0)
+            m_videoProgress->setValue(int(position * 1000 / m_videoPlayer->duration()));
+    });
+    connect(m_videoPlayer, &QMediaPlayer::durationChanged, this, [this](qint64 duration) {
+        if (m_videoProgress && m_videoPlayer && duration > 0)
+            m_videoProgress->setValue(int(m_videoPlayer->position() * 1000 / duration));
+    });
     connect(m_videoPlayer, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
         if (!m_videoToggle) return;
         const bool playing = state == QMediaPlayer::PlayingState;
@@ -319,6 +344,7 @@ void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const 
     m_videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
     m_videoWidget->show();
     m_videoToggle->show();
+    m_videoProgress->show();
     updateVideoGeometry();
     m_videoPlayer->setSource(QUrl::fromLocalFile(path));
     m_videoPlayer->play();
@@ -344,10 +370,12 @@ void ChatView::stopVideoPlayback()
         m_videoPlayer->setAudioOutput(static_cast<QAudioOutput *>(nullptr));
     }
     delete m_videoToggle;
+    delete m_videoProgress;
     delete m_videoPlayer;
     delete m_videoAudioOutput;
     delete m_videoWidget;
     m_videoToggle = nullptr;
+    m_videoProgress = nullptr;
     m_videoWidget = nullptr;
     m_videoPlayer = nullptr;
     m_videoAudioOutput = nullptr;
@@ -359,7 +387,7 @@ void ChatView::stopVideoPlayback()
 
 void ChatView::updateVideoGeometry()
 {
-    if (!m_videoWidget || !m_videoToggle) return;
+    if (!m_videoWidget || !m_videoToggle || !m_videoProgress) return;
     int index = -1;
     for (int i = 0; i < m_msgs.size(); ++i) {
         if (m_msgs[i].ts() == m_videoMessageTs) { index = i; break; }
@@ -374,14 +402,19 @@ void ChatView::updateVideoGeometry()
     if (visible.isEmpty()) {
         m_videoWidget->hide();
         m_videoToggle->hide();
+        m_videoProgress->hide();
         return;
     }
     m_videoWidget->setGeometry(rect);
-    m_videoToggle->move(rect.right() - m_videoToggle->width() - 6,
-                        rect.bottom() - m_videoToggle->height() - 6);
+    const int controlsY = rect.bottom() - m_videoToggle->height() - 6;
+    m_videoToggle->move(rect.left() + 6, controlsY);
+    m_videoProgress->setGeometry(rect.left() + m_videoToggle->width() + 10, controlsY,
+                                 qMax(40, rect.width() - m_videoToggle->width() - 22), m_videoToggle->height());
     m_videoWidget->show();
     m_videoToggle->show();
+    m_videoProgress->show();
     m_videoToggle->raise();
+    m_videoProgress->raise();
 }
 
 void ChatView::setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data)

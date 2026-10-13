@@ -15,6 +15,7 @@ class QMediaPlayer;
 class QAudioOutput;
 class QVideoWidget;
 class QToolButton;
+class QSlider;
 
 // Message list that paints rounded bubbles itself: quotes, inline images,
 // file rows, reactions, date separators, links and per-message text selection.
@@ -152,6 +153,7 @@ private:
     QAudioOutput *m_videoAudioOutput = nullptr;
     QVideoWidget *m_videoWidget = nullptr;
     QToolButton *m_videoToggle = nullptr;
+    QSlider *m_videoProgress = nullptr;
     qint64 m_videoMessageTs = 0;
     int m_videoAttachment = -1;
     qint64 m_videoLoadingTs = 0;
