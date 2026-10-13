@@ -55,6 +55,8 @@ set(APP_SOURCES
     src/Appearance.cpp
     src/AppearanceDialog.h
     src/AppearanceDialog.cpp
+    src/ProfileDialog.h
+    src/ProfileDialog.cpp
     src/Attachments.h
     src/Attachments.cpp
     src/Records.h

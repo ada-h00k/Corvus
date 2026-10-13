@@ -6,6 +6,7 @@
 #include "ImageViewer.h"
 #include "MainWindow.h"
 #include "PassphraseDialog.h"
+#include "ProfileDialog.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -33,6 +34,7 @@
 #include <QMovie>
 #include <QMediaPlayer>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QTcpServer>
@@ -277,29 +279,37 @@ static QJsonObject lastCall(const QString &log, const QString &method)
     return last;
 }
 
-static QAction *profileAction(MainWindow &window, const QString &label)
+// Settings → "Profile settings …" opens a window of its own (ProfileDialog).
+static QAction *profileAction(MainWindow &window)
 {
-    QMenu *settingsMenu = nullptr;
     for (QAction *menuAction : window.menuBar()->actions()) {
-        if (menuAction->text().contains(QStringLiteral("Settings"))) {
-            settingsMenu = menuAction->menu();
-            break;
-        }
+        if (!menuAction->text().contains(QStringLiteral("Settings"))) continue;
+        for (QAction *action : menuAction->menu()->actions())
+            if (action->text().contains(QStringLiteral("Profile settings"))) return action;
     }
-    if (!settingsMenu) return nullptr;
-
-    QMenu *profileMenu = nullptr;
-    for (QAction *action : settingsMenu->actions()) {
-        if (action->text().contains(QStringLiteral("Profile settings"))) {
-            profileMenu = action->menu();
-            break;
-        }
-    }
-    if (!profileMenu) return nullptr;
-
-    for (QAction *action : profileMenu->actions())
-        if (action->text().contains(label)) return action;
     return nullptr;
+}
+
+static ProfileDialog *openProfileDialog(MainWindow &window)
+{
+    QAction *action = profileAction(window);
+    if (!action) return nullptr;
+    action->trigger();
+    ProfileDialog *dialog = nullptr;
+    waitFor([&] {
+        for (QWidget *w : QApplication::topLevelWidgets())
+            if (auto *d = qobject_cast<ProfileDialog *>(w)) { dialog = d; return d->isVisible(); }
+        return false;
+    }, 3000);
+    return dialog;
+}
+
+static void closeProfileDialog(ProfileDialog *dialog)
+{
+    if (!dialog) return;
+    QPointer<ProfileDialog> guard(dialog);
+    dialog->close();
+    waitFor([&] { return guard.isNull(); }, 3000);
 }
 
 static bool loggedAttachmentFetch(const QString &log, const QString &attachmentId)
@@ -311,88 +321,49 @@ static bool loggedAttachmentFetch(const QString &log, const QString &attachmentI
     return false;
 }
 
-static bool changeSignalUsername(MainWindow &window, const QString &username, const QString &logFile)
+static bool changeSignalUsername(ProfileDialog *dialog, const QString &username, const QString &logFile)
 {
-    QAction *usernameAction = profileAction(window, QStringLiteral("Signal username"));
-    if (!usernameAction) return false;
-
-    bool answered = false;
-    bool showedCurrentUsername = false;
-    QTimer dialogPoll;
-    QObject::connect(&dialogPoll, &QTimer::timeout, &window, [&] {
-        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
-        if (!dialog) return;
-        showedCurrentUsername = dialog->labelText().contains(QStringLiteral("oldname.1234"));
-        auto *edit = dialog->findChild<QLineEdit *>();
-        if (!edit) {
-            dialog->reject();
-            answered = true;
-            dialogPoll.stop();
-            return;
-        }
-        edit->setText(username);
-        answered = true;
-        dialogPoll.stop();
-        dialog->accept();
-    });
-    dialogPoll.start(10);
-    usernameAction->trigger();
-    const bool dialogClosed = waitFor([&] { return answered && !QApplication::activeModalWidget(); }, 5000);
-    dialogPoll.stop();
-    CHECK(dialogClosed);
-    CHECK(showedCurrentUsername);
-    if (!dialogClosed || !showedCurrentUsername) return false;
+    auto *label = dialog->findChild<QLabel *>(QStringLiteral("currentUsernameLabel"));
+    auto *edit = dialog->findChild<QLineEdit *>(QStringLiteral("usernameEdit"));
+    auto *apply = dialog->findChild<QPushButton *>(QStringLiteral("usernameApply"));
+    CHECK(label && edit && apply);
+    if (!label || !edit || !apply) return false;
+    const bool showedCurrent = waitFor([&] { return label->text().contains(QStringLiteral("oldname.1234")); }, 5000);
+    CHECK(showedCurrent);
+    edit->setText(username);
+    apply->click();
     const bool updated = waitFor([&] {
         const QJsonObject call = lastCall(logFile, "updateAccount");
         return call["params"].toObject()["username"].toString() == username;
     }, 5000);
     CHECK(updated);
-    return updated;
+    return showedCurrent && updated;
 }
 
-static bool changeProfileDisplayName(MainWindow &window, const QString &displayName, const QString &logFile)
+static bool changeProfileDisplayName(ProfileDialog *dialog, const QString &displayName, const QString &logFile)
 {
-    QAction *nameAction = profileAction(window, QStringLiteral("Display name"));
-    if (!nameAction) return false;
-
-    bool answered = false;
-    QTimer dialogPoll;
-    QObject::connect(&dialogPoll, &QTimer::timeout, &window, [&] {
-        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
-        if (!dialog) return;
-        auto *edit = dialog->findChild<QLineEdit *>();
-        if (!edit) {
-            dialog->reject();
-            answered = true;
-            dialogPoll.stop();
-            return;
-        }
-        edit->setText(displayName);
-        answered = true;
-        dialogPoll.stop();
-        dialog->accept();
-    });
-    dialogPoll.start(10);
-    nameAction->trigger();
-    const bool closed = waitFor([&] { return answered && !QApplication::activeModalWidget(); }, 5000);
-    dialogPoll.stop();
+    auto *edit = dialog->findChild<QLineEdit *>(QStringLiteral("displayNameEdit"));
+    auto *apply = dialog->findChild<QPushButton *>(QStringLiteral("displayNameApply"));
+    CHECK(edit && apply);
+    if (!edit || !apply) return false;
+    edit->setText(displayName);
+    apply->click();
     const bool updated = waitFor([&] {
         const QJsonObject params = lastCall(logFile, "updateProfile")["params"].toObject();
         return params["givenName"].toString() == displayName && params["familyName"].toString().isEmpty();
     }, 5000);
-    CHECK(closed);
     CHECK(updated);
-    return closed && updated;
+    return updated;
 }
 
-static bool removeProfileAvatar(MainWindow &window, const QString &logFile)
+static bool removeProfileAvatar(ProfileDialog *dialog, const QString &logFile)
 {
-    QAction *removeAction = profileAction(window, QStringLiteral("Remove avatar"));
-    if (!removeAction) return false;
-    removeAction->trigger();
+    auto *remove = dialog->findChild<QPushButton *>(QStringLiteral("avatarRemove"));
+    CHECK(remove != nullptr);
+    if (!remove) return false;
+    remove->click();
     const bool removed = waitFor([&] {
-        const QJsonObject params = lastCall(logFile, "updateProfile")["params"].toObject();
-        return params["removeAvatar"].toBool();
+        return lastCall(logFile, "updateProfile")["params"].toObject()["removeAvatar"].toBool();
     }, 5000);
     CHECK(removed);
     return removed;
@@ -577,10 +548,16 @@ int main(int argc, char **argv)
             }
             CHECK(found);
         }
-        CHECK(changeSignalUsername(w, QStringLiteral("newname"), logFile));
-        CHECK(changeProfileDisplayName(w, QStringLiteral("New Display Name"), logFile));
-        CHECK(profileAction(w, QStringLiteral("Choose avatar")) != nullptr);
-        CHECK(removeProfileAvatar(w, logFile));
+        ProfileDialog *profile = openProfileDialog(w);
+        CHECK(profile != nullptr);
+        if (profile) {
+            CHECK(profile->windowTitle().contains(QStringLiteral("Profile settings")));
+            CHECK(profile->findChild<QPushButton *>(QStringLiteral("avatarChoose")) != nullptr);
+            CHECK(changeSignalUsername(profile, QStringLiteral("newname"), logFile));
+            CHECK(changeProfileDisplayName(profile, QStringLiteral("New Display Name"), logFile));
+            CHECK(removeProfileAvatar(profile, logFile));
+            closeProfileDialog(profile);
+        }
 
         CHECK(chooseChatExpiration(w, list, "Team", 4)); // 1 hour
         CHECK(waitFor([&] { return !findCall(logFile, "updateGroup").isEmpty(); }));

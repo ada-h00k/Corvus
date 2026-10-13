@@ -15,6 +15,7 @@
 #include "NotificationDialog.h"
 #include "Notifier.h"
 #include "PassphraseDialog.h"
+#include "ProfileDialog.h"
 #include "Records.h"
 #include "SoundPlayer.h"
 
@@ -217,11 +218,7 @@ MainWindow::MainWindow()
     settings->addAction(tr("Appearance …"), this, &MainWindow::editAppearance);
     settings->addAction(tr("Notifications && sound …"), this, &MainWindow::editNotifications);
     settings->addAction(tr("History protection …"), this, &MainWindow::changeHistoryProtection);
-    QMenu *profile = settings->addMenu(tr("Profile settings"));
-    profile->addAction(tr("Signal username …"), this, &MainWindow::editSignalUsername);
-    profile->addAction(tr("Display name …"), this, &MainWindow::editProfileDisplayName);
-    profile->addAction(tr("Choose avatar …"), this, &MainWindow::chooseProfileAvatar);
-    profile->addAction(tr("Remove avatar"), this, &MainWindow::removeProfileAvatar);
+    settings->addAction(tr("Profile settings …"), this, &MainWindow::editProfile);
     settings->addAction(tr("GIPHY API key …"), this, &MainWindow::configureGiphyApiKey);
     settings->addAction(tr("Path to signal-cli …"), this, &MainWindow::chooseExecutable);
 
@@ -2654,18 +2651,55 @@ void MainWindow::editNotifications()
     applyNotificationSettings();
 }
 
-void MainWindow::editSignalUsername()
+void MainWindow::editProfile()
 {
+    if (m_profileDialog) { // already open: just bring it to the front
+        m_profileDialog->show();
+        m_profileDialog->raise();
+        m_profileDialog->activateWindow();
+        return;
+    }
     if (m_account.isEmpty() || !m_cli.isRunning()) {
-        statusBar()->showMessage(tr("Connect to signal-cli before viewing your username."), 8000);
+        statusBar()->showMessage(tr("Connect to signal-cli before editing your profile."), 8000);
         return;
     }
 
+    auto *dlg = new ProfileDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    m_profileDialog = dlg;
+    connect(dlg, &ProfileDialog::usernameChosen, this, &MainWindow::applySignalUsername);
+    connect(dlg, &ProfileDialog::displayNameChosen, this, [this](const QString &name) {
+        sendProfileUpdate({{QStringLiteral("givenName"), name},
+                           {QStringLiteral("familyName"), QString()},
+                           {QStringLiteral("removeAvatar"), false}},
+                          tr("Signal display name updated."));
+    });
+    connect(dlg, &ProfileDialog::avatarChosen, this, [this](const QString &path) {
+        sendProfileUpdate({{QStringLiteral("avatar"), path}, {QStringLiteral("removeAvatar"), false}},
+                          tr("Signal avatar updated."));
+    });
+    connect(dlg, &ProfileDialog::avatarRemoveRequested, this, [this] {
+        sendProfileUpdate({{QStringLiteral("removeAvatar"), true}}, tr("Signal avatar removed."));
+    });
+    dlg->show();
+    loadSignalUsername();
+}
+
+void MainWindow::reportProfileStatus(const QString &message, bool error)
+{
+    statusBar()->showMessage(message, 10000);
+    if (m_profileDialog) m_profileDialog->setStatus(message, error);
+}
+
+void MainWindow::loadSignalUsername()
+{
     m_cli.call(QStringLiteral("listContacts"),
                {{QStringLiteral("recipients"), QJsonArray{m_account}}},
                [this](const QJsonValue &res, const QString &err) {
+        if (!m_profileDialog) return;
         if (!err.isEmpty()) {
-            statusBar()->showMessage(tr("Could not read your Signal username: %1").arg(err), 10000);
+            m_profileDialog->setCurrentUsername(tr("unavailable"));
+            reportProfileStatus(tr("Could not read your Signal username: %1").arg(err), true);
             return;
         }
 
@@ -2680,76 +2714,42 @@ void MainWindow::editSignalUsername()
                 break;
             }
         }
-
-        const QString current = !accountFound ? tr("unavailable")
-                                   : currentUsername.isEmpty() ? tr("not set") : currentUsername;
-        bool accepted = false;
-        const QString username = QInputDialog::getText(
-            this, tr("Signal username"),
-            tr("Current username: %1\n\nEnter a nickname or a full username with discriminator:").arg(current),
-            QLineEdit::Normal, QString(), &accepted).trimmed();
-        if (!accepted || username.isEmpty()) return;
-
-        m_cli.call(QStringLiteral("updateAccount"),
-                   {{QStringLiteral("username"), username}, {QStringLiteral("deleteUsername"), false}},
-                   [this](const QJsonValue &result, const QString &updateError) {
-            if (!updateError.isEmpty()) {
-                statusBar()->showMessage(tr("Could not change your Signal username: %1").arg(updateError), 10000);
-                return;
-            }
-            const QString updatedUsername = result.toObject().value(QStringLiteral("username")).toString();
-            statusBar()->showMessage(updatedUsername.isEmpty()
-                                         ? tr("Signal username updated.")
-                                         : tr("Signal username: %1").arg(updatedUsername),
-                                     10000);
-        });
+        m_profileDialog->setCurrentUsername(!accountFound ? tr("unavailable")
+                                            : currentUsername.isEmpty() ? tr("not set") : currentUsername);
     });
 }
 
-void MainWindow::editProfileDisplayName()
+void MainWindow::applySignalUsername(const QString &username)
 {
-    bool accepted = false;
-    const QString displayName = QInputDialog::getText(
-        this, tr("Display name"), tr("Name shown to your Signal contacts:"),
-        QLineEdit::Normal, QString(), &accepted).trimmed();
-    if (!accepted || displayName.isEmpty()) return;
-
-    sendProfileUpdate({{QStringLiteral("givenName"), displayName},
-                       {QStringLiteral("familyName"), QString()},
-                       {QStringLiteral("removeAvatar"), false}},
-                      tr("Signal display name updated."));
-}
-
-void MainWindow::chooseProfileAvatar()
-{
-    QFileDialog picker(this);
-    picker.setWindowTitle(tr("Choose avatar"));
-    picker.setFileMode(QFileDialog::ExistingFile);
-    picker.setNameFilter(tr("Image files (*.png *.jpg *.jpeg *.webp *.gif);;All files (*)"));
-    picker.setOption(QFileDialog::DontUseNativeDialog);
-    if (picker.exec() != QDialog::Accepted || picker.selectedFiles().isEmpty()) return;
-    const QString path = picker.selectedFiles().first();
-
-    sendProfileUpdate({{QStringLiteral("avatar"), path}, {QStringLiteral("removeAvatar"), false}},
-                      tr("Signal avatar updated."));
-}
-
-void MainWindow::removeProfileAvatar()
-{
-    sendProfileUpdate({{QStringLiteral("removeAvatar"), true}}, tr("Signal avatar removed."));
+    if (m_account.isEmpty() || !m_cli.isRunning()) {
+        reportProfileStatus(tr("Connect to signal-cli before editing your profile."), true);
+        return;
+    }
+    m_cli.call(QStringLiteral("updateAccount"),
+               {{QStringLiteral("username"), username}, {QStringLiteral("deleteUsername"), false}},
+               [this](const QJsonValue &result, const QString &updateError) {
+        if (!updateError.isEmpty()) {
+            reportProfileStatus(tr("Could not change your Signal username: %1").arg(updateError), true);
+            return;
+        }
+        const QString updatedUsername = result.toObject().value(QStringLiteral("username")).toString();
+        if (m_profileDialog && !updatedUsername.isEmpty()) m_profileDialog->setCurrentUsername(updatedUsername);
+        reportProfileStatus(updatedUsername.isEmpty() ? tr("Signal username updated.")
+                                                      : tr("Signal username: %1").arg(updatedUsername),
+                            false);
+    });
 }
 
 void MainWindow::sendProfileUpdate(const QJsonObject &params, const QString &successMessage)
 {
     if (m_account.isEmpty() || !m_cli.isRunning()) {
-        statusBar()->showMessage(tr("Connect to signal-cli before editing your profile."), 8000);
+        reportProfileStatus(tr("Connect to signal-cli before editing your profile."), true);
         return;
     }
     m_cli.call(QStringLiteral("updateProfile"), params, [this, successMessage](const QJsonValue &, const QString &err) {
-        statusBar()->showMessage(err.isEmpty()
-                                     ? successMessage
-                                     : tr("Could not update your Signal profile: %1").arg(err),
-                                 10000);
+        reportProfileStatus(err.isEmpty() ? successMessage
+                                          : tr("Could not update your Signal profile: %1").arg(err),
+                            !err.isEmpty());
     });
 }
 

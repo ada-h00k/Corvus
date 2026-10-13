@@ -118,6 +118,8 @@ history depends on retaining access to the system keychain. Use
   or dark system theme. *Reset to defaults* restores them
 - **Profile settings:** `Settings → Profile settings` lets you view/change your
   Signal username, set your display name, choose an avatar image, or remove the avatar
+- **Profile settings:** `Settings → Profile settings …` opens a window of its own with your
+  Signal username, display name and avatar (change / remove), like *Appearance*
 - **Tray icon:** shows an unread counter (also in the window title and tooltip).
   Closing the window can keep the app running in the tray; click the icon to
   show/hide it, quit from the tray menu or *File → Quit*
