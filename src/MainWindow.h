@@ -51,6 +51,8 @@ public:
 
     // Closing the window hides it to the tray only if the tray icon is really there and enabled.
     static bool shouldHideOnClose(bool trayVisible, bool closeToTray, bool quitting);
+    static bool shouldStartMinimizedInTray(bool trayVisible, bool startMinimizedInTray);
+    void showAtStartup();
 
 protected:
     void closeEvent(QCloseEvent *e) override;
