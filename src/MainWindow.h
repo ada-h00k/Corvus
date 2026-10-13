@@ -10,6 +10,7 @@
 #include <QMainWindow>
 #include <QMediaPlayer>
 #include <QNetworkAccessManager>
+#include <QPointer>
 #include <QSet>
 #include <QTimer>
 #include <QTemporaryDir>
@@ -19,6 +20,7 @@ class ChatView;
 class EmojiPicker;
 class GiphyPicker;
 class MessageInput;
+class ProfileDialog;
 class Notifier;
 class SoundPlayer;
 class QAction;
@@ -75,10 +77,7 @@ private slots:
     void changeHistoryProtection();
     void editAppearance();
     void editNotifications();
-    void editSignalUsername();
-    void editProfileDisplayName();
-    void chooseProfileAvatar();
-    void removeProfileAvatar();
+    void editProfile();
     void searchGifs();
     void configureGiphyApiKey();
     void quitApplication();
@@ -169,6 +168,11 @@ private:
     // Files or an image (e.g. a screenshot) from drag & drop / the clipboard -> pending attachments.
     bool attachFromMimeData(const QMimeData *md);
     void sendProfileUpdate(const QJsonObject &params, const QString &successMessage);
+    void loadSignalUsername();
+    void applySignalUsername(const QString &username);
+    void reportProfileStatus(const QString &message, bool error);
+
+    QPointer<ProfileDialog> m_profileDialog;
 
     SignalCli m_cli;
     HistoryStore m_store;
