@@ -15,8 +15,10 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QSlider>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QToolButton>
 #include <cstdio>
 
 static int g_failed = 0;
@@ -265,6 +267,12 @@ int main(int argc, char **argv)
         CHECK(videoRect.width() >= 200);
         CHECK(videoRect.height() >= 100);
         CHECK(videoView.plainText().contains("[video: clip.mp4]"));
+        videoView.playVideoAttachment(0, 0, QStringLiteral("/missing-test-video.mp4"));
+        auto *progress = videoView.findChild<QSlider *>(QStringLiteral("videoProgress"));
+        CHECK(progress != nullptr);
+        if (progress) CHECK(progress->maximum() == 1000);
+        CHECK(videoView.findChild<QToolButton *>(QStringLiteral("videoPlayPause")) != nullptr);
+        videoView.stopVideoPlayback();
         QSignalSpy spy(&videoView, &ChatView::attachmentActivated);
         click(videoView.viewport(), videoRect.center());
         CHECK(spy.count() == 1);
