@@ -3,7 +3,7 @@
 #include <QColor>
 #include <QPalette>
 
-// Colours and shape of the chat bubbles (Settings → Appearance …).
+// Colours and shape of the chat bubbles and the avatar switch (Settings → Appearance …).
 struct Appearance {
     QColor background; // chat area
     QColor outBg;      // your messages
@@ -11,6 +11,7 @@ struct Appearance {
     QColor inBg;       // received messages
     QColor inText;
     int radius = 16;   // bubble corner radius in px
+    bool showAvatars = true; // contact avatars next to the names in the chat list
 
     // Defaults adapt to a light or dark system theme.
     static Appearance defaults(const QPalette &pal);

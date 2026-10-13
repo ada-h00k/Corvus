@@ -1,5 +1,6 @@
 #include "AppearanceDialog.h"
 
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -65,7 +66,14 @@ AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) :
     radiusRow->addWidget(m_radius, 1);
     radiusRow->addWidget(m_radiusLabel);
     form->addRow(tr("Corner radius"), radiusRow);
+    m_showAvatars = new QCheckBox(tr("Show avatars in the contact list"));
+    m_showAvatars->setObjectName(QStringLiteral("showAvatars"));
+    form->addRow(m_showAvatars);
     lay->addLayout(form);
+    connect(m_showAvatars, &QCheckBox::toggled, this, [this](bool on) {
+        m_ap.showAvatars = on;
+        refresh();
+    });
     connect(m_radius, &QSlider::valueChanged, this, [this](int v) {
         m_ap.radius = v;
         refresh();
@@ -111,6 +119,8 @@ void AppearanceDialog::refresh()
                                                "border-radius: 4px; padding: 4px; }")
                                     .arg(c.name(), c.lightness() < 128 ? QStringLiteral("white") : QStringLiteral("black")));
     }
+    QSignalBlocker blockAvatars(m_showAvatars);
+    m_showAvatars->setChecked(m_ap.showAvatars);
     QSignalBlocker block(m_radius);
     m_radius->setValue(m_ap.radius);
     m_radiusLabel->setText(tr("%1 px").arg(m_ap.radius));

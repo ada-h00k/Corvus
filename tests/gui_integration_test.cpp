@@ -538,6 +538,18 @@ int main(int argc, char **argv)
         CHECK(!listHas(list, "Carol"));
         CHECK(listHas(list, "Team"));
         {
+            // avatars: requested from signal-cli (contact first, group by id) and shown next to the names
+            auto rpcLogHas = [&](const QString &needle) {
+                QFile f(logFile);
+                return f.open(QIODevice::ReadOnly) && QString::fromUtf8(f.readAll()).contains(needle);
+            };
+            CHECK(waitFor([&] { return rpcLogHas("getAvatar"); }));
+            QListWidgetItem *team = nullptr;
+            for (int i = 0; i < list->count(); ++i)
+                if (list->item(i)->text().contains("Team")) team = list->item(i);
+            CHECK(team && !team->icon().isNull());
+        }
+        {
             bool found = false;
             for (QLabel *l : w.findChildren<QLabel *>()) {
                 if (l->text().contains("Connected")) {

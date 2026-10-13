@@ -43,6 +43,8 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMimeDatabase>
+#include <QPainter>
+#include <QPainterPath>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPushButton>
@@ -75,6 +77,7 @@ MainWindow::MainWindow()
     auto *split = new QSplitter(this);
     m_list = new QListWidget;
     m_list->setMinimumWidth(240);
+    m_list->setIconSize(QSize(32, 32));
     split->addWidget(m_list);
 
     auto *right = new QWidget;
@@ -656,6 +659,8 @@ void MainWindow::setConnected(bool connected, const QString &info)
 
 void MainWindow::loadContactsAndGroups()
 {
+    m_avatarTried.clear(); // ask signal-cli again, avatars may have changed
+    m_avatarInFlight = 0;
     m_cli.call(QStringLiteral("listContacts"), {}, [this](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
             statusBar()->showMessage(tr("Could not load contacts: %1").arg(err), 8000);
@@ -1558,11 +1563,128 @@ void MainWindow::refreshList()
         }
         it->setText(text);
         it->setData(Qt::UserRole, c->key);
+        if (m_appearance.showAvatars) it->setIcon(avatarIcon(*c));
         m_list->addItem(it);
         if (c->key == m_current) toSelect = it;
     }
     if (toSelect) m_list->setCurrentItem(toSelect);
     updateTray();
+    fetchMissingAvatars();
+}
+
+// ------------------------------------------------------------- Avatars
+
+// Round avatar, cut from the centre of the picture.
+static QPixmap roundAvatar(const QImage &img, int size = 64)
+{
+    QPixmap out(size, size);
+    out.fill(Qt::transparent);
+    const QImage scaled = img.scaled(size, size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    QPainter p(&out);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    QPainterPath clip;
+    clip.addEllipse(QRectF(0, 0, size, size));
+    p.setClipPath(clip);
+    p.drawImage((size - scaled.width()) / 2, (size - scaled.height()) / 2, scaled);
+    return out;
+}
+
+// Coloured circle with the first letter, like the official client shows without a picture.
+static QPixmap placeholderAvatar(const QString &key, const QString &title, int size = 64)
+{
+    QPixmap out(size, size);
+    out.fill(Qt::transparent);
+    QString letter = QStringLiteral("?");
+    for (const QChar ch : title) {
+        if (ch.isLetterOrNumber()) {
+            letter = QString(ch).toUpper();
+            break;
+        }
+    }
+    const int hue = int(qHash(key) % 360);
+    QPainter p(&out);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor::fromHsl(hue, 120, 110));
+    p.drawEllipse(QRectF(0, 0, size, size));
+    QFont f = p.font();
+    f.setPixelSize(size * 11 / 20);
+    f.setBold(true);
+    p.setFont(f);
+    p.setPen(Qt::white);
+    p.drawText(QRectF(0, 0, size, size), Qt::AlignCenter, letter);
+    return out;
+}
+
+QIcon MainWindow::avatarIcon(const Conversation &c) const
+{
+    const auto it = m_avatars.constFind(c.key);
+    return QIcon(it != m_avatars.constEnd() ? *it : placeholderAvatar(c.key, c.title));
+}
+
+void MainWindow::fetchMissingAvatars()
+{
+    // Only while connected (otherwise the request would just fail and never be retried).
+    if (!m_appearance.showAvatars || !m_cli.isRunning()) return;
+    constexpr int kMaxParallel = 4;
+    const QStringList keys = m_convs.keys();
+    for (const QString &key : keys) {
+        if (m_avatarInFlight >= kMaxParallel) return; // continues when a request finishes
+        if (m_avatarTried.contains(key)) continue;
+        fetchAvatar(key);
+    }
+}
+
+void MainWindow::fetchAvatar(const QString &key)
+{
+    const auto cit = m_convs.constFind(key);
+    if (cit == m_convs.constEnd()) return;
+    m_avatarTried.insert(key);
+    ++m_avatarInFlight;
+
+    const int gen = m_connectGen;
+    // Apply the result (or give up) and go on with the next conversation.
+    auto done = [this, key, gen](const QByteArray &data) {
+        if (gen != m_connectGen) return; // reconnect in between: everything restarts anyway
+        --m_avatarInFlight;
+        const QImage img = data.isEmpty() ? QImage() : AttachmentUtil::imageFromData(data);
+        if (!img.isNull()) {
+            m_avatars.insert(key, roundAvatar(img));
+            if (m_appearance.showAvatars) {
+                for (int row = 0; row < m_list->count(); ++row) {
+                    QListWidgetItem *item = m_list->item(row);
+                    if (item->data(Qt::UserRole).toString() == key && m_convs.contains(key)) {
+                        item->setIcon(avatarIcon(m_convs[key]));
+                        break;
+                    }
+                }
+            }
+        }
+        fetchMissingAvatars();
+    };
+    auto dataOf = [](const QJsonValue &res) {
+        return QByteArray::fromBase64(res.toObject().value(QStringLiteral("data")).toString().toLatin1());
+    };
+
+    if (cit->isGroup) {
+        m_cli.call(QStringLiteral("getAvatar"), {{QStringLiteral("groupId"), key.mid(2)}},
+                   [done, dataOf](const QJsonValue &res, const QString &err) { done(err.isEmpty() ? dataOf(res) : QByteArray()); });
+        return;
+    }
+    // Contact avatar first (set in the address book), then the person's own profile picture.
+    m_cli.call(QStringLiteral("getAvatar"), {{QStringLiteral("contact"), key}},
+               [this, key, done, dataOf](const QJsonValue &res, const QString &err) {
+                   const QByteArray data = err.isEmpty() ? dataOf(res) : QByteArray();
+                   if (!data.isEmpty()) {
+                       done(data);
+                       return;
+                   }
+                   m_cli.call(QStringLiteral("getAvatar"), {{QStringLiteral("profile"), key}},
+                              [done, dataOf](const QJsonValue &res2, const QString &err2) {
+                                  done(err2.isEmpty() ? dataOf(res2) : QByteArray());
+                              });
+               });
 }
 
 void MainWindow::onSelectionChanged(QListWidgetItem *item)
@@ -2560,6 +2682,7 @@ void MainWindow::editAppearance()
     m_appearance = dlg.appearance();
     m_appearance.save(palette());
     m_view->setAppearance(m_appearance);
+    refreshList(); // shows or hides the avatars (and fetches them if needed)
 }
 
 // ----------------------------------------- Tray, notifications, sound

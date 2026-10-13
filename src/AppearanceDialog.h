@@ -5,11 +5,12 @@
 #include "Appearance.h"
 
 class ChatView;
+class QCheckBox;
 class QLabel;
 class QPushButton;
 class QSlider;
 
-// Settings → Appearance …: bubble colours and corner radius with a live preview.
+// Settings → Appearance …: bubble colours, corner radius (live preview) and the avatar switch.
 class AppearanceDialog : public QDialog
 {
     Q_OBJECT
@@ -32,5 +33,6 @@ private:
     QList<Row> m_rows;
     QSlider *m_radius;
     QLabel *m_radiusLabel;
+    QCheckBox *m_showAvatars;
     ChatView *m_preview;
 };
