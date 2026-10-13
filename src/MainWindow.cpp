@@ -435,12 +435,9 @@ void MainWindow::showEvent(QShowEvent *e)
 void MainWindow::quitApplication()
 {
     m_quitting = true;
-    if (isVisible()) {
-        close(); // closeEvent accepts, the last window closing ends the app
-    } else {
-        m_cli.stop();
-        QCoreApplication::quit();
-    }
+    if (isVisible()) close(); // closeEvent accepts instead of hiding to the tray
+    m_cli.stop();
+    QCoreApplication::quit();
 }
 
 void MainWindow::toggleWindow()
