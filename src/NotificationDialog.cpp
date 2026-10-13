@@ -26,8 +26,10 @@ NotificationDialog::NotificationDialog(const NotificationSettings &current, Soun
     auto *tl = new QVBoxLayout(trayBox);
     m_tray = new QCheckBox(tr("Show a tray icon (with an unread counter)"));
     m_closeToTray = new QCheckBox(tr("Keep running in the tray when the window is closed"));
+    m_startMinimizedInTray = new QCheckBox(tr("Start minimized in the tray"));
     tl->addWidget(m_tray);
     tl->addWidget(m_closeToTray);
+    tl->addWidget(m_startMinimizedInTray);
     if (!trayAvailable) {
         auto *note = new QLabel(tr("No system tray was found on this desktop, so the tray icon cannot be shown. "
                                    "(On GNOME a tray extension is required.)"));
@@ -112,6 +114,7 @@ NotificationSettings NotificationDialog::settings() const
     NotificationSettings s;
     s.trayIcon = m_tray->isChecked();
     s.closeToTray = m_closeToTray->isChecked();
+    s.startMinimizedInTray = m_startMinimizedInTray->isChecked();
     s.notifications = m_notify->isChecked();
     s.content = m_content->currentData().toInt();
     s.sound = m_soundOn->isChecked();
@@ -124,6 +127,7 @@ void NotificationDialog::setSettings(const NotificationSettings &s)
 {
     m_tray->setChecked(s.trayIcon);
     m_closeToTray->setChecked(s.closeToTray);
+    m_startMinimizedInTray->setChecked(s.startMinimizedInTray);
     m_notify->setChecked(s.notifications);
     m_content->setCurrentIndex(qMax(0, m_content->findData(s.content)));
     m_soundOn->setChecked(s.sound);
@@ -136,6 +140,7 @@ void NotificationDialog::refreshEnabled()
 {
     const bool custom = m_soundBox->currentData().toString() == QLatin1String("custom");
     m_closeToTray->setEnabled(m_tray->isEnabled() && m_tray->isChecked());
+    m_startMinimizedInTray->setEnabled(m_tray->isEnabled() && m_tray->isChecked());
     m_content->setEnabled(m_notify->isChecked());
     m_testNotify->setEnabled(m_notify->isChecked());
     m_soundBox->setEnabled(m_soundOn->isChecked());

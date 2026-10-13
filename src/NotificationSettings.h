@@ -13,6 +13,7 @@ struct NotificationSettings {
     QString soundFile;             // used when soundId == "custom"
     bool trayIcon = true;          // show the tray icon
     bool closeToTray = true;       // closing the window keeps the app running in the tray
+    bool startMinimizedInTray = false; // start with the window hidden in the tray
 
     static NotificationSettings load();
     void save() const;

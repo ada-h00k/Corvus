@@ -134,6 +134,20 @@ int main(int argc, char **argv)
         CHECK(!SignalCli::maskNumbers("account +4915112345678 ok").contains("15112345"));
     }
 
+    std::printf("start minimized in tray setting\n");
+    {
+        QTemporaryDir settingsDir;
+        QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, settingsDir.path());
+        NotificationSettings settings = NotificationSettings::load();
+        CHECK(!settings.startMinimizedInTray);
+        settings.startMinimizedInTray = true;
+        settings.save();
+        CHECK(NotificationSettings::load().startMinimizedInTray);
+        CHECK(MainWindow::shouldStartMinimizedInTray(true, true));
+        CHECK(!MainWindow::shouldStartMinimizedInTray(false, true));
+        CHECK(!MainWindow::shouldStartMinimizedInTray(true, false));
+    }
+
     std::printf("signal-cli fails -> the real error is shown, NOT \"no account\"\n");
     {
         Run r("fail");

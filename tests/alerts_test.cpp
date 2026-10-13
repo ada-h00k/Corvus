@@ -315,7 +315,7 @@ int main(int argc, char **argv)
         QTemporaryDir t;
         QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, t.path());
         const NotificationSettings d = NotificationSettings::load();
-        CHECK(d.notifications && d.sound && d.trayIcon && d.closeToTray && d.soundId == "chime");
+        CHECK(d.notifications && d.sound && d.trayIcon && d.closeToTray && !d.startMinimizedInTray && d.soundId == "chime");
         NotificationSettings n = d;
         n.notifications = false;
         n.sound = true;
@@ -324,8 +324,12 @@ int main(int argc, char **argv)
         n.soundFile = "/tmp/x.ogg";
         n.trayIcon = false;
         n.closeToTray = false;
+        n.startMinimizedInTray = true;
         n.save();
         CHECK(NotificationSettings::load() == n);
+        CHECK(MainWindow::shouldStartMinimizedInTray(true, true));
+        CHECK(!MainWindow::shouldStartMinimizedInTray(false, true));
+        CHECK(!MainWindow::shouldStartMinimizedInTray(true, false));
         CHECK(MainWindow::shouldHideOnClose(true, true, false));
         CHECK(!MainWindow::shouldHideOnClose(false, true, false)); // no tray -> really close
         CHECK(!MainWindow::shouldHideOnClose(true, false, false)); // option off
@@ -595,7 +599,8 @@ int main(int argc, char **argv)
         QCheckBox *soundOn = box("Play a sound");
         QCheckBox *trayOn = box("Show a tray icon");
         QCheckBox *closeTray = box("Keep running");
-        CHECK(notify && soundOn && trayOn && closeTray);
+        QCheckBox *startInTray = box("Start minimized");
+        CHECK(notify && soundOn && trayOn && closeTray && startInTray);
         const QList<QComboBox *> combos = dlg.findChildren<QComboBox *>();
         CHECK(combos.size() == 2);
 
@@ -604,17 +609,19 @@ int main(int argc, char **argv)
         soundOn->setChecked(false);
         CHECK(!combos[1]->isEnabled());
         trayOn->setChecked(false);
-        CHECK(!closeTray->isEnabled());
+        CHECK(!closeTray->isEnabled() && !startInTray->isEnabled());
         NotificationSettings got = dlg.settings();
-        CHECK(!got.notifications && !got.sound && !got.trayIcon);
+        CHECK(!got.notifications && !got.sound && !got.trayIcon && !got.startMinimizedInTray);
 
         NotificationSettings other;
         other.notifications = true;
         other.sound = true;
+        other.startMinimizedInTray = true;
         other.soundId = "pop";
         other.content = NotificationSettings::NameOnly;
         dlg.setSettings(other);
         CHECK(dlg.settings() == other);
+        CHECK(startInTray->isChecked());
         CHECK(combos[1]->isEnabled());
 
         // the test buttons really fire

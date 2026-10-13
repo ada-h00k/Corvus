@@ -381,6 +381,20 @@ bool MainWindow::shouldHideOnClose(bool trayVisible, bool closeToTray, bool quit
     return trayVisible && closeToTray && !quitting;
 }
 
+bool MainWindow::shouldStartMinimizedInTray(bool trayVisible, bool startMinimizedInTray)
+{
+    return trayVisible && startMinimizedInTray;
+}
+
+void MainWindow::showAtStartup()
+{
+    if (shouldStartMinimizedInTray(m_tray && m_tray->isVisible(), m_notify.startMinimizedInTray)) {
+        QApplication::setQuitOnLastWindowClosed(false);
+        return;
+    }
+    show();
+}
+
 void MainWindow::closeEvent(QCloseEvent *e)
 {
     QSettings().setValue(QStringLiteral("geometry"), saveGeometry());

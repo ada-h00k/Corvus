@@ -19,6 +19,6 @@ int main(int argc, char *argv[])
     QApplication::setWindowIcon(AppIcon::app());
 
     MainWindow w;
-    w.show();
+    w.showAtStartup();
     return app.exec();
 }

@@ -32,6 +32,7 @@ private:
 
     QCheckBox *m_tray;
     QCheckBox *m_closeToTray;
+    QCheckBox *m_startMinimizedInTray;
     QCheckBox *m_notify;
     QComboBox *m_content;
     QPushButton *m_testNotify;
