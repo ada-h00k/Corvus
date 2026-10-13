@@ -564,12 +564,6 @@ int main(int argc, char **argv)
         emit tray->activated(QSystemTrayIcon::Trigger);
         CHECK(waitFor([&] { return s.w->isVisible(); }));
 
-        // Quit (menu / tray menu) really quits: the following close is not turned into "hide"
-        QMetaObject::invokeMethod(s.w.get(), "quitApplication");
-        QCloseEvent quitting;
-        QApplication::sendEvent(s.w.get(), &quitting);
-        CHECK(quitting.isAccepted());
-
         // option off -> closing really closes
         NotificationSettings off = ns;
         off.closeToTray = false;
@@ -632,6 +626,17 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return !bus.notif->snapshot().isEmpty(); }));
         CHECK(waitFor([&] { return s.sounds() == before + 1; }));
         CHECK(s.lastSoundArg().endsWith("pop.wav"));
+    }
+
+    std::printf("explicit quit\n");
+    {
+        Scenario s(bus, NotificationSettings());
+        QApplication::setQuitOnLastWindowClosed(false);
+        QTimer::singleShot(0, s.w.get(), [window = s.w.get()] {
+            QMetaObject::invokeMethod(window, "quitApplication");
+        });
+        app.exec();
+        CHECK(!s.w->isVisible());
     }
 
     std::printf(g_failed ? "FAILED (%d checks)\n" : "ALL OK\n", g_failed);
