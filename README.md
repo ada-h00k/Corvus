@@ -1,6 +1,6 @@
 # signal-cli Qt
 
-| Hell (Breeze Light) | Dunkel (Breeze Dark) |
+| Light (Breeze Light) | Dark (Breeze Dark) |
 | --- | --- |
 | ![Hell](docs/screenshots/signal-cli-qt_BreezeLight.png) | ![Dunkel](docs/screenshots/signal-cli-qt_BreezeDark.png) |
 
