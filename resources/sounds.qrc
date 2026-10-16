@@ -4,5 +4,6 @@
     </qresource>
     <qresource prefix="/emoji">
         <file alias="catalog.json">emoji-catalog.json</file>
+        <file alias="names.json">emoji-names.json</file>
     </qresource>
 </RCC>
