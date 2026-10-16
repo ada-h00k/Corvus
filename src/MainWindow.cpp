@@ -2474,18 +2474,26 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
         statusBar()->clearMessage();
         if (!err.isEmpty()) {
             if (att.isImage() && !att.thumb.isEmpty()) { // fall back to the stored preview
-                ImageViewer(att.thumb, att.filename, this).exec();
+                auto *viewer = new ImageViewer(att.thumb, att.filename, this);
+                viewer->setAttribute(Qt::WA_DeleteOnClose);
+                viewer->show();
+                viewer->raise();
+                viewer->activateWindow();
             } else {
                 QMessageBox::warning(this, tr("Attachment"), err);
             }
             return;
         }
         if (att.isImage()) {
-            ImageViewer viewer(data, att.filename, this);
-            if (viewer.isValid()) {
-                viewer.exec();
+            auto *viewer = new ImageViewer(data, att.filename, this);
+            if (viewer->isValid()) {
+                viewer->setAttribute(Qt::WA_DeleteOnClose);
+                viewer->show();
+                viewer->raise();
+                viewer->activateWindow();
                 return;
             }
+            delete viewer;
         }
         if (!m_tmp.isValid()) {
             QMessageBox::warning(this, tr("Attachment"), tr("No temporary directory available."));
