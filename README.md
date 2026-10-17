@@ -192,6 +192,17 @@ command link at `~/.local/bin/signal-cli-qt`. It makes no system-wide changes
 and does not require `sudo`. Run it again after downloading a newer release to
 update the installation.
 
+### Arch Linux
+
+Every release also contains a ready-made package (`signal-cli-qt-<version>-1-x86_64.pkg.tar.zst`):
+
+```
+sudo pacman -U signal-cli-qt-*.pkg.tar.zst
+```
+
+It depends on `signal-cli`, `qt6-base`, `qt6-multimedia` and `qtkeychain-qt6`. To build it yourself,
+see the instructions at the top of `packaging/arch/PKGBUILD`.
+
 ## Build from source
 
 Requirements: C++17 compiler, CMake ≥ 3.16, Qt 6 (Widgets, Network, Multimedia),

@@ -228,9 +228,121 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # --------------------------------------------------
-      # Create a release for every commit
-      # --------------------------------------------------
+
+  # ------------------------------------------------------
+  # Arch Linux package (built natively in an Arch container)
+  # ------------------------------------------------------
+  arch-package:
+    name: Build Arch Linux package
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      # git must exist before checkout so that the full history is cloned
+      - name: Install git
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pacman -Syu --noconfirm --needed git
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare source tarball and PKGBUILD
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          base="$(sed -n 's/^project(signal-cli-qt VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          count="$(git rev-list --count HEAD)"
+          short="$(git rev-parse --short=7 HEAD)"
+          pkgver="${base}.r${count}.g${short}"
+          echo "PKGVER=$pkgver" >> "$GITHUB_ENV"
+
+          # makepkg refuses to run as root
+          useradd --create-home builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+
+          build_dir=/home/builder/pkg
+          mkdir -p "$build_dir"
+
+          git archive --format=tar.gz \
+            --prefix="signal-cli-qt-${pkgver}/" \
+            -o "$build_dir/signal-cli-qt-${pkgver}.tar.gz" HEAD
+          cp packaging/arch/PKGBUILD "$build_dir/PKGBUILD"
+          sed -i "s/^pkgver=.*/pkgver=${pkgver}/" "$build_dir/PKGBUILD"
+
+          chown -R builder:builder /home/builder
+          cat "$build_dir/PKGBUILD"
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          su builder -c 'cd ~/pkg && makepkg --syncdeps --noconfirm --nocolor'
+
+      - name: Inspect package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+          cp /home/builder/pkg/*.pkg.tar.zst dist/
+
+          for pkg in dist/*.pkg.tar.zst; do
+            pacman -Qip "$pkg"
+            pacman -Qlp "$pkg"
+          done
+
+          # the package must contain the executable, desktop entry, icon and license
+          pacman -Qlp dist/*.pkg.tar.zst | grep -q ' usr/bin/signal-cli-qt$'
+          pacman -Qlp dist/*.pkg.tar.zst | grep -q 'applications/signal-cli-qt.desktop$'
+          pacman -Qlp dist/*.pkg.tar.zst | grep -q 'icons/hicolor/scalable/apps/signal-cli-qt.svg$'
+          pacman -Qlp dist/*.pkg.tar.zst | grep -q 'usr/share/licenses/signal-cli-qt/LICENSE$'
+
+      - name: Upload Arch package artifact
+        if: always() && hashFiles('dist/*') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-qt-arch-${{ github.sha }}
+          path: dist/*.pkg.tar.zst
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------
+  # Create a release for every commit (all artifacts together)
+  # ------------------------------------------------------
+  release:
+    name: Publish release
+    runs-on: ubuntu-24.04
+    needs:
+      - build
+      - arch-package
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: signal-cli-qt-*-${{ github.sha }}
+          path: dist
+          merge-multiple: true
+
+      - name: Regenerate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd dist
+          rm -f SHA256SUMS
+          find . -maxdepth 1 -type f -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS
+
+          cat SHA256SUMS
+          ls -lh
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -245,9 +357,10 @@ jobs:
             Files:
             - `signal-cli-qt-linux-x86_64` — plain executable
             - `signal-cli-qt-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
-            - `SHA256SUMS` — SHA-256 checksums for the executable and installer archive
+            - `signal-cli-qt-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
+            - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `signal-cli` must be installed separately.
+            `signal-cli` must be installed separately (the Arch package pulls it in as a dependency).
           draft: false
           prerelease: false
           make_latest: true
@@ -255,4 +368,5 @@ jobs:
           files: |
             dist/signal-cli-qt-linux-x86_64
             dist/signal-cli-qt-linux-x86_64-installer.tar.gz
+            dist/*.pkg.tar.zst
             dist/SHA256SUMS
