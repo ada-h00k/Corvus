@@ -28,6 +28,7 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -152,9 +153,33 @@ MainWindow::MainWindow()
     m_gifBtn->setFixedSize(40, 40);
     m_input = new MessageInput;
     m_input->setPlaceholderText(tr("Write a message …"));
+    // Floating "popout" handle: it hovers centered above the message field,
+    // overlapping the chat view, and is only shown while the field has focus.
+    // It is a child of the right-hand panel (not part of any layout) and is
+    // positioned in positionExpandButton().
+    m_expandInputBtn = new QToolButton(right);
+    m_expandInputBtn->setObjectName(QStringLiteral("expandInputButton"));
+    m_expandInputBtn->setText(QStringLiteral("⌃"));
+    m_expandInputBtn->setToolTip(tr("Expand message field"));
+    m_expandInputBtn->setAccessibleName(tr("Expand message field"));
+    m_expandInputBtn->setFocusPolicy(Qt::NoFocus); // clicking must not steal focus from the field
+    m_expandInputBtn->setCursor(Qt::PointingHandCursor);
+    m_expandInputBtn->setFixedSize(40, 20);
+    m_expandInputBtn->setStyleSheet(QStringLiteral(
+        "QToolButton { background: palette(window); color: palette(window-text);"
+        " border: 1px solid palette(mid); border-radius: 10px; padding: 0px; margin: 0px; font-size: 14px; }"
+        "QToolButton:hover { background: palette(button); }"
+        "QToolButton:disabled { color: palette(mid); }"));
+    m_expandInputBtn->hide();
+
+    m_sendBtn = new QPushButton(tr("Send"));
+    m_sendBtn->setFixedHeight(40);
+    m_sendBtn->hide();
+
     h->addWidget(m_emojiBtn);
     h->addWidget(m_gifBtn);
     h->addWidget(m_input, 1);
+    h->addWidget(m_sendBtn);
     h->addWidget(m_attachBtn);
 
     m_searchBar = new QWidget(right);
@@ -195,6 +220,7 @@ MainWindow::MainWindow()
     connect(closeSearch, &QToolButton::clicked, this, &MainWindow::closeMessageSearch);
     connect(findMessages, &QToolButton::clicked, this, &MainWindow::openMessageSearch);
     m_input->installEventFilter(this);
+    right->installEventFilter(this);
     v->addLayout(h);
     split->addWidget(right);
     split->setStretchFactor(1, 1);
@@ -309,15 +335,27 @@ MainWindow::MainWindow()
     connect(m_view, &ChatView::attachmentSaveRequested, this, &MainWindow::saveAttachment);
 
     // Input actions
-    connect(m_input, &QLineEdit::returnPressed, this, &MainWindow::sendMessage);
+    connect(m_input, &MessageInput::returnPressed, this, &MainWindow::sendMessage);
     connect(m_input, &MessageInput::escapePressed, this, [this] { cancelEdit(); });
+    connect(m_sendBtn, &QPushButton::clicked, this, &MainWindow::sendMessage);
+    connect(m_expandInputBtn, &QToolButton::clicked, this, [this] {
+        m_input->setExpanded(!m_input->isExpanded());
+    });
+    connect(m_input, &MessageInput::expandedChanged, this, [this](bool expanded) {
+        m_expandInputBtn->setText(expanded ? QStringLiteral("⌄") : QStringLiteral("⌃"));
+        m_expandInputBtn->setToolTip(expanded ? tr("Collapse message field") : tr("Expand message field"));
+        m_expandInputBtn->setAccessibleName(expanded ? tr("Collapse message field") : tr("Expand message field"));
+        m_sendBtn->setVisible(expanded);
+        if (expanded) m_input->setFocus();
+        positionExpandButton();
+    });
     connect(m_input, &MessageInput::upPressed, this, &MainWindow::editLastMessage);
     connect(m_attachBtn, &QToolButton::clicked, this, [this] {
         addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
     });
     connect(m_emojiBtn, &QToolButton::clicked, this, [this] {
         m_pickAction = [this](const QString &e) {
-            m_input->insert(e);
+            m_input->insertPlainText(e);
             m_input->setFocus();
         };
         m_picker->popup(m_emojiBtn->mapToGlobal(QPoint(0, -m_picker->height() - 4)));
@@ -384,6 +422,23 @@ MainWindow::MainWindow()
     QTimer::singleShot(0, this, &MainWindow::initialise);
 }
 
+bool MainWindow::event(QEvent *event)
+{
+    const bool result = QMainWindow::event(event);
+    if (event->type() == QEvent::WindowActivate) {
+        // When returning to the app (e.g. via Alt+Tab), put the caret back into
+        // the composer so typing can start immediately. Do this after Qt has
+        // finished activation so another child widget cannot steal the focus.
+        QTimer::singleShot(0, this, [this] {
+            if (!isVisible() || !isActiveWindow() || !m_searchBar || m_searchBar->isVisible()) return;
+            if (m_input && m_input->isEnabled() && !m_current.isEmpty()) {
+                m_input->setFocus(Qt::OtherFocusReason);
+            }
+        });
+    }
+    return result;
+}
+
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
     if (event->type() == QEvent::KeyPress) {
@@ -397,7 +452,46 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
     }
+    // m_input / m_expandInputBtn are QPointers (null until built, null again once
+    // destroyed), because this filter is already active on m_view while the
+    // constructor is still running.
+    if (m_expandInputBtn && m_input
+        && (watched == m_input.data() || watched == m_expandInputBtn->parentWidget())) {
+        switch (event->type()) {
+        case QEvent::FocusIn:
+        case QEvent::FocusOut:
+        case QEvent::Show:
+        case QEvent::Hide:
+        case QEvent::Move:
+        case QEvent::Resize:
+        case QEvent::LayoutRequest:
+        case QEvent::EnabledChange:
+            // Defer so the layout has settled before we read the field's geometry.
+            QTimer::singleShot(0, this, &MainWindow::positionExpandButton);
+            break;
+        default:
+            break;
+        }
+    }
     return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::positionExpandButton()
+{
+    if (!m_expandInputBtn || !m_input) return;
+    QWidget *panel = m_expandInputBtn->parentWidget();
+    const bool show = m_input->isEnabled() && m_input->isVisible() && m_input->hasFocus();
+    if (!show) {
+        m_expandInputBtn->hide();
+        return;
+    }
+    const QPoint topLeft = m_input->mapTo(panel, QPoint(0, 0));
+    const int x = topLeft.x() + (m_input->width() - m_expandInputBtn->width()) / 2;
+    // Hover half over the chat view, half over the field's top edge.
+    const int y = topLeft.y() - m_expandInputBtn->height() / 2;
+    m_expandInputBtn->move(x, qMax(0, y));
+    m_expandInputBtn->show();
+    m_expandInputBtn->raise();
 }
 
 bool MainWindow::shouldHideOnClose(bool trayVisible, bool closeToTray, bool quitting)
@@ -645,6 +739,8 @@ void MainWindow::linkDevice()
 void MainWindow::setConnected(bool connected, const QString &info)
 {
     m_input->setEnabled(connected);
+    m_expandInputBtn->setEnabled(connected);
+    m_sendBtn->setEnabled(connected);
     m_attachBtn->setEnabled(connected);
     m_emojiBtn->setEnabled(connected);
     m_gifBtn->setEnabled(connected);
@@ -1118,7 +1214,16 @@ void MainWindow::deleteConversation(const QString &key)
         return;
     if (key == m_editKey) cancelEdit();
     m_convs.remove(key);
-    if (key == m_current) m_current.clear();
+    m_drafts.remove(key);
+    if (key == m_current) {
+        m_current.clear();
+        m_input->clear();
+        m_replyQuote = Quote();
+        m_pendingFiles.clear();
+        m_pendingGifAnalyticsUrl.clear();
+        updateReplyBar();
+        updateAttachBar();
+    }
     const int rc = m_store.rewrite(allRecords()); // compacts the file, old ciphertext is gone
     if (rc != SC_OK)
         statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
@@ -1695,15 +1800,48 @@ void MainWindow::onSelectionChanged(QListWidgetItem *item)
     openConversation(key);
 }
 
+void MainWindow::saveDraft(const QString &key)
+{
+    if (key.isEmpty()) return;
+    Draft d;
+    d.text = m_input->text();
+    d.cursor = m_input->textCursor().position();
+    d.reply = m_replyQuote;
+    d.files = m_pendingFiles;
+    d.gifAnalyticsUrl = m_pendingGifAnalyticsUrl;
+    if (d.text.isEmpty() && !d.reply.valid && d.files.isEmpty())
+        m_drafts.remove(key);
+    else
+        m_drafts.insert(key, d);
+}
+
+void MainWindow::loadDraft(const QString &key)
+{
+    const Draft d = m_drafts.take(key); // the composer owns it while the chat is open
+    m_input->setText(d.text);
+    m_input->setCursorPosition(d.cursor);
+    m_replyQuote = d.reply;
+    m_pendingFiles = d.files;
+    m_pendingGifAnalyticsUrl = d.gifAnalyticsUrl;
+    updateReplyBar();
+    updateAttachBar();
+}
+
+void MainWindow::switchConversation(const QString &key)
+{
+    if (key == m_current) return;
+    cancelEdit(); // an edit in progress is dropped and the text typed before it comes back
+    saveDraft(m_current);
+    m_current = key;
+    loadDraft(key);
+}
+
 void MainWindow::openConversation(const QString &key)
 {
     if (!m_convs.contains(key)) return;
-    if (key != m_current) cancelEdit();
-    m_current = key;
+    switchConversation(key); // stashes the old chat's draft, restores this chat's draft
     m_convs[m_current].unread = 0;
     startIncomingExpirationTimers(key);
-    m_replyQuote = Quote();
-    updateReplyBar();
     showConversation();
     refreshList();
     m_notifier->close(key); // the notification for this chat is obsolete now
@@ -1875,7 +2013,7 @@ void MainWindow::newConversation()
     Conversation &c = conv(recipient);
     if (c.archived) setArchived(recipient, false);
     m_showArchived = false;
-    m_current = recipient;
+    switchConversation(recipient);
     refreshList();
     showConversation();
 }
@@ -2120,6 +2258,19 @@ void MainWindow::sendMessage()
             removePendingPreview(pending);
             m_pendingSends.erase(pendingIt);
             statusBar()->showMessage(tr("Sending failed: %1").arg(err), 10000);
+            if (key != m_current) {
+                // The user has moved on to another chat: put the unsent message back into
+                // that chat's draft, never into the composer of the chat that is open now.
+                Draft &d = m_drafts[key];
+                if (d.text.isEmpty() && d.files.isEmpty() && !d.reply.valid) {
+                    d.text = text;
+                    d.cursor = text.size();
+                    d.files = files;
+                    d.reply = quote;
+                }
+                if (d.text.isEmpty() && d.files.isEmpty() && !d.reply.valid) m_drafts.remove(key);
+                return;
+            }
             const bool draftWasEmpty = m_input->text().isEmpty();
             if (draftWasEmpty) m_input->setText(text); // don't overwrite a newer draft
             if (draftWasEmpty && m_pendingFiles.isEmpty() && !files.isEmpty()) {

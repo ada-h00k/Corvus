@@ -13,6 +13,8 @@
 #include <QIcon>
 #include <QPixmap>
 #include <QPointer>
+#include <QToolButton>
+#include "MessageInput.h"
 #include <QSet>
 #include <QTimer>
 #include <QTemporaryDir>
@@ -31,6 +33,7 @@ class QSystemTrayIcon;
 class QCloseEvent;
 class QDragEnterEvent;
 class QDropEvent;
+class QEvent;
 class QShowEvent;
 class QLabel;
 class QLineEdit;
@@ -61,9 +64,11 @@ public:
 protected:
     void closeEvent(QCloseEvent *e) override;
     void showEvent(QShowEvent *e) override;
+    bool event(QEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *e) override;
     void dropEvent(QDropEvent *e) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void positionExpandButton();
 
 private slots:
     void initialise();
@@ -155,6 +160,11 @@ private:
     void startEdit(int idx);
     void editLastMessage();
     void cancelEdit(bool restoreDraft = true);
+    // Per-conversation drafts: whatever is typed / quoted / attached in the composer
+    // belongs to the conversation it was written in.
+    void saveDraft(const QString &key);
+    void loadDraft(const QString &key);
+    void switchConversation(const QString &key);
     void sendEdit(const QString &text);
     // Applies an edit (own or received). author = who must have written the message.
     bool applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text, qint64 newTs);
@@ -213,6 +223,15 @@ private:
     qint64 m_audioPositionMs = 0;
     qint64 m_audioDurationMs = 0;
 
+    struct Draft {
+        QString text;
+        int cursor = 0;
+        Quote reply;
+        QStringList files;
+        QUrl gifAnalyticsUrl;
+    };
+    QHash<QString, Draft> m_drafts; // conversation key -> unsent composer state
+
     Quote m_replyQuote;
     // Message being edited (original timestamp + conversation); m_editKey empty = not editing.
     QString m_editKey;
@@ -243,10 +262,12 @@ private:
     QWidget *m_attachBar;
     QLabel *m_attachLabel;
     QLabel *m_attachThumb;
-    MessageInput *m_input;
+    QPointer<MessageInput> m_input;
     QToolButton *m_attachBtn;
     QToolButton *m_emojiBtn;
     QToolButton *m_gifBtn;
+    QPointer<QToolButton> m_expandInputBtn;
+    QPushButton *m_sendBtn;
     EmojiPicker *m_picker;
     QLabel *m_statusLabel;
     QLabel *m_updateLabel;
