@@ -1,6 +1,7 @@
 #include "Appearance.h"
 
 #include <QSettings>
+#include <QtGlobal>
 
 Appearance Appearance::defaults(const QPalette &pal)
 {
@@ -13,6 +14,15 @@ Appearance Appearance::defaults(const QPalette &pal)
     a.inText = dark ? QColor(0xee, 0xee, 0xee) : QColor(0x1b, 0x1b, 0x1b);
     a.radius = 16;
     a.showAvatars = true;
+#ifdef Q_OS_MACOS
+    // Like Messages: own bubbles follow the system accent colour, slightly rounder.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+    a.outBg = pal.color(QPalette::Accent);
+#else
+    a.outBg = pal.color(QPalette::Highlight);
+#endif
+    a.radius = 18;
+#endif
     return a;
 }
 
