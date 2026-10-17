@@ -9,6 +9,7 @@
 #include <QLockFile>
 #include <QMessageBox>
 #include <QStandardPaths>
+#include <QStringList>
 #include <cstdio>
 
 // Brings the running window to the front (also out of the tray). A modal dialog that is open,
@@ -28,6 +29,22 @@ static void bringToFront(MainWindow &w)
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+
+#ifdef Q_OS_MACOS
+    {
+        // Apps started from Finder/Dock get only a minimal PATH, so Homebrew
+        // tools (qrencode, signal-cli, java) would not be found.
+        QStringList paths = QString::fromLocal8Bit(qgetenv("PATH"))
+                                .split(QLatin1Char(':'), Qt::SkipEmptyParts);
+        for (const QString &extra : {QStringLiteral("/opt/homebrew/bin"),
+                                     QStringLiteral("/usr/local/bin")}) {
+            if (!paths.contains(extra))
+                paths << extra;
+        }
+        qputenv("PATH", paths.join(QLatin1Char(':')).toLocal8Bit());
+    }
+#endif
+
     QApplication::setOrganizationName(QStringLiteral("signal-cli-qt"));
     QApplication::setApplicationName(QStringLiteral("signal-cli-qt"));
 
