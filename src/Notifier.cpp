@@ -1,12 +1,62 @@
 #include "Notifier.h"
 
+#include <QImage>
 #include <QSystemTrayIcon>
 
 #ifdef HAVE_QT_DBUS
 #include <QDBusConnection>
+#include <QDBusArgument>
 #include <QDBusInterface>
+#include <QDBusMetaType>
 #include <QDBusMessage>
 #include <QDBusReply>
+#endif
+
+#ifdef HAVE_QT_DBUS
+// "image-data" hint of the freedesktop.org Notifications spec: (iiibiiay)
+// width, height, rowstride, has_alpha, bits_per_sample, channels, data
+struct NotificationImage
+{
+    int width = 0;
+    int height = 0;
+    int rowStride = 0;
+    bool hasAlpha = false;
+    int bitsPerSample = 8;
+    int channels = 0;
+    QByteArray data;
+};
+Q_DECLARE_METATYPE(NotificationImage)
+
+static QDBusArgument &operator<<(QDBusArgument &arg, const NotificationImage &img)
+{
+    arg.beginStructure();
+    arg << img.width << img.height << img.rowStride << img.hasAlpha << img.bitsPerSample << img.channels << img.data;
+    arg.endStructure();
+    return arg;
+}
+
+static const QDBusArgument &operator>>(const QDBusArgument &arg, NotificationImage &img)
+{
+    arg.beginStructure();
+    arg >> img.width >> img.height >> img.rowStride >> img.hasAlpha >> img.bitsPerSample >> img.channels >> img.data;
+    arg.endStructure();
+    return arg;
+}
+
+static QVariant imageHint(const QPixmap &pm)
+{
+    qDBusRegisterMetaType<NotificationImage>();
+    const QImage img = pm.toImage().convertToFormat(QImage::Format_RGBA8888);
+    NotificationImage out;
+    out.width = img.width();
+    out.height = img.height();
+    out.rowStride = int(img.bytesPerLine());
+    out.hasAlpha = true;
+    out.bitsPerSample = 8;
+    out.channels = 4;
+    out.data = QByteArray(reinterpret_cast<const char *>(img.constBits()), qsizetype(img.sizeInBytes()));
+    return QVariant::fromValue(out);
+}
 #endif
 
 namespace {
@@ -48,13 +98,14 @@ bool Notifier::usingDBus()
     return ensureDBus();
 }
 
-void Notifier::notify(const QString &key, const QString &title, const QString &body)
+void Notifier::notify(const QString &key, const QString &title, const QString &body, const QPixmap &icon)
 {
 #ifdef HAVE_QT_DBUS
     if (ensureDBus()) {
         QVariantMap hints;
         hints.insert(QStringLiteral("desktop-entry"), QStringLiteral("signal-cli-qt"));
         hints.insert(QStringLiteral("category"), QStringLiteral("im.received"));
+        if (!icon.isNull()) hints.insert(QStringLiteral("image-data"), imageHint(icon)); // preferred over app_icon
         const QString text = m_markup ? body.toHtmlEscaped() : body; // servers with markup would eat "<"
         const QDBusMessage reply = m_iface->call(QStringLiteral("Notify"), QStringLiteral("signal-cli Qt"),
                                                  QVariant::fromValue<uint>(m_idForKey.value(key, 0)),
@@ -81,7 +132,10 @@ void Notifier::notify(const QString &key, const QString &title, const QString &b
             });
         }
         m_lastTrayKey = key;
-        m_tray->showMessage(title, body, QSystemTrayIcon::NoIcon, 8000);
+        if (icon.isNull())
+            m_tray->showMessage(title, body, QSystemTrayIcon::NoIcon, 8000);
+        else
+            m_tray->showMessage(title, body, QIcon(icon), 8000);
     }
 }
 

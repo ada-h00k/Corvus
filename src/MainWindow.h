@@ -147,6 +147,10 @@ private:
     QIcon avatarIcon(const Conversation &c) const;
     void fetchMissingAvatars();
     void fetchAvatar(const QString &key);
+    void refreshAvatar(const QString &key);   // re-fetch (throttled), e.g. after a message from that contact
+    void applyAvatarToList(const QString &key);
+    bool avatarsWanted() const;
+    QPixmap avatarPixmap(const Conversation &c) const;
     void showConversation(bool keepScroll = false);
     void openMessageSearch();
     void closeMessageSearch();
@@ -243,6 +247,10 @@ private:
     QHash<QString, QPixmap> m_avatars;   // conversation key -> circular avatar (64 px)
     QSet<QString> m_avatarTried;         // already requested since the last (re)connect
     int m_avatarInFlight = 0;
+    QSet<QString> m_avatarBusy;                 // requests currently running (per conversation)
+    QHash<QString, QByteArray> m_avatarDigest;  // conversation key -> hash of the picture last shown
+    QHash<QString, qint64> m_avatarFetchedMs;   // conversation key -> time of the last request
+    QTimer m_avatarRefreshTimer;                // re-checks all avatars from time to time
     std::function<void(const QString &)> m_pickAction;
     QTemporaryDir m_tmp;
     QTimer m_expirationTimer;

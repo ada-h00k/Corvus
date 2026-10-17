@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QPixmap>
 #include <QPointer>
 #include <QSystemTrayIcon>
 
@@ -22,7 +23,8 @@ public:
     void setTrayIcon(QSystemTrayIcon *tray) { m_tray = tray; }
 
     // `key` identifies the conversation (a newer notification for the same key replaces the old one).
-    void notify(const QString &key, const QString &title, const QString &body);
+    // `icon` (optional) is shown instead of the generic application icon, e.g. the contact's avatar.
+    void notify(const QString &key, const QString &title, const QString &body, const QPixmap &icon = QPixmap());
     void close(const QString &key); // e.g. when the conversation is opened
 
     bool usingDBus();

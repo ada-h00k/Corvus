@@ -23,6 +23,7 @@
 #include <QApplication>
 #include <QAudioOutput>
 #include <QClipboard>
+#include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDir>
@@ -403,6 +404,13 @@ MainWindow::MainWindow()
         if (r == QSystemTrayIcon::Trigger || r == QSystemTrayIcon::DoubleClick) toggleWindow();
     });
     m_notifier->setTrayIcon(m_tray);
+    // Contacts change their picture at any time and signal-cli does not announce it: look again regularly.
+    m_avatarRefreshTimer.setInterval(15 * 60 * 1000);
+    connect(&m_avatarRefreshTimer, &QTimer::timeout, this, [this] {
+        m_avatarTried.clear(); // keeps the shown pictures; they are only replaced when a result arrives
+        fetchMissingAvatars();
+    });
+    m_avatarRefreshTimer.start();
     connect(m_notifier, &Notifier::activated, this, &MainWindow::activateConversation);
     connect(qApp, &QGuiApplication::commitDataRequest, this, [this] { m_quitting = true; }); // session end
     applyNotificationSettings();
@@ -756,6 +764,7 @@ void MainWindow::setConnected(bool connected, const QString &info)
 void MainWindow::loadContactsAndGroups()
 {
     m_avatarTried.clear(); // ask signal-cli again, avatars may have changed
+    m_avatarBusy.clear();
     m_avatarInFlight = 0;
     m_cli.call(QStringLiteral("listContacts"), {}, [this](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
@@ -1722,23 +1731,57 @@ static QPixmap placeholderAvatar(const QString &key, const QString &title, int s
     return out;
 }
 
-QIcon MainWindow::avatarIcon(const Conversation &c) const
+QPixmap MainWindow::avatarPixmap(const Conversation &c) const
 {
     const auto it = m_avatars.constFind(c.key);
-    return QIcon(it != m_avatars.constEnd() ? *it : placeholderAvatar(c.key, c.title));
+    return it != m_avatars.constEnd() ? *it : placeholderAvatar(c.key, c.title);
+}
+
+QIcon MainWindow::avatarIcon(const Conversation &c) const
+{
+    return QIcon(avatarPixmap(c));
+}
+
+// Avatars are needed for the contact list and for notifications (unless those hide the sender).
+bool MainWindow::avatarsWanted() const
+{
+    return m_appearance.showAvatars || (m_notify.notifications && m_notify.content != NotificationSettings::Hidden);
+}
+
+void MainWindow::applyAvatarToList(const QString &key)
+{
+    if (!m_appearance.showAvatars) return;
+    const auto cit = m_convs.constFind(key);
+    if (cit == m_convs.constEnd()) return;
+    for (int row = 0; row < m_list->count(); ++row) {
+        QListWidgetItem *item = m_list->item(row);
+        if (item->data(Qt::UserRole).toString() == key) {
+            item->setIcon(avatarIcon(*cit));
+            break;
+        }
+    }
 }
 
 void MainWindow::fetchMissingAvatars()
 {
     // Only while connected (otherwise the request would just fail and never be retried).
-    if (!m_appearance.showAvatars || !m_cli.isRunning()) return;
+    if (!avatarsWanted() || !m_cli.isRunning()) return;
     constexpr int kMaxParallel = 4;
     const QStringList keys = m_convs.keys();
     for (const QString &key : keys) {
         if (m_avatarInFlight >= kMaxParallel) return; // continues when a request finishes
-        if (m_avatarTried.contains(key)) continue;
+        if (m_avatarTried.contains(key) || m_avatarBusy.contains(key)) continue;
         fetchAvatar(key);
     }
+}
+
+void MainWindow::refreshAvatar(const QString &key)
+{
+    if (!avatarsWanted() || !m_cli.isRunning()) return;
+    if (m_avatarBusy.contains(key)) return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_avatarFetchedMs.value(key, 0) < 60 * 1000) return; // a burst of messages is one request
+    fetchAvatar(key);
 }
 
 void MainWindow::fetchAvatar(const QString &key)
@@ -1746,25 +1789,30 @@ void MainWindow::fetchAvatar(const QString &key)
     const auto cit = m_convs.constFind(key);
     if (cit == m_convs.constEnd()) return;
     m_avatarTried.insert(key);
+    m_avatarBusy.insert(key);
+    m_avatarFetchedMs.insert(key, QDateTime::currentMSecsSinceEpoch());
     ++m_avatarInFlight;
 
     const int gen = m_connectGen;
     // Apply the result (or give up) and go on with the next conversation.
     auto done = [this, key, gen](const QByteArray &data) {
         if (gen != m_connectGen) return; // reconnect in between: everything restarts anyway
-        --m_avatarInFlight;
+        m_avatarInFlight = qMax(0, m_avatarInFlight - 1);
+        m_avatarBusy.remove(key);
         const QImage img = data.isEmpty() ? QImage() : AttachmentUtil::imageFromData(data);
         if (!img.isNull()) {
-            m_avatars.insert(key, roundAvatar(img));
-            if (m_appearance.showAvatars) {
-                for (int row = 0; row < m_list->count(); ++row) {
-                    QListWidgetItem *item = m_list->item(row);
-                    if (item->data(Qt::UserRole).toString() == key && m_convs.contains(key)) {
-                        item->setIcon(avatarIcon(m_convs[key]));
-                        break;
-                    }
-                }
+            const QByteArray digest = QCryptographicHash::hash(data, QCryptographicHash::Md5);
+            // Same picture as before: nothing to redraw.
+            if (m_avatarDigest.value(key) != digest || !m_avatars.contains(key)) {
+                m_avatarDigest.insert(key, digest);
+                m_avatars.insert(key, roundAvatar(img));
+                applyAvatarToList(key);
             }
+        } else if (m_avatars.contains(key)) {
+            // The contact removed the picture: back to the letter placeholder.
+            m_avatars.remove(key);
+            m_avatarDigest.remove(key);
+            applyAvatarToList(key);
         }
         fetchMissingAvatars();
     };
@@ -2138,7 +2186,10 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     const QString title = group ? tr("Group") : (pe.outgoing ? key : m.sender);
     if (!addMessage(key, m, title, group)) return;
     if (!pe.outgoing && !group && !pe.srcName.isEmpty()) learnName(key, pe.srcName);
-    if (!pe.outgoing) alertIncoming(key, m);
+    if (!pe.outgoing) {
+        alertIncoming(key, m);
+        if (!group) refreshAvatar(key); // the contact may have changed the picture
+    }
     fetchThumbnails(key, m.ts(), m.authorKey);
 }
 
@@ -2894,7 +2945,10 @@ void MainWindow::alertIncoming(const QString &key, const Message &m)
             body = (it->isGroup && !m.sender.isEmpty()) ? m.sender + QStringLiteral(": ") + preview : preview;
             break;
         }
-        m_notifier->notify(key, title, body);
+        // The sender's picture (or the letter placeholder) instead of a generic icon; not when the
+        // notification is meant to hide who wrote.
+        const QPixmap icon = m_notify.content == NotificationSettings::Hidden ? QPixmap() : avatarPixmap(*it);
+        m_notifier->notify(key, title, body, icon);
     }
     if (m_notify.sound) {
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
