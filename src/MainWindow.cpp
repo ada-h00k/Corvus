@@ -414,6 +414,7 @@ MainWindow::MainWindow()
     connect(m_notifier, &Notifier::activated, this, &MainWindow::activateConversation);
     connect(qApp, &QGuiApplication::commitDataRequest, this, [this] { m_quitting = true; }); // session end
     applyNotificationSettings();
+    installInputWatcher();
 
     // signal-cli
     connect(&m_cli, &SignalCli::envelopeReceived, this, &MainWindow::onEnvelope);
@@ -430,10 +431,67 @@ MainWindow::MainWindow()
     QTimer::singleShot(0, this, &MainWindow::initialise);
 }
 
+namespace {
+// Remembers when the user last used keyboard or mouse in the main window. Qt reports a window as
+// "active" even while another window without keyboard focus (overlay, always-on-top window, …)
+// covers it, so activity is the only hint that somebody is really looking at the chat.
+class InputWatcher : public QObject
+{
+public:
+    InputWatcher(QWidget *window, qint64 *stamp, QObject *parent) : QObject(parent), m_window(window), m_stamp(stamp) {}
+
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        switch (event->type()) {
+        case QEvent::MouseMove:
+        case QEvent::MouseButtonPress:
+        case QEvent::KeyPress:
+        case QEvent::Wheel:
+        case QEvent::TouchBegin: {
+            const auto *w = qobject_cast<QWidget *>(watched);
+            if (w && w->window() == m_window) *m_stamp = QDateTime::currentMSecsSinceEpoch();
+            break;
+        }
+        default:
+            break;
+        }
+        return false;
+    }
+
+private:
+    QWidget *m_window;
+    qint64 *m_stamp;
+};
+} // namespace
+
+void MainWindow::installInputWatcher()
+{
+    qApp->installEventFilter(new InputWatcher(this, &m_lastInputMs, this));
+}
+
+bool MainWindow::userIsLooking() const
+{
+    if (!isVisible() || isMinimized() || !isActiveWindow()) return false;
+    if (QGuiApplication::applicationState() != Qt::ApplicationActive) return false;
+    // Pointer really above our window (a covering window of another program would be found there instead)?
+    const QWidget *under = QApplication::widgetAt(QCursor::pos());
+    if (under && under->window() == this) return true;
+    // Otherwise the user must have been working in this window a moment ago.
+    return QDateTime::currentMSecsSinceEpoch() - m_lastInputMs < 30 * 1000;
+}
+
 bool MainWindow::event(QEvent *event)
 {
     const bool result = QMainWindow::event(event);
     if (event->type() == QEvent::WindowActivate) {
+        m_lastInputMs = QDateTime::currentMSecsSinceEpoch();
+        // Messages that arrived in the open chat while the window was covered are read now.
+        const auto cur = m_convs.find(m_current);
+        if (cur != m_convs.end() && cur->unread > 0) {
+            cur->unread = 0;
+            m_notifier->close(m_current);
+            refreshList();
+        }
         // When returning to the app (e.g. via Alt+Tab), put the caret back into
         // the composer so typing can start immediately. Do this after Qt has
         // finished activation so another child widget cannot steal the focus.
@@ -1384,7 +1442,7 @@ bool MainWindow::addMessage(const QString &key, Message m, const QString &title,
             showConversation(true);
     }
     // A message in the selected chat is only read while the window is visible.
-    if (!m.outgoing && !(key == m_current && isVisible() && !isMinimized()))
+    if (!m.outgoing && !(key == m_current && userIsLooking()))
         c.unread++;
     refreshList();
     if (!m.outgoing && !isActiveWindow()) QApplication::alert(this);
@@ -2922,7 +2980,7 @@ void MainWindow::alertIncoming(const QString &key, const Message &m)
     const auto it = m_convs.constFind(key);
     if (it == m_convs.constEnd() || it->muted) return;
     // Nothing to announce while the user is looking at this very conversation.
-    if (isVisible() && !isMinimized() && isActiveWindow() && key == m_current) return;
+    if (key == m_current && userIsLooking()) return;
 
     // Notification and sound are independent switches.
     if (m_notify.notifications) {

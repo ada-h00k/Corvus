@@ -139,6 +139,9 @@ private:
     void applyNotificationSettings();
     void updateTray();
     void alertIncoming(const QString &key, const Message &m);
+    void installInputWatcher();
+    qint64 m_lastInputMs = 0; // last keyboard/mouse input inside this window
+    bool userIsLooking() const; // window really in front of the user (not just "active" while covered)
     void openConversation(const QString &key);
 
     // --- list / view
