@@ -370,6 +370,13 @@ jobs:
           set -euxo pipefail
           git clone --depth 1 --branch "$QTKEYCHAIN_VERSION" \
             https://github.com/frankosterfeld/qtkeychain.git "$RUNNER_TEMP/qtkeychain"
+
+          # Upstream bug in v0.14.0: on Apple, isAvailable() is defined at global
+          # scope instead of in namespace QKeychain, so the app fails to link with
+          # "Undefined symbols: QKeychain::isAvailable()". Fix the one line.
+          perl -0pi -e 's/\nbool isAvailable\(\)/\nbool QKeychain::isAvailable()/' \
+            "$RUNNER_TEMP/qtkeychain/keychain_apple.mm"
+          grep -q "bool QKeychain::isAvailable()" "$RUNNER_TEMP/qtkeychain/keychain_apple.mm"
           cmake -S "$RUNNER_TEMP/qtkeychain" -B "$RUNNER_TEMP/qtkeychain-build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -380,6 +387,11 @@ jobs:
             -DBUILD_TRANSLATIONS=OFF
           cmake --build "$RUNNER_TEMP/qtkeychain-build" --parallel
           cmake --install "$RUNNER_TEMP/qtkeychain-build"
+
+          # Fail early if the library still lacks the symbol the app needs
+          ls -l "$RUNNER_TEMP"/qtkeychain-install/lib/
+          nm -gU "$RUNNER_TEMP"/qtkeychain-install/lib/libqt6keychain*.dylib \
+            | grep "__ZN9QKeychain11isAvailableEv"
 
       - name: Configure CMake
         shell: bash
