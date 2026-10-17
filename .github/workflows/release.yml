@@ -299,10 +299,18 @@ jobs:
           done
 
           # the package must contain the executable, desktop entry, icon and license
-          pacman -Qlp dist/*.pkg.tar.zst | grep -q ' usr/bin/signal-cli-qt$'
-          pacman -Qlp dist/*.pkg.tar.zst | grep -q 'applications/signal-cli-qt.desktop$'
-          pacman -Qlp dist/*.pkg.tar.zst | grep -q 'icons/hicolor/scalable/apps/signal-cli-qt.svg$'
-          pacman -Qlp dist/*.pkg.tar.zst | grep -q 'usr/share/licenses/signal-cli-qt/LICENSE$'
+          files="$(pacman -Qlp dist/*.pkg.tar.zst)"
+          for path in \
+            /usr/bin/signal-cli-qt \
+            /usr/share/applications/signal-cli-qt.desktop \
+            /usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg \
+            /usr/share/licenses/signal-cli-qt/LICENSE
+          do
+            if ! grep -qxF "signal-cli-qt $path" <<< "$files"; then
+              echo "::error::Package is missing $path"
+              exit 1
+            fi
+          done
 
       - name: Upload Arch package artifact
         if: always() && hashFiles('dist/*') != ''
