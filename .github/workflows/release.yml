@@ -322,6 +322,62 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
+  # macOS app (Swift / SwiftUI, Apple silicon)
+  # ------------------------------------------------------
+  macos-app:
+    name: Build macOS app (arm64)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Builds the Rust history store, the Swift package and the .app bundle
+      - name: Build app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          macos/scripts/build-app.sh
+
+      - name: Run Swift tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test --package-path macos
+
+      - name: Package app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          ditto -c -k --keepParent "macos/build/signal-cli Mac.app" dist/signal-cli-mac-macos-arm64.zip
+
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s dist/signal-cli-mac-macos-arm64.zip
+          unzip -l dist/signal-cli-mac-macos-arm64.zip
+          codesign --verify --verbose "macos/build/signal-cli Mac.app"
+          file "macos/build/signal-cli Mac.app/Contents/MacOS/signal-cli-mac"
+          ls -lh dist
+
+      - name: Upload build artifacts
+        if: always() && hashFiles('dist/*') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-qt-macos-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------
   # Create a release for every commit (all artifacts together)
   # ------------------------------------------------------
   release:
@@ -330,6 +386,7 @@ jobs:
     needs:
       - build
       - arch-package
+      - macos-app
 
     steps:
       - name: Download build artifacts
@@ -355,10 +412,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.sha }}
-          name: Linux build ${{ github.sha }}
+          name: Build ${{ github.sha }}
           target_commitish: ${{ github.sha }}
           body: |
-            Automatic Linux x86_64 build.
+            Automatic Linux x86_64 and macOS (Apple silicon) build.
 
             Commit: `${{ github.sha }}`
 
@@ -366,9 +423,11 @@ jobs:
             - `signal-cli-qt-linux-x86_64` — plain executable
             - `signal-cli-qt-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
             - `signal-cli-qt-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
+            - `signal-cli-mac-macos-arm64.zip` — native macOS app for Apple silicon, macOS 14 or newer
+              (ad-hoc signed: open it the first time with right-click → Open)
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `signal-cli` must be installed separately (on Arch e.g. from the AUR).
+            `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS `brew install signal-cli`).
           draft: false
           prerelease: false
           make_latest: true
@@ -377,4 +436,5 @@ jobs:
             dist/signal-cli-qt-linux-x86_64
             dist/signal-cli-qt-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
+            dist/signal-cli-mac-macos-arm64.zip
             dist/SHA256SUMS

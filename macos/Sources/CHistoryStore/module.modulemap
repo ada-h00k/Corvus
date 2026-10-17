@@ -1,0 +1,5 @@
+module CHistoryStore [system] {
+    header "../../../history-store/include/history_store.h"
+    link "history_store"
+    export *
+}

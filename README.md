@@ -169,7 +169,8 @@ as a release tagged `build-<commit SHA>`:
 |------|-------------|
 | `signal-cli-qt-linux-x86_64` | Linux x86_64 executable. Dynamically links to Qt; it does not bundle runtime libraries. |
 | `signal-cli-qt-linux-x86_64-installer.tar.gz` | Install bundle containing the executable, `install.sh`, desktop launcher, and icon. |
-| `SHA256SUMS` | SHA-256 checksums for the executable and installer archive. |
+| `signal-cli-mac-macos-arm64.zip` | Native macOS app for Apple silicon (macOS 14+), see [macos/README.md](macos/README.md). |
+| `SHA256SUMS` | SHA-256 checksums for all files of the release. |
 
 Linux x86_64 only. Install Qt 6 runtime libraries (Widgets, Network, Multimedia
 and MultimediaWidgets), QtKeychain 0.14 or newer, and a system credential store.
@@ -205,6 +206,9 @@ repositories and must be installed separately (e.g. from the AUR). To build it y
 see the instructions at the top of `packaging/arch/PKGBUILD`.
 
 ## Build from source
+
+The macOS app is built differently (Swift package + Xcode), see [macos/README.md](macos/README.md).
+
 
 Requirements: C++17 compiler, CMake ≥ 3.16, Qt 6 (Widgets, Network, Multimedia),
 QtKeychain 0.14 or newer,
