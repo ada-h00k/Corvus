@@ -1,10 +1,11 @@
-name: Build Linux Release
+name: Build Release (Linux + macOS)
 
 on:
   push:
     branches:
       - main
       - master
+      - macos-build
   workflow_dispatch:
 
 permissions:
@@ -322,13 +323,164 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
+  # macOS Apple Silicon (arm64)
+  # ------------------------------------------------------
+  build-macos:
+    name: Build macOS arm64
+    runs-on: macos-14   # Apple Silicon (M1)
+
+    env:
+      QTKEYCHAIN_VERSION: v0.14.0
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install ninja cmake pkg-config
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qtmultimedia
+          cache: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Rust tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --release --locked --manifest-path history-store/Cargo.toml
+
+      # QtKeychain is not part of the aqt Qt, so build it against it
+      # (uses the macOS Keychain as backend).
+      - name: Build QtKeychain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch "$QTKEYCHAIN_VERSION" \
+            https://github.com/frankosterfeld/qtkeychain.git "$RUNNER_TEMP/qtkeychain"
+          cmake -S "$RUNNER_TEMP/qtkeychain" -B "$RUNNER_TEMP/qtkeychain-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qtkeychain-install" \
+            -DBUILD_WITH_QT6=ON \
+            -DBUILD_TEST_APPLICATION=OFF \
+            -DBUILD_TRANSLATIONS=OFF
+          cmake --build "$RUNNER_TEMP/qtkeychain-build" --parallel
+          cmake --install "$RUNNER_TEMP/qtkeychain-build"
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$RUNNER_TEMP/qtkeychain-install"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # The CMake project builds a bare executable, so wrap it in an .app
+      # bundle here (no source changes needed). macdeployqt then copies the
+      # Qt frameworks and plugins into it.
+      - name: Create app bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          VERSION="$(sed -n 's/^project(signal-cli-qt VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          APP="dist/signal-cli-qt.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp build/signal-cli-qt "$APP/Contents/MacOS/signal-cli-qt"
+
+          cat > "$APP/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>signal-cli Qt</string>
+            <key>CFBundleDisplayName</key><string>signal-cli Qt</string>
+            <key>CFBundleIdentifier</key><string>io.github.ada-h00k.signal-cli-qt</string>
+            <key>CFBundleExecutable</key><string>signal-cli-qt</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${GITHUB_RUN_NUMBER}</string>
+            <key>LSMinimumSystemVersion</key><string>${MACOSX_DEPLOYMENT_TARGET}</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          EOF
+          plutil -lint "$APP/Contents/Info.plist"
+
+      - name: Bundle Qt (macdeployqt)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          "$QT_ROOT_DIR/bin/macdeployqt" dist/signal-cli-qt.app \
+            -libpath="$RUNNER_TEMP/qtkeychain-install/lib" \
+            -verbose=1
+
+          # Ad-hoc signature: arm64 binaries must be signed to run at all.
+          # This is not a Developer ID signature; Gatekeeper still asks once.
+          codesign --force --deep --sign - dist/signal-cli-qt.app
+          codesign --verify --deep --strict --verbose=2 dist/signal-cli-qt.app
+
+          # Fail if the binary still points at build-machine paths
+          if otool -L dist/signal-cli-qt.app/Contents/MacOS/signal-cli-qt \
+              | grep -E "$RUNNER_TEMP|/Users/runner"; then
+            echo "::error::Binary still links against build-machine paths"
+            exit 1
+          fi
+
+          file dist/signal-cli-qt.app/Contents/MacOS/signal-cli-qt
+          lipo -archs dist/signal-cli-qt.app/Contents/MacOS/signal-cli-qt
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd dist
+          hdiutil create -volname "signal-cli Qt" \
+            -srcfolder signal-cli-qt.app -ov -format UDZO \
+            signal-cli-qt-macos-arm64.dmg
+          ditto -c -k --keepParent signal-cli-qt.app signal-cli-qt-macos-arm64.app.zip
+          rm -rf signal-cli-qt.app
+          shasum -a 256 signal-cli-qt-macos-arm64.dmg signal-cli-qt-macos-arm64.app.zip \
+            | tee SHA256SUMS
+          ls -lh
+
+      - name: Upload build artifacts
+        if: always() && hashFiles('dist/*') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-qt-macos-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------
   # Create a release for every commit (all artifacts together)
   # ------------------------------------------------------
   release:
     name: Publish release
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
     needs:
       - build
+      - build-macos
       - arch-package
 
     steps:
@@ -355,10 +507,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.sha }}
-          name: Linux build ${{ github.sha }}
+          name: Build ${{ github.sha }}
           target_commitish: ${{ github.sha }}
           body: |
-            Automatic Linux x86_64 build.
+            Automatic build (Linux x86_64, macOS arm64).
 
             Commit: `${{ github.sha }}`
 
@@ -366,9 +518,14 @@ jobs:
             - `signal-cli-qt-linux-x86_64` — plain executable
             - `signal-cli-qt-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
             - `signal-cli-qt-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
+            - `signal-cli-qt-macos-arm64.dmg` — macOS (Apple Silicon) disk image
+            - `signal-cli-qt-macos-arm64.app.zip` — macOS (Apple Silicon) app bundle as zip
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `signal-cli` must be installed separately (on Arch e.g. from the AUR).
+            `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS e.g. `brew install signal-cli`).
+
+            The macOS app is only ad-hoc signed (not notarized). On first launch use right-click → Open, or run
+            `xattr -dr com.apple.quarantine /Applications/signal-cli-qt.app`.
           draft: false
           prerelease: false
           make_latest: true
@@ -377,4 +534,6 @@ jobs:
             dist/signal-cli-qt-linux-x86_64
             dist/signal-cli-qt-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
+            dist/signal-cli-qt-macos-arm64.dmg
+            dist/signal-cli-qt-macos-arm64.app.zip
             dist/SHA256SUMS
