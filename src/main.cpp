@@ -1,4 +1,5 @@
 #include "AppIcon.h"
+#include <QStyleFactory>
 #include "MainWindow.h"
 
 #include <QApplication>
@@ -55,6 +56,22 @@ int main(int argc, char *argv[])
         QGuiApplication::setDesktopFileName(QStringLiteral("signal-cli-qt"));
 
     QApplication::setWindowIcon(AppIcon::app());
+
+#ifdef Q_OS_MACOS
+    {
+        // The macOS widget style is a plugin (plugins/styles/libqmacstyle.dylib). If it is
+        // missing from the bundle, Qt silently falls back to Fusion (flat grey boxes).
+        QStyle *mac = QStyleFactory::create(QStringLiteral("macos"));
+        if (!mac)
+            mac = QStyleFactory::create(QStringLiteral("macintosh"));
+        if (mac) {
+            QApplication::setStyle(mac);
+        } else {
+            std::fprintf(stderr, "macOS widget style not found, available styles: %s\n",
+                         QStyleFactory::keys().join(QStringLiteral(", ")).toLocal8Bit().constData());
+        }
+    }
+#endif
 
     // Only one instance may use the chat history: two processes appending to history.scq (or
     // compacting it) at the same time would corrupt it. The lock lives next to the file, so

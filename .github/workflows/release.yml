@@ -327,7 +327,9 @@ jobs:
   # ------------------------------------------------------
   build-macos:
     name: Build macOS arm64
-    runs-on: macos-14   # Apple Silicon (M1)
+    # macOS 26 runner = Xcode 26 / macOS 26 SDK. Apps linked against an older SDK
+    # get the legacy appearance on current macOS; macos-14 is also being retired.
+    runs-on: macos-26   # Apple Silicon (arm64)
 
     env:
       QTKEYCHAIN_VERSION: v0.14.0
@@ -432,10 +434,36 @@ jobs:
             <key>CFBundleVersion</key><string>${GITHUB_RUN_NUMBER}</string>
             <key>LSMinimumSystemVersion</key><string>${MACOSX_DEPLOYMENT_TARGET}</string>
             <key>NSHighResolutionCapable</key><true/>
+            <key>NSPrincipalClass</key><string>NSApplication</string>
+            <key>CFBundleIconFile</key><string>signal-cli-qt</string>
+            <key>LSApplicationCategoryType</key><string>public.app-category.social-networking</string>
+            <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
           </dict>
           </plist>
           EOF
           plutil -lint "$APP/Contents/Info.plist"
+
+      # Dock/Finder icon: render the SVG into an .icns. Not fatal if it fails.
+      - name: Create app icon
+        shell: bash
+        run: |
+          set +e
+          brew install librsvg
+          ICONSET="$RUNNER_TEMP/AppIcon.iconset"
+          mkdir -p "$ICONSET"
+          ok=1
+          for size in 16 32 128 256 512; do
+            rsvg-convert -w "$size" -h "$size" packaging/signal-cli-qt.svg \
+              -o "$ICONSET/icon_${size}x${size}.png" || ok=0
+            rsvg-convert -w "$((size * 2))" -h "$((size * 2))" packaging/signal-cli-qt.svg \
+              -o "$ICONSET/icon_${size}x${size}@2x.png" || ok=0
+          done
+          if [ "$ok" = 1 ] && iconutil -c icns "$ICONSET" \
+              -o dist/signal-cli-qt.app/Contents/Resources/signal-cli-qt.icns; then
+            echo "icon created"
+          else
+            echo "::warning::App icon could not be created; the app will use the generic icon"
+          fi
 
       - name: Bundle Qt (macdeployqt)
         shell: bash
@@ -444,6 +472,22 @@ jobs:
           "$QT_ROOT_DIR/bin/macdeployqt" dist/signal-cli-qt.app \
             -libpath="$RUNNER_TEMP/qtkeychain-install/lib" \
             -verbose=1
+
+          # The native macOS look comes from the style plugin. Without it Qt silently
+          # falls back to Fusion (flat grey boxes), so make sure it is in the bundle.
+          BUNDLE=dist/signal-cli-qt.app
+          STYLE="$BUNDLE/Contents/PlugIns/styles/libqmacstyle.dylib"
+          if [ ! -f "$STYLE" ]; then
+            echo "::warning::macdeployqt did not deploy the macOS style plugin, copying it"
+            test -f "$QT_ROOT_DIR/plugins/styles/libqmacstyle.dylib"
+            mkdir -p "$BUNDLE/Contents/PlugIns/styles"
+            cp "$QT_ROOT_DIR/plugins/styles/libqmacstyle.dylib" "$STYLE"
+            # resolve Qt frameworks from inside the bundle
+            install_name_tool -add_rpath "@loader_path/../../Frameworks" "$STYLE" || true
+          fi
+          echo "Deployed plugins:"
+          find "$BUNDLE/Contents/PlugIns" -name '*.dylib' | sort
+          otool -L "$STYLE"
 
           # Ad-hoc signature: arm64 binaries must be signed to run at all.
           # This is not a Developer ID signature; Gatekeeper still asks once.
