@@ -200,7 +200,8 @@ Every release also contains a ready-made package (`signal-cli-qt-<version>-1-x86
 sudo pacman -U signal-cli-qt-*.pkg.tar.zst
 ```
 
-It depends on `signal-cli`, `qt6-base`, `qt6-multimedia` and `qtkeychain-qt6`. To build it yourself,
+It depends on `qt6-base`, `qt6-multimedia` and `qtkeychain-qt6`. `signal-cli` is not in the official
+repositories and must be installed separately (e.g. from the AUR). To build it yourself,
 see the instructions at the top of `packaging/arch/PKGBUILD`.
 
 ## Build from source

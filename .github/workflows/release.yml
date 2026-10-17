@@ -360,7 +360,7 @@ jobs:
             - `signal-cli-qt-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `signal-cli` must be installed separately (the Arch package pulls it in as a dependency).
+            `signal-cli` must be installed separately (on Arch e.g. from the AUR).
           draft: false
           prerelease: false
           make_latest: true

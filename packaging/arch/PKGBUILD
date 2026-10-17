@@ -24,14 +24,16 @@ depends=(
   'qt6-base'
   'qt6-multimedia'
   'qtkeychain-qt6'
-  'signal-cli'
 )
 makedepends=(
   'cargo'
   'cmake'
   'ninja'
 )
+# signal-cli is not in the official repositories (AUR: signal-cli / signal-cli-bin),
+# so it cannot be a hard dependency. The program needs it at runtime, though.
 optdepends=(
+  'signal-cli: required at runtime, install it from the AUR or as a release archive'
   'qrencode: show the QR code when linking a device'
   'pipewire: notification sounds via pw-play'
   'libpulse: notification sounds via paplay'
