@@ -381,8 +381,8 @@ static QString html(ChatView *v) { return v->plainText(); }
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
-    QApplication::setOrganizationName(QStringLiteral("signal-cli-qt"));
-    QApplication::setApplicationName(QStringLiteral("signal-cli-qt"));
+    QApplication::setOrganizationName(QStringLiteral("wren"));
+    QApplication::setApplicationName(QStringLiteral("wren"));
 
     const QString firstHistorySecret = HistoryKeychain::generateSecret();
     const QString secondHistorySecret = HistoryKeychain::generateSecret();
@@ -1063,7 +1063,7 @@ int main(int argc, char **argv)
 
     // The history file must not contain any message text.
     {
-        QFile f(tmp.path() + "/data/signal-cli-qt/signal-cli-qt/history.scq");
+        QFile f(tmp.path() + "/data/wren/wren/history.wren");
         CHECK(f.open(QIODevice::ReadOnly));
         const QByteArray raw = f.readAll();
         CHECK(raw.size() > 1000);

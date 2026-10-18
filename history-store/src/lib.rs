@@ -179,7 +179,7 @@ mod ffi_tests {
     fn c_abi_roundtrip() {
         let dir = std::env::temp_dir().join(format!("sc-ffi-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = c(dir.join("h.scq").to_str().unwrap());
+        let path = c(dir.join("h.wren").to_str().unwrap());
         let (pw, pw2) = (c("correct horse"), c("battery staple"));
         let rec = |t: &str| c(&format!(r#"{{"t":"m","c":"+49","ts":1,"s":"A","x":"{t}","o":false}}"#));
 

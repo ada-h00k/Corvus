@@ -125,7 +125,7 @@ static bool near(QRgb a, const QColor &b, int tol = 3)
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
-    QApplication::setOrganizationName("signal-cli-qt-test");
+    QApplication::setOrganizationName("wren-test");
     QApplication::setApplicationName("chatview-test");
     QTemporaryDir tmp;
     QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, tmp.path());

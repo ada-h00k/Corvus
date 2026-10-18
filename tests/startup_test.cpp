@@ -102,8 +102,8 @@ struct Run {
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
-    QApplication::setOrganizationName("signal-cli-qt");
-    QApplication::setApplicationName("signal-cli-qt");
+    QApplication::setOrganizationName("wren");
+    QApplication::setApplicationName("wren");
     QTimer dialogs;
     QObject::connect(&dialogs, &QTimer::timeout, autoDialogs);
     dialogs.start(25);
@@ -130,7 +130,7 @@ int main(int argc, char **argv)
         plain.insert("LD_LIBRARY_PATH", "/opt/x/lib");
         CHECK(SignalCli::childEnvironment(plain).value("LD_LIBRARY_PATH") == "/opt/x/lib"); // untouched outside an AppImage
 
-        qunsetenv("SIGNAL_CLI_QT_DEBUG");
+        qunsetenv("WREN_DEBUG");
         CHECK(!SignalCli::maskNumbers("account +4915112345678 ok").contains("15112345"));
     }
 

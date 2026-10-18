@@ -1,5 +1,5 @@
 #include "AppIcon.h"
-#include <QStyleFactory>
+#include "LegacyMigration.h"
 #include "MainWindow.h"
 
 #include <QApplication>
@@ -30,50 +30,25 @@ static void bringToFront(MainWindow &w)
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    QApplication::setOrganizationName(QStringLiteral("wren"));
+    QApplication::setApplicationName(QStringLiteral("wren"));
 
-#ifdef Q_OS_MACOS
-    {
-        // Apps started from Finder/Dock get only a minimal PATH, so Homebrew
-        // tools (qrencode, signal-cli, java) would not be found.
-        QStringList paths = QString::fromLocal8Bit(qgetenv("PATH"))
-                                .split(QLatin1Char(':'), Qt::SkipEmptyParts);
-        for (const QString &extra : {QStringLiteral("/opt/homebrew/bin"),
-                                     QStringLiteral("/usr/local/bin")}) {
-            if (!paths.contains(extra))
-                paths << extra;
-        }
-        qputenv("PATH", paths.join(QLatin1Char(':')).toLocal8Bit());
+    // Data written under the former name "signal-cli-qt" (history, settings) is moved over once.
+    QString migrationError;
+    if (!LegacyMigration::migrateDataAndSettings(migrationError)) {
+        QMessageBox::critical(nullptr, QObject::tr("Wren"), migrationError);
+        return 1;
     }
-#endif
-
-    QApplication::setOrganizationName(QStringLiteral("signal-cli-qt"));
-    QApplication::setApplicationName(QStringLiteral("signal-cli-qt"));
 
     // Registering an application ID with the desktop portal only works when a matching
     // .desktop file is installed. Without one (e.g. running from the build directory) it
     // just produces "Could not register app ID" warnings, so only announce it if it exists.
-    if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, QStringLiteral("signal-cli-qt.desktop")).isEmpty())
-        QGuiApplication::setDesktopFileName(QStringLiteral("signal-cli-qt"));
+    if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, QStringLiteral("wren.desktop")).isEmpty())
+        QGuiApplication::setDesktopFileName(QStringLiteral("wren"));
 
     QApplication::setWindowIcon(AppIcon::app());
 
-#ifdef Q_OS_MACOS
-    {
-        // The macOS widget style is a plugin (plugins/styles/libqmacstyle.dylib). If it is
-        // missing from the bundle, Qt silently falls back to Fusion (flat grey boxes).
-        QStyle *mac = QStyleFactory::create(QStringLiteral("macos"));
-        if (!mac)
-            mac = QStyleFactory::create(QStringLiteral("macintosh"));
-        if (mac) {
-            QApplication::setStyle(mac);
-        } else {
-            std::fprintf(stderr, "macOS widget style not found, available styles: %s\n",
-                         QStyleFactory::keys().join(QStringLiteral(", ")).toLocal8Bit().constData());
-        }
-    }
-#endif
-
-    // Only one instance may use the chat history: two processes appending to history.scq (or
+    // Only one instance may use the chat history: two processes appending to history.wren (or
     // compacting it) at the same time would corrupt it. The lock lives next to the file, so
     // different data directories (XDG_DATA_HOME) can run side by side.
     const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -81,7 +56,7 @@ int main(int argc, char *argv[])
     const QString lockPath = dataDir + QStringLiteral("/history.lock");
     QLockFile lock(lockPath);
     lock.setStaleLockTime(0); // never "stale" by age (home on a network share); a dead owner is still detected
-    const QString serverName = QStringLiteral("signal-cli-qt-")
+    const QString serverName = QStringLiteral("wren-")
         + QString::fromLatin1(QCryptographicHash::hash(lockPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(16));
 
     if (!lock.tryLock(0)) {
@@ -91,18 +66,18 @@ int main(int argc, char *argv[])
             socket.connectToServer(serverName);
             if (socket.waitForConnected(2000)) {
                 socket.disconnectFromServer();
-                std::fprintf(stderr, "signal-cli Qt is already running, bringing it to the front.\n");
+                std::fprintf(stderr, "Wren is already running, bringing it to the front.\n");
                 return 0;
             }
             qint64 pid = 0;
             QString host, appName;
             lock.getLockInfo(&pid, &host, &appName);
-            QMessageBox::warning(nullptr, QObject::tr("signal-cli Qt"),
-                                 QObject::tr("signal-cli Qt is already running (process %1), but it does not respond.\n\n"
+            QMessageBox::warning(nullptr, QObject::tr("Wren"),
+                                 QObject::tr("Wren is already running (process %1), but it does not respond.\n\n"
                                              "Close the other instance first. Two instances would damage the chat history.")
                                      .arg(pid));
         } else {
-            QMessageBox::critical(nullptr, QObject::tr("signal-cli Qt"),
+            QMessageBox::critical(nullptr, QObject::tr("Wren"),
                                   QObject::tr("Cannot lock the chat history (%1).\nCheck the permissions of the folder:\n%2")
                                       .arg(lockPath, dataDir));
         }
@@ -123,7 +98,7 @@ int main(int argc, char *argv[])
         bringToFront(w);
     });
     if (!server.listen(serverName))
-        std::fprintf(stderr, "signal-cli Qt: cannot listen for further start attempts: %s\n",
+        std::fprintf(stderr, "Wren: cannot listen for further start attempts: %s\n",
                      server.errorString().toLocal8Bit().constData());
 
     w.showAtStartup();

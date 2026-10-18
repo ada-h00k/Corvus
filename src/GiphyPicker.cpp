@@ -154,7 +154,7 @@ void GiphyPicker::search(const QString &query)
     url.setQuery(params);
 
     QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", "signal-cli-qt");
+    request.setRawHeader("User-Agent", "wren");
     m_searchReply = m_network.get(request);
     m_searchReply->setProperty("generation", QVariant::fromValue(m_searchGeneration));
 }
@@ -210,7 +210,7 @@ void GiphyPicker::loadPreview(int index)
 {
     if (index < 0 || index >= m_gifs.size()) return;
     QNetworkRequest request(m_gifs[index].previewUrl);
-    request.setRawHeader("User-Agent", "signal-cli-qt");
+    request.setRawHeader("User-Agent", "wren");
     QNetworkReply *reply = m_network.get(request);
     reply->setProperty("gifIndex", index);
     reply->setProperty("generation", QVariant::fromValue(m_searchGeneration));
@@ -235,7 +235,7 @@ void GiphyPicker::track(const QUrl &url)
 {
     if (url.isEmpty() || !isAllowedUrl(url)) return;
     QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", "signal-cli-qt");
+    request.setRawHeader("User-Agent", "wren");
     QNetworkReply *reply = m_network.get(request);
     connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
 }

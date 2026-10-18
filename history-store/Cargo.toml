@@ -3,7 +3,7 @@ name = "history-store"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
-description = "Encrypted chat-history store for signal-cli-qt (C ABI)"
+description = "Encrypted chat-history store for wren (C ABI)"
 
 [lib]
 name = "history_store"

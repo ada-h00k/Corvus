@@ -143,6 +143,7 @@ private:
     qint64 m_lastInputMs = 0; // last keyboard/mouse input inside this window
     bool userIsLooking() const; // window really in front of the user (not just "active" while covered)
     void openConversation(const QString &key);
+    void focusComposer(); // put the keyboard focus into the message field (deferred)
 
     // --- list / view
     void refreshList();

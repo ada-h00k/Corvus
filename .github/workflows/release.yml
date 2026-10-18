@@ -166,18 +166,11 @@ jobs:
           chmod +x dist/wren-linux-x86_64
 
           mkdir -p "$RUNNER_TEMP/wren-installer"
-
           cp dist/wren-linux-x86_64 "$RUNNER_TEMP/wren-installer/"
-          cp \
-            packaging/install.sh \
-            packaging/wren.desktop \
-            packaging/wren.svg \
+          cp packaging/install.sh packaging/wren.desktop packaging/wren.svg \
             "$RUNNER_TEMP/wren-installer/"
-
           chmod +x "$RUNNER_TEMP/wren-installer/install.sh"
-
-          tar -czf \
-            "$GITHUB_WORKSPACE/dist/wren-linux-x86_64-installer.tar.gz" \
+          tar -czf "$GITHUB_WORKSPACE/dist/wren-linux-x86_64-installer.tar.gz" \
             -C "$RUNNER_TEMP/wren-installer" .
 
       - name: Verify artifacts
@@ -189,6 +182,7 @@ jobs:
           test -s dist/wren-linux-x86_64-installer.tar.gz
 
           tar -tzf dist/wren-linux-x86_64-installer.tar.gz
+
           file dist/wren-linux-x86_64
 
           (
@@ -240,15 +234,7 @@ jobs:
 
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          base="$(sed -n \
-            's/^project(wren VERSION \([0-9.]*\).*/\1/p' \
-            CMakeLists.txt)"
-
-          if [ -z "$base" ]; then
-            echo "::error::Could not determine Wren version from CMakeLists.txt"
-            exit 1
-          fi
-
+          base="$(sed -n 's/^project(wren VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           count="$(git rev-list --count HEAD)"
           short="$(git rev-parse --short=7 HEAD)"
           pkgver="${base}.r${count}.g${short}"
@@ -265,7 +251,6 @@ jobs:
           git archive --format=tar.gz \
             --prefix="wren-${pkgver}/" \
             -o "$build_dir/wren-${pkgver}.tar.gz" HEAD
-
           cp packaging/arch/PKGBUILD "$build_dir/PKGBUILD"
 
           sed -i "s/^pkgver=.*/pkgver=${pkgver}/" \
@@ -316,11 +301,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # ======================================================
-  # Native macOS app: Swift / SwiftUI
-  # ======================================================
+  # ------------------------------------------------------
+  # macOS app (Swift / SwiftUI, Apple silicon)
+  # ------------------------------------------------------
   macos-app:
-    name: Build macOS app (Swift, arm64)
+    name: Build macOS app (arm64)
     runs-on: macos-15
 
     steps:
@@ -330,11 +315,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Builds the Rust history store, the Swift package and the .app bundle
       - name: Build app bundle
         shell: bash
         run: |
           set -euo pipefail
-
           xcodebuild -version
           macos/scripts/build-app.sh
 
@@ -350,10 +335,7 @@ jobs:
           set -euo pipefail
 
           mkdir -p dist
-
-          ditto -c -k --keepParent \
-            macos/build/Wren.app \
-            dist/wren-macos-arm64.zip
+          ditto -c -k --keepParent "macos/build/Wren.app" dist/wren-macos-arm64.zip
 
       - name: Verify artifacts
         shell: bash
@@ -362,10 +344,8 @@ jobs:
 
           test -s dist/wren-macos-arm64.zip
           unzip -l dist/wren-macos-arm64.zip
-
-          codesign --verify --verbose macos/build/Wren.app
-          file macos/build/Wren.app/Contents/MacOS/wren
-
+          codesign --verify --verbose "macos/build/Wren.app"
+          file "macos/build/Wren.app/Contents/MacOS/wren"
           ls -lh dist
 
       - name: Upload build artifacts
@@ -377,296 +357,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # ======================================================
-  # Qt macOS app: Wren-macos-qt (Apple Silicon)
-  # ======================================================
-  macos-qt-app:
-    name: Build macOS Qt app (arm64)
-    runs-on: macos-26
-
-    env:
-      QTKEYCHAIN_VERSION: v0.14.0
-      MACOSX_DEPLOYMENT_TARGET: "12.0"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install build tools
-        shell: bash
-        run: |
-          set -euxo pipefail
-          brew install ninja cmake pkg-config
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: mac
-          target: desktop
-          arch: clang_64
-          modules: qtmultimedia
-          cache: true
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Run Rust tests
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cargo test \
-            --release \
-            --locked \
-            --manifest-path history-store/Cargo.toml
-
-      # QtKeychain must be built against the installed Qt version.
-      - name: Build QtKeychain
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          git clone --depth 1 --branch "$QTKEYCHAIN_VERSION" \
-            https://github.com/frankosterfeld/qtkeychain.git \
-            "$RUNNER_TEMP/qtkeychain"
-
-          # Fix the isAvailable() symbol in upstream v0.14.0 on Apple.
-          perl -0pi -e \
-            's/\nbool isAvailable\(\)/\nbool QKeychain::isAvailable()/' \
-            "$RUNNER_TEMP/qtkeychain/keychain_apple.mm"
-
-          grep -q "bool QKeychain::isAvailable()" \
-            "$RUNNER_TEMP/qtkeychain/keychain_apple.mm"
-
-          cmake \
-            -S "$RUNNER_TEMP/qtkeychain" \
-            -B "$RUNNER_TEMP/qtkeychain-build" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qtkeychain-install" \
-            -DBUILD_WITH_QT6=ON \
-            -DBUILD_TEST_APPLICATION=OFF \
-            -DBUILD_TRANSLATIONS=OFF
-
-          cmake --build "$RUNNER_TEMP/qtkeychain-build" --parallel
-          cmake --install "$RUNNER_TEMP/qtkeychain-build"
-
-          ls -l "$RUNNER_TEMP"/qtkeychain-install/lib/
-
-          nm -gU "$RUNNER_TEMP"/qtkeychain-install/lib/libqt6keychain*.dylib \
-            | grep "__ZN9QKeychain11isAvailableEv"
-
-      - name: Configure CMake
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cmake \
-            -S . \
-            -B build \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            "-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" \
-            "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR;$RUNNER_TEMP/qtkeychain-install"
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Locate Qt executable
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          find build -maxdepth 4 -type f -executable -print
-
-          BINARY=""
-
-          for candidate in \
-            build/wren \
-            build/bin/wren \
-            build/Wren \
-            build/bin/Wren
-          do
-            if [ -f "$candidate" ]; then
-              BINARY="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$BINARY" ]; then
-            echo "::error::Qt application binary not found. Check the CMake target name."
-            exit 1
-          fi
-
-          echo "QT_BINARY=$BINARY" >> "$GITHUB_ENV"
-          file "$BINARY"
-
-      - name: Create Qt app bundle
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          VERSION="$(sed -n \
-            's/^project(wren VERSION \([0-9.]*\).*/\1/p' \
-            CMakeLists.txt)"
-
-          if [ -z "$VERSION" ]; then
-            echo "::error::Could not determine Wren version."
-            exit 1
-          fi
-
-          APP="dist/Wren-macos-qt.app"
-
-          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-
-          cp "$QT_BINARY" "$APP/Contents/MacOS/wren"
-          chmod +x "$APP/Contents/MacOS/wren"
-
-          cat > "$APP/Contents/Info.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key>
-            <string>Wren-macos-qt</string>
-            <key>CFBundleDisplayName</key>
-            <string>Wren (Qt)</string>
-            <key>CFBundleIdentifier</key>
-            <string>org.wren.app.qt</string>
-            <key>CFBundleExecutable</key>
-            <string>wren</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>CFBundleShortVersionString</key>
-            <string>${VERSION}</string>
-            <key>CFBundleVersion</key>
-            <string>${GITHUB_RUN_NUMBER}</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>${MACOSX_DEPLOYMENT_TARGET}</string>
-            <key>NSHighResolutionCapable</key>
-            <true/>
-            <key>NSPrincipalClass</key>
-            <string>NSApplication</string>
-            <key>CFBundleIconFile</key>
-            <string>wren</string>
-            <key>LSApplicationCategoryType</key>
-            <string>public.app-category.social-networking</string>
-            <key>NSSupportsAutomaticGraphicsSwitching</key>
-            <true/>
-          </dict>
-          </plist>
-          EOF
-
-          plutil -lint "$APP/Contents/Info.plist"
-
-      - name: Create Qt app icon
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          brew install librsvg
-
-          ICONSET="$RUNNER_TEMP/WrenAppIcon.iconset"
-          mkdir -p "$ICONSET"
-
-          for size in 16 32 128 256 512; do
-            rsvg-convert \
-              -w "$size" \
-              -h "$size" \
-              packaging/wren.svg \
-              -o "$ICONSET/icon_${size}x${size}.png"
-
-            rsvg-convert \
-              -w "$((size * 2))" \
-              -h "$((size * 2))" \
-              packaging/wren.svg \
-              -o "$ICONSET/icon_${size}x${size}@2x.png"
-          done
-
-          iconutil -c icns "$ICONSET" \
-            -o dist/Wren-macos-qt.app/Contents/Resources/wren.icns
-
-      - name: Bundle Qt and verify app
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          APP="dist/Wren-macos-qt.app"
-
-          "$QT_ROOT_DIR/bin/macdeployqt" "$APP" \
-            -libpath="$RUNNER_TEMP/qtkeychain-install/lib" \
-            -verbose=1
-
-          # Ensure the native macOS Qt style plugin is bundled.
-          STYLE="$APP/Contents/PlugIns/styles/libqmacstyle.dylib"
-
-          if [ ! -f "$STYLE" ]; then
-            echo "::warning::Copying the macOS Qt style plugin manually"
-
-            test -f "$QT_ROOT_DIR/plugins/styles/libqmacstyle.dylib"
-
-            mkdir -p "$APP/Contents/PlugIns/styles"
-            cp "$QT_ROOT_DIR/plugins/styles/libqmacstyle.dylib" "$STYLE"
-
-            install_name_tool \
-              -add_rpath "@loader_path/../../Frameworks" \
-              "$STYLE" || true
-          fi
-
-          echo "Deployed plugins:"
-          find "$APP/Contents/PlugIns" -name '*.dylib' | sort
-
-          otool -L "$STYLE"
-
-          # Ad-hoc signature; this is not Developer ID signing or notarization.
-          codesign --force --deep --sign - "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-
-          if otool -L "$APP/Contents/MacOS/wren" \
-              | grep -E "$RUNNER_TEMP|/Users/runner"; then
-            echo "::error::Binary still links against build-machine paths"
-            exit 1
-          fi
-
-          file "$APP/Contents/MacOS/wren"
-          lipo -archs "$APP/Contents/MacOS/wren"
-
-      - name: Package Qt macOS app
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd dist
-
-          ditto -c -k --keepParent \
-            Wren-macos-qt.app \
-            wren-macos-qt-arm64.zip
-
-          test -s wren-macos-qt-arm64.zip
-          unzip -l wren-macos-qt-arm64.zip
-
-          codesign --verify --deep --strict Wren-macos-qt.app
-
-          shasum -a 256 wren-macos-qt-arm64.zip > SHA256SUMS
-
-          ls -lh
-
-      - name: Upload Qt macOS artifacts
-        if: always() && hashFiles('dist/*') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: wren-macos-qt-${{ github.sha }}
-          path: dist/*
-          if-no-files-found: warn
-          retention-days: 14
-
-  # ======================================================
-  # Publish a release containing all platform artifacts
-  # ======================================================
+  # ------------------------------------------------------
+  # Create a release for every commit (all artifacts together)
+  # ------------------------------------------------------
   release:
     name: Publish release
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
@@ -676,7 +369,6 @@ jobs:
       - build
       - arch-package
       - macos-app
-      - macos-qt-app
 
     steps:
       - name: Download build artifacts
@@ -708,24 +400,19 @@ jobs:
           name: Build ${{ github.sha }}
           target_commitish: ${{ github.sha }}
           body: |
-            Automatic Wren release for Linux and macOS.
+            Automatic Linux x86_64 and macOS (Apple silicon) build.
 
             Commit: `${{ github.sha }}`
 
             Files:
-
-            - `wren-linux-x86_64` — Linux x86_64 executable
-            - `wren-linux-x86_64-installer.tar.gz` — Linux executable, per-user installer and menu resources
+            - `wren-linux-x86_64` — plain executable
+            - `wren-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
             - `wren-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
-            - `wren-macos-arm64.zip` — native Swift/SwiftUI app for Apple Silicon
-            - `wren-macos-qt-arm64.zip` — Qt macOS app for Apple Silicon
-            - `SHA256SUMS` — SHA-256 checksums for all release files
+            - `wren-macos-arm64.zip` — native macOS app for Apple silicon, macOS 14 or newer
+              (ad-hoc signed: open it the first time with right-click → Open)
+            - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            The Qt macOS app is ad-hoc signed, not Developer ID signed or notarized.
-            On first launch, use right-click → Open if macOS blocks the app.
-
-            `signal-cli` must be installed separately if required by the application.
-
+            `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS `brew install signal-cli`).
           draft: false
           prerelease: false
           make_latest: true
@@ -735,5 +422,4 @@ jobs:
             dist/wren-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
             dist/wren-macos-arm64.zip
-            dist/wren-macos-qt-arm64.zip
             dist/SHA256SUMS
