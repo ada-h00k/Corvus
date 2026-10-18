@@ -143,8 +143,13 @@ target_link_libraries(wren PRIVATE app_core)
 # Build only the main Qt application as a macOS .app bundle.
 # Linux and other platforms continue to build a normal executable.
 if(APPLE)
+    # Own Info.plist: sets LSFileQuarantineEnabled, so files created by the app
+    # (received attachments, temporary copies) get the com.apple.quarantine flag.
+    configure_file(packaging/macos/Info.plist.in
+        ${CMAKE_BINARY_DIR}/Info.plist @ONLY)
     set_target_properties(wren PROPERTIES
         MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/Info.plist
     )
 endif()
 

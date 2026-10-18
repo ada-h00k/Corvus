@@ -509,6 +509,15 @@ jobs:
 
           codesign --verify --deep --strict --verbose=2 "$QT_APP_PATH"
 
+          # Files created by the app must be quarantined (Gatekeeper check).
+          quarantine="$(/usr/libexec/PlistBuddy \
+            -c 'Print :LSFileQuarantineEnabled' \
+            "$QT_APP_PATH/Contents/Info.plist")"
+          if [ "$quarantine" != "true" ]; then
+            echo "::error::LSFileQuarantineEnabled is not set in Info.plist"
+            exit 1
+          fi
+
           find "$QT_APP_PATH/Contents/MacOS" \
             -maxdepth 1 -type f -exec file {} \;
 

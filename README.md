@@ -265,6 +265,12 @@ see the instructions at the top of `packaging/arch/PKGBUILD`.
 
 The macOS app is built differently (Swift package + Xcode), see [macos/README.md](macos/README.md).
 
+The Qt build on macOS produces a `wren.app` bundle with its own `Info.plist`
+(`packaging/macos/Info.plist.in`). It sets `LSFileQuarantineEnabled`, so files the
+app creates (received attachments, temporary copies made by *Open*) carry the
+`com.apple.quarantine` flag and Gatekeeper checks them before they run. Check with
+`xattr -l <file>` after opening an attachment.
+
 
 Requirements: C++17 compiler, CMake ≥ 3.16, Qt 6 (Widgets, Network, Multimedia),
 QtKeychain 0.14 or newer,
