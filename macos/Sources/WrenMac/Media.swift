@@ -50,6 +50,26 @@ enum Media {
         return CGImageDestinationFinalize(dest) ? out as Data : Data()
     }
 
+    /// signal-cli runs as another app (src/SignalCliHelper.cpp) and may not read protected folders (Desktop,
+    /// Documents, …): copies the files into a new folder in the temporary directory and returns the copies.
+    static func stageForSignalCli(_ paths: [String]) -> (paths: [String], dir: URL) {
+        let dir = AppPaths.tempDir.appendingPathComponent("send-" + UUID().uuidString, isDirectory: true)
+        let staged = paths.enumerated().map { i, path -> String in
+            // One folder per file: signal-cli sends the file name along.
+            let target = dir.appendingPathComponent("\(i)", isDirectory: true)
+                .appendingPathComponent((path as NSString).lastPathComponent)
+            do {
+                try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try FileManager.default.copyItem(atPath: path, toPath: target.path)
+                return target.path
+            } catch {
+                return path
+            }
+        }
+        return (staged, dir)
+    }
+
     /// Writes data to a fresh file in the temporary directory.
     static func writeTemp(_ data: Data, name: String) throws -> URL {
         let dir = AppPaths.tempDir.appendingPathComponent(UUID().uuidString, isDirectory: true)

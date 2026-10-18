@@ -251,6 +251,8 @@ private struct ProfileSettings: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg, .gif, .webP, .heic]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        model.sendProfileUpdate(["avatar": url.path, "removeAvatar": false], success: "Signal avatar updated.")
+        // The copy stays in the temporary directory until Wren quits.
+        let avatar = Media.stageForSignalCli([url.path]).paths[0]
+        model.sendProfileUpdate(["avatar": avatar, "removeAvatar": false], success: "Signal avatar updated.")
     }
 }

@@ -24,6 +24,10 @@
     <string>@VERSION@</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.social-networking</string>
+    <!-- Quarantine files created by the app by default.
+         signal-cli runs through Contents/Helpers/wren-signal-cli.app so it does not inherit this. -->
+    <key>LSFileQuarantineEnabled</key>
+    <true/>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

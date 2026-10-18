@@ -85,7 +85,7 @@ void LinkDialog::startLinking()
             m_name->setEnabled(true);
         }
     });
-    m_proc->start(m_exe, {QStringLiteral("link"), QStringLiteral("-n"), name});
+    SignalCli::startProcess(m_proc, m_exe, {QStringLiteral("link"), QStringLiteral("-n"), name});
 }
 
 void LinkDialog::onStdout()
@@ -110,6 +110,9 @@ void LinkDialog::showUri(const QString &uri)
                                                       {QCoreApplication::applicationDirPath()});
     if (qrencode.isEmpty())
         qrencode = QStandardPaths::findExecutable(QStringLiteral("qrencode"));
+    if (qrencode.isEmpty()) // apps started from Finder get a PATH without Homebrew
+        qrencode = QStandardPaths::findExecutable(QStringLiteral("qrencode"),
+                                                  {QStringLiteral("/opt/homebrew/bin"), QStringLiteral("/usr/local/bin")});
     if (!qrencode.isEmpty()) {
         // Write the PNG to a temporary file instead of stdout: qrencode.exe on Windows does
         // not put stdout into binary mode, which corrupts the PNG data.
@@ -125,6 +128,7 @@ void LinkDialog::showUri(const QString &uri)
                 if (pm.load(pngPath, "PNG")) {
                     m_qr->setPixmap(pm);
                     m_status->setText(tr("Please scan the QR code with your phone …"));
+                    adjustSize(); // grow to show the whole QR code
                     return;
                 }
             }
@@ -133,6 +137,7 @@ void LinkDialog::showUri(const QString &uri)
     m_qr->setText(tr("To display the QR code, please install “qrencode”\n"
                      "(e.g. apt/brew install qrencode) or copy the URI into a QR generator."));
     m_status->setText(tr("Waiting for confirmation on your phone …"));
+    adjustSize();
 }
 
 void LinkDialog::onFinished(int exitCode)

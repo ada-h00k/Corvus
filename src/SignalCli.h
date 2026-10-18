@@ -53,6 +53,11 @@ public:
     // Environment for child processes: inside an AppImage the library/plugin
     // paths that point into the bundle are removed so Java etc. are not confused.
     static QProcessEnvironment childEnvironment(const QProcessEnvironment &base = QProcessEnvironment::systemEnvironment());
+    // Starts signal-cli in `p`; in the macOS app bundle through the helper app (src/SignalCliHelper.cpp).
+    static void startProcess(QProcess *p, const QString &exe, const QStringList &args);
+    // On macOS signal-cli runs as another app and may not read protected folders (Desktop, Documents, …):
+    // copies the files into `dir` and returns the copies. Elsewhere the paths are returned unchanged.
+    static QStringList stageFiles(const QStringList &paths, const QString &dir);
     // Forcefully ends a child process. On Windows signal-cli is started through signal-cli.bat
     // (cmd.exe -> java.exe); a plain kill() would leave the JVM running, so the whole tree is ended.
     static void killTree(QProcess *p);
