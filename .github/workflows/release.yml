@@ -548,6 +548,15 @@ jobs:
         with:
           arch: x64
 
+      # Git for Windows ships GNU "link.exe" (usr\bin), which shadows the MSVC linker in bash
+      # steps and breaks Rust/CMake links ("/usr/bin/link: extra operand"). Remove it.
+      - name: Remove GNU link.exe
+        shell: pwsh
+        run: |
+          $gnu = 'C:\Program Files\Git\usr\bin\link.exe'
+          if (Test-Path $gnu) { Remove-Item $gnu -Force }
+          (Get-Command link.exe -All).Source
+
       # Qt 6.12.0 is listed by aqtinstall but its Windows (MSVC) packages are not downloadable
       # ("Failed to locate XML data"). The Windows build therefore uses the 6.8 LTS series.
       - name: Install Qt
