@@ -1,3 +1,4 @@
+
 name: Wren Release
 
 on:
@@ -16,9 +17,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # --------------------------------------------------
-  # 1. Linux: Qt-App + Archiv mit vorhandenem Installer
-  # --------------------------------------------------
+  # ==================================================
+  # 1. Linux x86_64: App + Archiv mit Installationsskript
+  # ==================================================
   linux-build:
     name: Linux x86_64
     runs-on: ubuntu-24.04
@@ -35,14 +36,13 @@ jobs:
             cmake \
             ninja-build \
             pkg-config \
+            qtkeychain-qt6-dev \
+            libssl-dev \
+            libsecret-1-dev \
             libgl1-mesa-dev \
             libxkbcommon-dev \
             libxcb-cursor0 \
             libxcb-cursor-dev \
-            libqt6keychain1-dev \
-            libssl-dev \
-            libsecret-1-dev \
-            libgl-dev \
             libx11-dev \
             libx11-xcb-dev \
             libxext-dev \
@@ -88,7 +88,7 @@ jobs:
       - name: Build Wren
         run: cmake --build build --parallel 2
 
-      - name: Package Linux archive and installer
+      - name: Package Linux archive
         shell: bash
         run: |
           set -euo pipefail
@@ -109,7 +109,7 @@ jobs:
           done
 
           if [ -z "$BIN" ]; then
-            echo "::error::Could not find the Wren executable."
+            echo "::error::Wren executable not found."
             find build -maxdepth 4 -type f -executable -print
             exit 1
           fi
@@ -117,7 +117,7 @@ jobs:
           install -m 755 "$BIN" \
             dist/wren-linux-x86_64/wren
 
-          # Find and include the existing installation script.
+          # Locate the existing installer script.
           INSTALL_SCRIPT=""
           for candidate in \
             install.sh \
@@ -134,26 +134,27 @@ jobs:
           done
 
           if [ -z "$INSTALL_SCRIPT" ]; then
-            echo "::error::No existing Linux install script was found."
-            echo "Expected install.sh, install-linux.sh, scripts/ or packaging/."
+            echo "::error::Existing install script not found."
+            echo "Update the candidate paths in this workflow to match your repository."
             exit 1
           fi
 
           install -m 755 "$INSTALL_SCRIPT" \
             dist/wren-linux-x86_64/install.sh
 
-          cp LICENSE dist/wren-linux-x86_64/LICENSE
+          if [ -f LICENSE ]; then
+            cp LICENSE dist/wren-linux-x86_64/LICENSE
+          fi
 
           cat > dist/wren-linux-x86_64/README.txt <<'EOF'
           Wren for Linux x86_64
 
-          Extract this archive and run the included installer:
+          Extract the archive and run:
 
             chmod +x install.sh
             ./install.sh
 
-          The installer may require sudo privileges depending on its
-          implementation.
+          The installer may require sudo privileges.
           EOF
 
           tar -C dist \
@@ -161,7 +162,6 @@ jobs:
             wren-linux-x86_64
 
           test -s dist/wren-linux-x86_64.tar.gz
-
           ls -lh dist/wren-linux-x86_64.tar.gz
 
       - name: Upload Linux artifact
@@ -172,9 +172,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # --------------------------------------------------
+  # ==================================================
   # 2. Arch Linux package
-  # --------------------------------------------------
+  # ==================================================
   arch-package:
     name: Arch Linux package
     runs-on: ubuntu-24.04
@@ -182,7 +182,7 @@ jobs:
       image: archlinux:base-devel
 
     steps:
-      - name: Install Git and prerequisites
+      - name: Install prerequisites
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm git sudo
@@ -192,13 +192,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prepare package source and PKGBUILD
+      - name: Fix Git safe directory
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory /__w/Wren/Wren
+
+      - name: Prepare package source
         shell: bash
         run: |
           set -euo pipefail
 
           test -f packaging/arch/PKGBUILD
-          test -f LICENSE
 
           VERSION="$(sed -nE \
             's/^[[:space:]]*project\(wren VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' \
@@ -206,7 +211,7 @@ jobs:
 
           if [ -z "$VERSION" ]; then
             VERSION="0.1.0"
-            echo "::warning::Could not determine the version from CMakeLists.txt; using $VERSION."
+            echo "::warning::Version not found in CMakeLists.txt; using $VERSION."
           fi
 
           REVISION="$(git rev-list --count HEAD)"
@@ -222,49 +227,45 @@ jobs:
 
           cp packaging/arch/PKGBUILD package-work/PKGBUILD
 
+          sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" \
+            package-work/PKGBUILD
+
+          # Use the generated local source archive.
           sed -i \
-            "s/^pkgver=.*/pkgver=${PKGVER}/" \
+            "s|^source=.*|source=(\"wren-${PKGVER}.tar.gz\")|" \
+            package-work/PKGBUILD
+
+          # The archive was generated from this exact checkout.
+          sed -i \
+            '/^sha256sums=/c\sha256sums=("SKIP")' \
             package-work/PKGBUILD
 
           echo "PKGVER=${PKGVER}" >> "$GITHUB_ENV"
-
-          cat package-work/PKGBUILD
 
       - name: Build Arch package
         shell: bash
         run: |
           set -euo pipefail
 
-          cd package-work
-
-          # The PKGBUILD should use the local source archive.
-          # Replace its source entry to match the archive generated above.
-          sed -i \
-            "s|^source=.*|source=(\"wren-${PKGVER}.tar.gz\")|" \
-            PKGBUILD
-
-          # Do not require a source checksum for this CI-generated archive.
-          sed -i \
-            '/^sha256sums=/c\sha256sums=("SKIP")' \
-            PKGBUILD
-
-          # Build as a non-root user, as required by makepkg.
           useradd --create-home builder || true
-          chown -R builder:builder "$GITHUB_WORKSPACE/package-work"
-          chown -R builder:builder "$GITHUB_WORKSPACE"
 
+          chown -R builder:builder "$GITHUB_WORKSPACE/package-work"
+
+          # makepkg must not run as root.
           su builder -c \
             "cd '$GITHUB_WORKSPACE/package-work' && makepkg --cleanbuild --syncdeps --noconfirm"
 
-          find . -maxdepth 1 -name '*.pkg.tar.zst' -exec cp {} ../dist/ \;
+          find package-work -maxdepth 1 \
+            -name '*.pkg.tar.zst' \
+            -exec cp {} dist/ \;
 
-          test -n "$(find ../dist -maxdepth 1 -name '*.pkg.tar.zst' -print -quit)"
+          test -n "$(find dist -maxdepth 1 \
+            -name '*.pkg.tar.zst' -print -quit)"
 
       - name: Verify Arch package
         shell: bash
         run: |
           set -euo pipefail
-
           PKG="$(find dist -maxdepth 1 -name '*.pkg.tar.zst' -print -quit)"
           pacman -Qip "$PKG"
           pacman -Qlp "$PKG"
@@ -277,9 +278,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # --------------------------------------------------
-  # 3. Native macOS app: Swift / SwiftUI
-  # --------------------------------------------------
+  # ==================================================
+  # 3. Native macOS Swift / SwiftUI app
+  # ==================================================
   macos-app:
     name: macOS Swift / SwiftUI
     runs-on: macos-15
@@ -294,7 +295,7 @@ jobs:
       - name: Test Rust history store
         run: cargo test --manifest-path history-store/Cargo.toml
 
-      - name: Build native macOS app
+      - name: Build Swift app
         run: |
           set -euo pipefail
           chmod +x macos/scripts/build-app.sh
@@ -305,7 +306,6 @@ jobs:
 
       - name: Verify app bundle
         run: |
-          set -euo pipefail
           test -d macos/build/Wren.app
           test -f macos/build/Wren.app/Contents/Info.plist
 
@@ -313,10 +313,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+
           ditto -c -k --keepParent \
             macos/build/Wren.app \
             dist/wren-macos-arm64.zip
+
           test -s dist/wren-macos-arm64.zip
+
           shasum -a 256 dist/wren-macos-arm64.zip \
             > dist/wren-macos-arm64.zip.sha256
 
@@ -330,9 +333,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # --------------------------------------------------
-  # 4. macOS Qt app
-  # --------------------------------------------------
+  # ==================================================
+  # 4. Qt-based macOS app
+  # ==================================================
   macos-qt-app:
     name: macOS Qt
     runs-on: macos-26
@@ -346,8 +349,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: |
-          brew install cmake ninja pkg-config librsvg
+        run: brew install cmake ninja pkg-config librsvg
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -377,14 +379,6 @@ jobs:
 
           cd "$RUNNER_TEMP/qtkeychain"
 
-          # Fix the declaration used by this QtKeychain version if needed.
-          if grep -qE '^[[:space:]]*bool isAvailable\(\)' \
-            lib/keychain.h; then
-            sed -i '' \
-              's/^[[:space:]]*bool isAvailable()/bool QKeychain::isAvailable()/' \
-              lib/keychain.h
-          fi
-
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qtkeychain-install" \
@@ -402,7 +396,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$RUNNER_TEMP/qtkeychain-install"
+            "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR;$RUNNER_TEMP/qtkeychain-install"
 
       - name: Build Qt app
         run: cmake --build build --parallel 2
@@ -428,7 +422,7 @@ jobs:
           done
 
           if [ -z "$BIN" ]; then
-            echo "::error::Could not find the Wren Qt executable."
+            echo "::error::Qt executable not found."
             find build -maxdepth 4 -type f -executable -print
             exit 1
           fi
@@ -499,13 +493,11 @@ jobs:
           set -euo pipefail
 
           APP="dist/Wren-macos-qt.app"
-          EXECUTABLE="$APP/Contents/MacOS/wren"
 
           macdeployqt "$APP" \
             -always-overwrite \
             -libpath "$RUNNER_TEMP/qtkeychain-install/lib"
 
-          # Ensure the macOS platform plugin is included.
           PLUGIN="$(find "$QT_ROOT_DIR" \
             -name libqcocoa.dylib -print -quit)"
 
@@ -514,7 +506,6 @@ jobs:
             cp "$PLUGIN" "$APP/Contents/PlugIns/platforms/"
           fi
 
-          # Ensure the macOS style plugin is included when available.
           STYLE="$(find "$QT_ROOT_DIR" \
             -name libqmacstyle.dylib -print -quit)"
 
@@ -523,7 +514,6 @@ jobs:
             cp "$STYLE" "$APP/Contents/PlugIns/styles/"
           fi
 
-          # Include QtKeychain's shared library if it was built as a dylib.
           KEYCHAIN_LIB="$(find "$RUNNER_TEMP/qtkeychain-install" \
             -name '*qt*keychain*.dylib' -print -quit)"
 
@@ -532,22 +522,20 @@ jobs:
             cp "$KEYCHAIN_LIB" "$APP/Contents/Frameworks/"
           fi
 
-          # Ad-hoc signing permits local testing but is not notarization.
           find "$APP/Contents" -type f -name '*.dylib' -print0 |
             while IFS= read -r -d '' lib; do
               codesign --force --sign - "$lib"
             done
 
           codesign --force --deep --sign - "$APP"
-
           codesign --verify --deep --strict "$APP"
-          lipo -archs "$EXECUTABLE"
+
+          lipo -archs "$APP/Contents/MacOS/wren"
 
       - name: Package Qt app
         shell: bash
         run: |
           set -euo pipefail
-
           cd dist
 
           ditto -c -k --keepParent \
@@ -570,9 +558,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # --------------------------------------------------
-  # 5. Publish all four builds in one GitHub Release
-  # --------------------------------------------------
+  # ==================================================
+  # 5. Publish all four artifacts
+  # ==================================================
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-24.04
@@ -583,8 +571,6 @@ jobs:
       - macos-app
       - macos-qt-app
 
-    # Publish automatically only from main/master.
-    # workflow_dispatch on other branches still builds all artifacts.
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.ref == 'refs/heads/main' ||
@@ -594,7 +580,7 @@ jobs:
       contents: write
 
     steps:
-      - name: Download all build artifacts
+      - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: wren-*-${{ github.sha }}
@@ -619,7 +605,7 @@ jobs:
           cat SHA256SUMS
           ls -lh
 
-      - name: Publish release
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.sha }}
