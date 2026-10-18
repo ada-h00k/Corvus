@@ -117,10 +117,19 @@ else()
     message(STATUS "Desktop notifications: tray icon fallback only (Qt DBus not found)")
 endif()
 
+# ---- Application executable -----------------------------------------------
 add_executable(wren src/main.cpp)
 target_link_libraries(wren PRIVATE app_core)
 
-# ---- Tests (headless): cmake -DWREN_TESTS=ON, then ctest ---------
+# Build only the main Qt application as a macOS .app bundle.
+# Linux and other platforms continue to build a normal executable.
+if(APPLE)
+    set_target_properties(wren PROPERTIES
+        MACOSX_BUNDLE TRUE
+    )
+endif()
+
+# ---- Tests (headless): cmake -DWREN_TESTS=ON, then ctest ------------------
 option(WREN_TESTS "Build the GUI integration test" OFF)
 
 if(WREN_TESTS)
@@ -199,9 +208,13 @@ if(WREN_TESTS)
     )
 endif()
 
+# ---- Installation ---------------------------------------------------------
 include(GNUInstallDirs)
 
 install(TARGETS wren
+    # Required when wren is built as a MACOSX_BUNDLE.
+    BUNDLE DESTINATION .
+    # Used for regular executables on Linux and other platforms.
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
