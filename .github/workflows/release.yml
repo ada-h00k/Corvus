@@ -463,7 +463,6 @@ jobs:
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_MACOSX_BUNDLE=ON \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$QTKEYCHAIN_PREFIX;$HOMEBREW_PREFIX"
 
       - name: Build Qt application
