@@ -23,6 +23,7 @@ depends=(
   'hicolor-icon-theme'
   'qt6-base'
   'qt6-multimedia'
+  'qt6-svg'
   'qtkeychain-qt6'
 )
 makedepends=(

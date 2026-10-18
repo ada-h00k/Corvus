@@ -136,8 +136,26 @@ struct WrenMacApp: App {
 
 private struct MenuBarLabel: View {
     let unread: Int
+
+    /// The wren as a template image, so the menu bar tints it for light and dark appearance.
+    private static let icon: NSImage? = {
+        guard let image = AppResources.bundle.image(forResource: "MenuBarIcon") else { return nil }
+        image.isTemplate = true
+        image.size = NSSize(width: 18 * image.size.width / image.size.height, height: 18)
+        return image
+    }()
+
     var body: some View {
-        if unread > 0 {
+        if let icon = Self.icon {
+            if unread > 0 {
+                HStack(spacing: 4) {
+                    Image(nsImage: icon)
+                    Text("\(unread)")
+                }
+            } else {
+                Image(nsImage: icon)
+            }
+        } else if unread > 0 {
             Label("\(unread)", systemImage: "bubble.left.and.text.bubble.right.fill").labelStyle(.titleAndIcon)
         } else {
             Image(systemName: "bubble.left.and.bubble.right")

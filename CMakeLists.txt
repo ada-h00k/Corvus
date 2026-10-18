@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia MultimediaWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia MultimediaWidgets Svg)
 find_package(Qt6Keychain 0.14 REQUIRED)
 find_package(Threads REQUIRED)
 
@@ -39,6 +39,7 @@ add_dependencies(history_store history_store_cargo)
 # ---- Qt GUI ---------------------------------------------------------------
 set(APP_SOURCES
     resources/sounds.qrc
+    resources/icons.qrc
 
     src/Model.h
     src/NotificationSettings.h
@@ -100,6 +101,7 @@ target_link_libraries(app_core PUBLIC
     Qt6::Network
     Qt6::Multimedia
     Qt6::MultimediaWidgets
+    Qt6::Svg
     Qt6Keychain::Qt6Keychain
     history_store
     Threads::Threads
