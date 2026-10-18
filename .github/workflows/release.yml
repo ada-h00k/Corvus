@@ -547,7 +547,11 @@ jobs:
         with:
           arch: x64
 
+      # aqtinstall picks a random mirror, and some mirrors lack the newest Qt metadata
+      # ("Failed to locate XML data"). Try the default first, then download.qt.io directly.
       - name: Install Qt
+        id: qt1
+        continue-on-error: true
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
@@ -555,6 +559,17 @@ jobs:
           target: desktop
           modules: qtmultimedia
           cache: true
+
+      - name: Install Qt (retry from download.qt.io)
+        if: steps.qt1.outcome == 'failure'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          modules: qtmultimedia
+          cache: true
+          extra: --base https://download.qt.io
 
       # QtKeychain uses the Windows Credential Manager. Built against the same Qt.
       - name: Build QtKeychain
