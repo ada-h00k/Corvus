@@ -53,6 +53,9 @@ public:
     // Environment for child processes: inside an AppImage the library/plugin
     // paths that point into the bundle are removed so Java etc. are not confused.
     static QProcessEnvironment childEnvironment(const QProcessEnvironment &base = QProcessEnvironment::systemEnvironment());
+    // Forcefully ends a child process. On Windows signal-cli is started through signal-cli.bat
+    // (cmd.exe -> java.exe); a plain kill() would leave the JVM running, so the whole tree is ended.
+    static void killTree(QProcess *p);
     // Phone numbers are masked in diagnostics unless WREN_DEBUG is set.
     static QString maskNumbers(const QString &text);
 
