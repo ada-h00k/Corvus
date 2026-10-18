@@ -497,9 +497,13 @@ bool MainWindow::event(QEvent *event)
         // finished activation so another child widget cannot steal the focus.
         QTimer::singleShot(0, this, [this] {
             if (!isVisible() || !isActiveWindow() || !m_searchBar || m_searchBar->isVisible()) return;
-            if (m_input && m_input->isEnabled() && !m_current.isEmpty()) {
-                m_input->setFocus(Qt::OtherFocusReason);
-            }
+            if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) return;
+            if (!m_input || !m_input->isEnabled() || m_current.isEmpty()) return;
+            // Qt already restores the last focused widget on activation. Calling
+            // setFocus() on a widget that has focus again only confuses the input
+            // method (caret blinks, keys are lost), so leave it alone then.
+            if (QApplication::focusWidget() == m_input) return;
+            m_input->setFocus(Qt::ActiveWindowFocusReason);
         });
     }
     return result;
@@ -1951,7 +1955,23 @@ void MainWindow::openConversation(const QString &key)
     showConversation();
     refreshList();
     m_notifier->close(key); // the notification for this chat is obsolete now
-    m_input->setFocus();
+    focusComposer();
+}
+
+void MainWindow::focusComposer()
+{
+    // openConversation() normally runs from inside the chat list's mouse-press
+    // handler (currentItemChanged), right after the list took the focus and while
+    // refreshList() is rebuilding it. Focus set at that point can leave the text
+    // field half focused: the caret blinks but key presses go nowhere until the
+    // next click. So set it once the click has been handled, and if the field
+    // already counts as focused, force a clean FocusOut/FocusIn so the caret and
+    // the input method are in sync again.
+    QTimer::singleShot(0, this, [this] {
+        if (!m_input || !m_input->isEnabled() || !m_input->isVisible()) return;
+        if (isActiveWindow() && QApplication::focusWidget() == m_input) m_input->clearFocus();
+        m_input->setFocus(Qt::OtherFocusReason);
+    });
 }
 
 void MainWindow::showConversation(bool keepScroll)
