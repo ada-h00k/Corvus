@@ -773,7 +773,8 @@ final class AppModel {
     }
 
     private func expireMessages() {
-        guard historyReady, chats.expireMessages(now: nowMs()) else { return }
+        let now = nowMs()
+        guard historyReady, chats.hasExpiredMessages(now: now), chats.expireMessages(now: now) else { return }
         rewriteHistory("remove expired messages")
         if let key = current, chats.convs[key] != nil { updateSearch() }
     }

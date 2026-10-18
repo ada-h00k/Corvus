@@ -369,10 +369,13 @@ private struct Bubble: View {
         return t.allSatisfy { $0.unicodeScalars.first?.properties.isEmojiPresentation == true || ($0.unicodeScalars.count > 1 && $0.unicodeScalars.first?.properties.isEmoji == true) }
     }
 
+    /// Created once: building a detector is expensive and `linkified` runs on every redraw of a bubble.
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     static func linkified(_ text: String, emojiOnly: Bool = false) -> AttributedString {
         var s = AttributedString(text)
         s.font = emojiOnly ? .system(size: 40) : .system(size: NSFont.systemFontSize + 1)
-        guard !emojiOnly, let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return s }
+        guard !emojiOnly, let detector = linkDetector else { return s }
         let ns = text as NSString
         for match in detector.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             guard let url = match.url, ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? ""),

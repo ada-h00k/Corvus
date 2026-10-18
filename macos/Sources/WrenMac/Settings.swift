@@ -121,12 +121,21 @@ enum AppPaths {
     /// Same location as Qt's AppDataLocation for organisation/application "wren" on macOS,
     /// so a history created by the Qt build is found as well.
     private static var dataDirURL: URL {
+        #if DEBUG
+        // Debug builds only: a separate data folder for demo/screenshot runs against tests/mock-signal-cli.py.
+        if let dir = ProcessInfo.processInfo.environment["WREN_DATA_DIR"] { return URL(fileURLWithPath: dir, isDirectory: true) }
+        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("wren/wren", isDirectory: true)
     }
 
     /// Moves a history from the former "signal-cli-qt" location once per run.
-    private static let legacyMigration: Void = { LegacyMigration.migrateData(to: dataDirURL) }()
+    private static let legacyMigration: Void = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["WREN_DATA_DIR"] != nil { return }
+        #endif
+        LegacyMigration.migrateData(to: dataDirURL)
+    }()
 
     static var dataDir: URL {
         _ = legacyMigration

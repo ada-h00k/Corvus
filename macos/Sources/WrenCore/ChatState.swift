@@ -184,15 +184,22 @@ public struct ChatState {
         return recs
     }
 
+    private static func isExpired(_ m: Message, now: Int64) -> Bool {
+        m.expiresInSeconds > 0 && m.expirationStartMs > 0 && now - m.expirationStartMs >= Int64(m.expiresInSeconds) * 1000
+    }
+
+    /// Read-only check for the 1 s timer: calling the mutating `expireMessages` on an observed model
+    /// counts as a change even when nothing is removed, and every chat view is rebuilt.
+    public func hasExpiredMessages(now: Int64) -> Bool {
+        convs.values.contains { c in c.msgs.contains { ChatState.isExpired($0, now: now) } }
+    }
+
     /// Removes expired messages; true if anything was removed (the history must be compacted then).
     public mutating func expireMessages(now: Int64) -> Bool {
         var changed = false
         for key in convs.keys {
             let before = convs[key]!.msgs.count
-            convs[key]!.msgs.removeAll { m in
-                m.expiresInSeconds > 0 && m.expirationStartMs > 0
-                    && now - m.expirationStartMs >= Int64(m.expiresInSeconds) * 1000
-            }
+            convs[key]!.msgs.removeAll { ChatState.isExpired($0, now: now) }
             if convs[key]!.msgs.count != before { changed = true }
         }
         return changed

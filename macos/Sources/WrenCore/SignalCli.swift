@@ -47,6 +47,9 @@ public final class SignalCli {
     private var stdinPipe: Pipe?
     private var buffer = Data()
     private var lastErrLine = ""
+    /// Keeps App Nap away while connected: a napping app throttles signal-cli too, its websocket keepalives
+    /// stall, the server drops the connection and messages only arrive after the next reconnect.
+    private var activity: NSObjectProtocol?
     private var nextId = 1
     private var pending: [Int: CheckedContinuation<Any, Error>] = [:]
 
@@ -198,6 +201,7 @@ public final class SignalCli {
         p.executableURL = URL(fileURLWithPath: executable)
         p.arguments = ["-a", account, "jsonRpc"]
         p.environment = SignalCli.childEnvironment()
+        p.qualityOfService = .userInitiated
         let input = Pipe(), output = Pipe(), errors = Pipe()
         p.standardInput = input
         p.standardOutput = output
@@ -231,11 +235,19 @@ public final class SignalCli {
         }
         proc = p
         stdinPipe = input
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep],
+                                                         reason: "Receiving Signal messages")
+    }
+
+    private func endActivity() {
+        if let a = activity { ProcessInfo.processInfo.endActivity(a) }
+        activity = nil
     }
 
     public func stop() {
         guard let p = proc else { return }
         proc = nil
+        endActivity()
         p.terminationHandler = nil
         try? stdinPipe?.fileHandleForWriting.close()
         stdinPipe = nil
@@ -294,6 +306,7 @@ public final class SignalCli {
         guard p === proc else { return }
         proc = nil
         stdinPipe = nil
+        endActivity()
         var reason = "signal-cli exited (exit code \(code))"
         if !lastErrLine.isEmpty { reason += ": " + lastErrLine }
         failPending(reason)

@@ -176,8 +176,11 @@ final class ChatStateTests: XCTestCase {
         m.expiresInSeconds = 30
         _ = s.addMessage("+49bob", m)
         XCTAssertEqual(s.startIncomingExpirationTimers("+49bob", now: 1_000).count, 1)
+        XCTAssertFalse(s.hasExpiredMessages(now: 1_000 + 29_999))
         XCTAssertFalse(s.expireMessages(now: 1_000 + 29_999))
+        XCTAssertTrue(s.hasExpiredMessages(now: 1_000 + 30_000))
         XCTAssertTrue(s.expireMessages(now: 1_000 + 30_000))
+        XCTAssertFalse(s.hasExpiredMessages(now: 1_000 + 30_000))
         XCTAssertTrue(s.convs["+49bob"]!.msgs.isEmpty)
     }
 
