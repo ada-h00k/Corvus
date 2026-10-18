@@ -378,6 +378,158 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
+  # macOS Qt app (Qt, Apple silicon)
+  # ------------------------------------------------------
+  macos-qt-app:
+    name: Build Qt macOS app (arm64)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install cmake ninja pkgconf qrencode
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qtmultimedia
+          cache: true
+
+      - name: Configure Homebrew dependency paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "HOMEBREW_PREFIX=$(brew --prefix)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix qrencode)/lib/pkgconfig:$(brew --prefix libpng)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
+            >> "$GITHUB_ENV"
+
+      # Build QtKeychain against the same Qt installation as the application.
+      - name: Build QtKeychain
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          git clone --depth 1 --branch 0.17.0 \
+            https://github.com/frankosterfeld/qtkeychain.git \
+            "$RUNNER_TEMP/qtkeychain-src"
+
+          cmake \
+            -S "$RUNNER_TEMP/qtkeychain-src" \
+            -B "$RUNNER_TEMP/qtkeychain-build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qtkeychain-install" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DBUILD_TRANSLATIONS=OFF \
+            -DBUILD_TEST_APPLICATION=OFF
+
+          cmake --build "$RUNNER_TEMP/qtkeychain-build" --parallel
+          cmake --install "$RUNNER_TEMP/qtkeychain-build"
+
+          echo "QTKEYCHAIN_PREFIX=$RUNNER_TEMP/qtkeychain-install" \
+            >> "$GITHUB_ENV"
+
+      - name: Run Rust tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo test \
+            --release \
+            --locked \
+            --manifest-path history-store/Cargo.toml
+
+      - name: Configure Qt CMake build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            -S . \
+            -B build-qt \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_MACOSX_BUNDLE=ON \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$QTKEYCHAIN_PREFIX;$HOMEBREW_PREFIX"
+
+      - name: Build Qt application
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build-qt --parallel
+
+      - name: Deploy Qt frameworks and plugins
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          APP_PATH="$(find build-qt -maxdepth 5 \
+            -type d -name '*.app' -print -quit)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app bundle found. Check the CMake executable target and MACOSX_BUNDLE setting."
+            exit 1
+          fi
+
+          APP_PATH="$(cd "$(dirname "$APP_PATH")" && pwd)/$(basename "$APP_PATH")"
+
+          "$QT_ROOT_DIR/bin/macdeployqt" "$APP_PATH" \
+            -always-overwrite \
+            -codesign=- \
+            -verbose=2 \
+            -libpath="$QTKEYCHAIN_PREFIX/lib" \
+            -libpath="$(brew --prefix qrencode)/lib" \
+            -libpath="$(brew --prefix libpng)/lib"
+
+          echo "QT_APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Package and verify Qt app
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p dist
+
+          test -d "$QT_APP_PATH"
+          test -s "$QT_APP_PATH/Contents/Info.plist"
+
+          codesign --verify --deep --strict --verbose=2 "$QT_APP_PATH"
+
+          find "$QT_APP_PATH/Contents/MacOS" \
+            -maxdepth 1 -type f -exec file {} \;
+
+          ditto -c -k --keepParent \
+            "$QT_APP_PATH" \
+            dist/wren-qt-macos-arm64.zip
+
+          test -s dist/wren-qt-macos-arm64.zip
+          unzip -l dist/wren-qt-macos-arm64.zip
+          ls -lh dist
+
+      - name: Upload Qt macOS artifact
+        if: always() && hashFiles('dist/*') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: wren-qt-macos-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------
   # Create a release for every commit (all artifacts together)
   # ------------------------------------------------------
   release:
@@ -387,6 +539,7 @@ jobs:
       - build
       - arch-package
       - macos-app
+      - macos-qt-app
 
     steps:
       - name: Download build artifacts
@@ -415,7 +568,8 @@ jobs:
           name: Build ${{ github.sha }}
           target_commitish: ${{ github.sha }}
           body: |
-            Automatic Linux x86_64 and macOS (Apple silicon) build.
+            Automatic Linux x86_64 and macOS (Apple silicon) builds.
+            macOS includes both the native SwiftUI app and the Qt app.
 
             Commit: `${{ github.sha }}`
 
@@ -423,8 +577,8 @@ jobs:
             - `wren-linux-x86_64` — plain executable
             - `wren-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
             - `wren-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
-            - `wren-macos-arm64.zip` — native macOS app for Apple silicon, macOS 14 or newer
-              (ad-hoc signed: open it the first time with right-click → Open)
+            - `wren-macos-arm64.zip` — native SwiftUI app for Apple silicon, macOS 14 or newer
+            - `wren-qt-macos-arm64.zip` — Qt app for Apple silicon, including deployed Qt dependencies
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
             `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS `brew install signal-cli`).
@@ -437,4 +591,5 @@ jobs:
             dist/wren-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
             dist/wren-macos-arm64.zip
+            dist/wren-qt-macos-arm64.zip
             dist/SHA256SUMS
