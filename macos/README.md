@@ -1,5 +1,9 @@
 # Wren
 
+| Light | Dark |
+| --- | --- |
+| ![Light](../docs/screenshots/wren_macOS_Light.png) | ![Dark](../docs/screenshots/wren_macOS_Dark.png) |
+
 This directory contains a native macOS version of Wren, written in Swift / SwiftUI (macOS 14 or newer). It has the
 same features and talks to signal-cli the same way. It links the same Rust history store (`../history-store`), so the
 `history.wren` format, encryption and keychain entries are identical to the Qt app.
