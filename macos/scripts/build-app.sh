@@ -29,8 +29,9 @@ echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/signal-cli-mac" "$APP/Contents/MacOS/"
-# SwiftPM resource bundle (sounds, emoji data); symlinks are resolved so the bundle is self-contained.
-cp -RL "$BIN/SignalCliMac_SignalCliMac.bundle" "$APP/Contents/Resources/"
+# SwiftPM resource bundle (sound) and the emoji data shared with the Qt app.
+cp -R "$BIN/SignalCliMac_SignalCliMac.bundle" "$APP/Contents/Resources/"
+cp "$REPO_DIR/resources/emoji-catalog.json" "$REPO_DIR/resources/emoji-names.json" "$APP/Contents/Resources/"
 sed "s/@VERSION@/$VERSION/g" "$MACOS_DIR/Support/Info.plist" > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 

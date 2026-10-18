@@ -12,7 +12,18 @@ enum AppResources {
         return Bundle.module
     }()
 
-    static func url(_ name: String, _ ext: String) -> URL? { bundle.url(forResource: name, withExtension: ext) }
+    /// The emoji data is shared with the Qt app (resources/ in the repository): scripts/build-app.sh copies it
+    /// into Contents/Resources, development builds read it from the source tree.
+    private static let sharedResources = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().appendingPathComponent("../../../resources").standardized
+
+    static func url(_ name: String, _ ext: String) -> URL? {
+        if let u = bundle.url(forResource: name, withExtension: ext) ?? Bundle.main.url(forResource: name, withExtension: ext) {
+            return u
+        }
+        let dev = sharedResources.appendingPathComponent("\(name).\(ext)")
+        return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
+    }
 }
 
 /// Only one instance may use the chat history: two processes appending to history.scq (or compacting it)
