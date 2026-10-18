@@ -1,5 +1,6 @@
 #include "SignalCli.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
@@ -26,6 +27,13 @@ QString SignalCli::autodetect()
     if (!p.isEmpty())
         return p;
     const QStringList extra = {
+#ifdef Q_OS_WIN
+        // Installed by the Windows setup next to the application (signal-cli/bin/signal-cli.bat).
+        QCoreApplication::applicationDirPath() + QStringLiteral("/signal-cli/bin"),
+        qEnvironmentVariable("LOCALAPPDATA") + QStringLiteral("/Programs/Wren/signal-cli/bin"),
+        qEnvironmentVariable("ProgramFiles") + QStringLiteral("/Wren/signal-cli/bin"),
+        qEnvironmentVariable("ProgramFiles") + QStringLiteral("/signal-cli/bin"),
+#endif
         QStringLiteral("/usr/local/bin"),
         QStringLiteral("/opt/homebrew/bin"),
         QStringLiteral("/opt/signal-cli/bin"),
@@ -33,6 +41,18 @@ QString SignalCli::autodetect()
         QDir::homePath() + QStringLiteral("/bin"),
     };
     return QStandardPaths::findExecutable(QStringLiteral("signal-cli"), extra);
+}
+
+void SignalCli::killTree(QProcess *p)
+{
+    if (!p || p->state() == QProcess::NotRunning) return;
+#ifdef Q_OS_WIN
+    const qint64 pid = p->processId();
+    if (pid > 0)
+        QProcess::execute(QStringLiteral("taskkill"),
+                          {QStringLiteral("/PID"), QString::number(pid), QStringLiteral("/T"), QStringLiteral("/F")});
+#endif
+    p->kill();
 }
 
 QString SignalCli::Result::describe() const
@@ -58,6 +78,15 @@ QString SignalCli::maskNumbers(const QString &text)
 QProcessEnvironment SignalCli::childEnvironment(const QProcessEnvironment &base)
 {
     QProcessEnvironment env = base;
+#ifdef Q_OS_WIN
+    // The Windows setup can install a private Java runtime next to signal-cli
+    // (signal-cli.bat honours JAVA_HOME). It is only used if present.
+    {
+        const QString jre = QCoreApplication::applicationDirPath() + QStringLiteral("/signal-cli/jre");
+        if (QFileInfo::exists(jre + QStringLiteral("/bin/java.exe")))
+            env.insert(QStringLiteral("JAVA_HOME"), QDir::toNativeSeparators(jre));
+    }
+#endif
     const QString appdir = env.value(QStringLiteral("APPDIR"));
     if (appdir.isEmpty()) return env;
 
@@ -133,7 +162,7 @@ void SignalCli::runAsync(const QStringList &args, int timeoutMs, ResultCallback 
         if (e == QProcess::FailedToStart) finish(false, p->errorString());
     });
     connect(timer, &QTimer::timeout, this, [finish, p] {
-        p->kill();
+        killTree(p);
         p->waitForFinished(1000);
         finish(true, QString());
     });
@@ -222,7 +251,7 @@ void SignalCli::stop()
     p->closeWriteChannel();
     p->terminate();
     if (!p->waitForFinished(3000)) {
-        p->kill();
+        killTree(p);
         p->waitForFinished(1000);
     }
     p->deleteLater();

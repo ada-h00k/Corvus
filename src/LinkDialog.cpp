@@ -2,6 +2,7 @@
 #include "SignalCli.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QClipboard>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -102,7 +103,11 @@ void LinkDialog::showUri(const QString &uri)
     if (m_uri->text() == uri) return;
     m_uri->setText(uri);
 
-    const QString qrencode = QStandardPaths::findExecutable(QStringLiteral("qrencode"));
+    // Also look next to the application (the Windows setup ships qrencode.exe there).
+    QString qrencode = QStandardPaths::findExecutable(QStringLiteral("qrencode"),
+                                                      {QCoreApplication::applicationDirPath()});
+    if (qrencode.isEmpty())
+        qrencode = QStandardPaths::findExecutable(QStringLiteral("qrencode"));
     if (!qrencode.isEmpty()) {
         QProcess q;
         q.start(qrencode, {QStringLiteral("-t"), QStringLiteral("PNG"), QStringLiteral("-s"), QStringLiteral("6"),
@@ -148,7 +153,7 @@ void LinkDialog::killProcess()
     if (p->state() != QProcess::NotRunning) {
         p->terminate();
         if (!p->waitForFinished(2000)) {
-            p->kill();
+            SignalCli::killTree(p);
             p->waitForFinished(1000);
         }
     }

@@ -185,9 +185,11 @@ as a release tagged `build-<commit SHA>`:
 | `wren-linux-x86_64` | Linux x86_64 executable. Dynamically links to Qt; it does not bundle runtime libraries. |
 | `wren-linux-x86_64-installer.tar.gz` | Install bundle containing the executable, `install.sh`, desktop launcher, and icon. |
 | `wren-macos-arm64.zip` | Native macOS app for Apple silicon (macOS 14+), see [macos/README.md](macos/README.md). |
+| `wren-windows-x64-setup.exe` | Windows x86_64 setup (English). Can download signal-cli (and Java) for you, see [Windows](#windows). |
+| `wren-windows-x64-portable.zip` | Windows x86_64, no installation: unzip and run `wren.exe`. |
 | `SHA256SUMS` | SHA-256 checksums for all files of the release. |
 
-Linux x86_64 only. Install Qt 6 runtime libraries (Widgets, Network, Multimedia
+The Linux files are x86_64 only. Install Qt 6 runtime libraries (Widgets, Network, Multimedia
 and MultimediaWidgets), QtKeychain 0.14 or newer, and a system credential store.
 The installer does not install dependencies or `signal-cli`; install
 `signal-cli` separately and make sure its executable is on `PATH`.
@@ -207,6 +209,45 @@ its icon, places the executable in `~/.local/opt/wren/`, and creates a
 command link at `~/.local/bin/wren`. It makes no system-wide changes
 and does not require `sudo`. Run it again after downloading a newer release to
 update the installation.
+
+### Windows
+
+Windows 10 (1803) or newer, x86_64. Download `wren-windows-x64-setup.exe` from the latest release and run it.
+The setup is in English, installs per user by default (no administrator rights needed; you can choose
+"all users" in the dialog) and bundles the Qt runtime, so nothing else has to be installed.
+
+On the **signal-cli** page of the setup you can choose to
+
+- **download and install signal-cli** – the latest release of
+  [AsamK/signal-cli](https://github.com/AsamK/signal-cli/releases) is fetched directly from GitHub
+  (the JVM build `signal-cli-<version>.tar.gz`), its SHA-256 checksum (published by GitHub) is verified, and it
+  is unpacked to `<install folder>\signal-cli`. Afterwards the setup starts `signal-cli --version` once to check it.
+- **download a private Java runtime** – signal-cli needs Java 25 or newer. If no suitable Java is found
+  (`JAVA_HOME` or `PATH`), the setup offers an Eclipse Temurin JRE (from Adoptium / github.com/adoptium,
+  checksum verified), unpacked to `<install folder>\signal-cli\jre`. Wren uses it automatically for signal-cli;
+  it does not change your system Java or `PATH`.
+
+Wren finds `<install folder>\signal-cli\bin\signal-cli.bat` on its own. If you skip the download, install
+signal-cli yourself and select it under `Settings → Path to signal-cli …`. To update signal-cli later,
+run the setup again (it downloads the then-latest release) or use `Help → Check for signal-cli update`.
+
+Silent install (the signal-cli page is skipped, downloads happen only if requested):
+
+```
+wren-windows-x64-setup.exe /VERYSILENT /InstallSignalCli=1 /InstallJava=1
+```
+
+Notes:
+
+- The setup needs internet access only for the optional downloads (`github.com`, `api.github.com`,
+  `api.adoptium.net`). It uses Windows' own `tar.exe` and PowerShell to unpack and to look up the release.
+- The QR code for linking a device is rendered with a bundled `qrencode.exe`.
+- The default history key and the GIPHY key are stored in the Windows Credential Manager (via QtKeychain).
+- Uninstalling removes Wren and the signal-cli/Java copy created by the setup. Your Signal account data
+  (`%USERPROFILE%\.local\share\signal-cli`) and Wren's encrypted chat history (`%APPDATA%\wren`) are kept.
+- The setup file is not code-signed, so Windows SmartScreen may warn on first start.
+- Notifications use the tray icon's messages and sounds are played through PowerShell
+  (the freedesktop D-Bus service does not exist on Windows).
 
 ### Arch Linux
 
@@ -251,6 +292,24 @@ credential store through QtKeychain. On Linux, a Secret Service provider such as
 GNOME Keyring or KWallet must be available. Existing GIPHY keys in `QSettings`
 are migrated when first read. Existing history files protected by a passphrase
 remain passphrase-protected until you switch them using the File menu.
+
+### Windows (MSVC)
+
+Requirements: Visual Studio 2022 Build Tools (C++), CMake, Ninja, Qt 6 for MSVC (Widgets, Network, Multimedia),
+[QtKeychain](https://github.com/frankosterfeld/qtkeychain) built with `-DBUILD_WITH_QT6=ON`, Rust (MSVC toolchain),
+and optionally `qrencode.exe`. In a "x64 Native Tools" prompt:
+
+```
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:\Qt\6.x\msvc2022_64;C:\path\to\qtkeychain"
+cmake --build build
+mkdir stage & copy build\wren.exe stage
+windeployqt --release --no-translations --dir stage stage\wren.exe
+```
+
+Copy `qt6keychain.dll` (and optionally `qrencode.exe`) next to `wren.exe`. To build the setup, install
+[Inno Setup 6](https://jrsoftware.org/isinfo.php) and run
+`iscc /DAppVersion=0.2.0 /DStageDir=<stage folder> packaging\windows\wren.iss`
+(the result is `dist\wren-windows-x64-setup.exe`). `.github/workflows/release.yml` does all of this in the job `windows-app`.
 
 ## CI / release workflow
 

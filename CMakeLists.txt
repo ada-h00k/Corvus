@@ -106,8 +106,21 @@ target_link_libraries(app_core PUBLIC
     history_store
     Threads::Threads
     ${CMAKE_DL_LIBS}
-    m
 )
+
+if(WIN32)
+    # System libraries required by the Rust static library (std + getrandom).
+    target_link_libraries(app_core PUBLIC
+        advapi32 bcrypt kernel32 ntdll userenv ws2_32 synchronization)
+    # M_PI etc. in <cmath>; keep <windows.h> from defining min/max macros.
+    target_compile_definitions(app_core PUBLIC _USE_MATH_DEFINES NOMINMAX WIN32_LEAN_AND_MEAN)
+    if(MSVC)
+        # The sources contain UTF-8 literals (…, ⏎, emoji).
+        target_compile_options(app_core PUBLIC /utf-8)
+    endif()
+else()
+    target_link_libraries(app_core PUBLIC m)
+endif()
 
 if(TARGET Qt6::DBus)
     target_link_libraries(app_core PUBLIC Qt6::DBus)
@@ -118,7 +131,13 @@ else()
 endif()
 
 # ---- Application executable -----------------------------------------------
-add_executable(wren src/main.cpp)
+if(WIN32)
+    # GUI subsystem (no console window) with application icon and version info.
+    configure_file(packaging/windows/wren.rc.in ${CMAKE_BINARY_DIR}/wren.rc @ONLY)
+    add_executable(wren WIN32 src/main.cpp ${CMAKE_BINARY_DIR}/wren.rc)
+else()
+    add_executable(wren src/main.cpp)
+endif()
 target_link_libraries(wren PRIVATE app_core)
 
 # Build only the main Qt application as a macOS .app bundle.
@@ -218,10 +237,12 @@ install(TARGETS wren
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-install(FILES packaging/wren.desktop
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
-)
+if(NOT WIN32)
+    install(FILES packaging/wren.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+    )
 
-install(FILES packaging/wren.svg
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
-)
+    install(FILES packaging/wren.svg
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+    )
+endif()

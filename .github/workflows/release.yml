@@ -1,4 +1,4 @@
-name: Build Linux Release
+name: Build Release
 
 on:
   push:
@@ -529,6 +529,181 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
+  # Windows (Qt, x86_64): portable zip + English setup with optional signal-cli download
+  # ------------------------------------------------------
+  windows-app:
+    name: Build Windows x86_64 (Qt + setup)
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          modules: qtmultimedia
+          cache: true
+
+      # QtKeychain uses the Windows Credential Manager. Built against the same Qt.
+      - name: Build QtKeychain
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          git clone --depth 1 --branch 0.17.0 \
+            https://github.com/frankosterfeld/qtkeychain.git \
+            "$RUNNER_TEMP/qtkeychain-src"
+
+          cmake \
+            -S "$RUNNER_TEMP/qtkeychain-src" \
+            -B "$RUNNER_TEMP/qtkeychain-build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP")/qtkeychain-install" \
+            -DCMAKE_PREFIX_PATH="$(cygpath -m "$QT_ROOT_DIR")" \
+            -DBUILD_WITH_QT6=ON \
+            -DBUILD_TRANSLATIONS=OFF \
+            -DBUILD_TEST_APPLICATION=OFF
+
+          cmake --build "$RUNNER_TEMP/qtkeychain-build" --parallel
+          cmake --install "$RUNNER_TEMP/qtkeychain-build"
+
+          echo "QTKEYCHAIN_PREFIX=$(cygpath -m "$RUNNER_TEMP")/qtkeychain-install" >> "$GITHUB_ENV"
+
+      # qrencode.exe is used to show the QR code when linking a device. Statically linked,
+      # so a single .exe. Optional: without it Wren only shows the link URI.
+      - name: Build qrencode (optional)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install "libqrencode[tools]:x64-windows-static"
+
+          QR="$(find "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static" -name qrencode.exe -print -quit)"
+          test -n "$QR"
+          mkdir -p "$RUNNER_TEMP/qrencode"
+          cp "$QR" "$RUNNER_TEMP/qrencode/qrencode.exe"
+          echo "QRENCODE_EXE=$(cygpath -m "$RUNNER_TEMP")/qrencode/qrencode.exe" >> "$GITHUB_ENV"
+
+      - name: Run Rust tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --release --locked --manifest-path history-store/Cargo.toml
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(cygpath -m "$QT_ROOT_DIR");$QTKEYCHAIN_PREFIX"
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --parallel
+
+      - name: Deploy Qt runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p stage
+          cp build/wren.exe stage/
+
+          # QtKeychain DLL (name differs between versions)
+          find "$QTKEYCHAIN_PREFIX" -iname 'qt*keychain*.dll' -exec cp {} stage/ \;
+          ls stage
+
+          windeployqt --release --no-translations --compiler-runtime \
+            --dir stage stage/wren.exe
+
+          if [ -n "${QRENCODE_EXE:-}" ] && [ -f "$QRENCODE_EXE" ]; then
+            cp "$QRENCODE_EXE" stage/qrencode.exe
+          else
+            echo "::warning::qrencode.exe is not included; the QR code cannot be shown on Windows."
+          fi
+
+          find stage -maxdepth 1 -type f | sort
+
+      # The setup downloads signal-cli from github.com/AsamK/signal-cli at install time.
+      # Check here that the lookup script still works against the real GitHub / Adoptium APIs.
+      - name: Test release lookup script
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'release-info.txt'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging/windows/fetch-release-info.ps1 `
+              -OutFile $out -WantSignalCli 1 -WantJava 1 -JavaMajor 25
+          Get-Content $out
+          if ($LASTEXITCODE -ne 0) { throw 'fetch-release-info.ps1 failed' }
+          $text = Get-Content $out -Raw
+          if ($text -notmatch 'signalcli_url=https://github\.com/AsamK/signal-cli/releases/download/') { throw 'signal-cli URL missing' }
+          if ($text -notmatch 'java_url=https://') { throw 'Java URL missing' }
+
+      - name: Build setup and portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path $iscc)) { throw 'ISCC.exe not found' }
+
+          $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(wren VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          & $iscc "/DAppVersion=$version" "/DStageDir=$((Resolve-Path stage).Path)" packaging\windows\wren.iss
+          if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+
+          Compress-Archive -Path stage\* -DestinationPath dist\wren-windows-x64-portable.zip -Force
+
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Verify artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($f in 'dist\wren-windows-x64-setup.exe', 'dist\wren-windows-x64-portable.zip') {
+            if (-not (Test-Path $f) -or (Get-Item $f).Length -eq 0) { throw "$f is missing or empty" }
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path dist\wren-windows-x64-portable.zip).Path)
+          $names = $zip.Entries | ForEach-Object { $_.FullName }
+          $zip.Dispose()
+          foreach ($n in 'wren.exe', 'Qt6Core.dll', 'Qt6Widgets.dll') {
+            if ($names -notcontains $n) { throw "$n is missing in the portable zip" }
+          }
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload build artifacts
+        if: always() && hashFiles('dist/*') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: wren-windows-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------
   # Create a release for every commit (all artifacts together)
   # ------------------------------------------------------
   release:
@@ -539,6 +714,7 @@ jobs:
       - arch-package
       - macos-app
       - macos-qt-app
+      - windows-app
 
     steps:
       - name: Download build artifacts
@@ -567,7 +743,7 @@ jobs:
           name: Build ${{ github.sha }}
           target_commitish: ${{ github.sha }}
           body: |
-            Automatic Linux x86_64 and macOS (Apple silicon) builds.
+            Automatic Linux x86_64, Windows x86_64 and macOS (Apple silicon) builds.
             macOS includes both the native SwiftUI app and the Qt app.
 
             Commit: `${{ github.sha }}`
@@ -578,9 +754,11 @@ jobs:
             - `wren-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
             - `wren-macos-arm64.zip` — native SwiftUI app for Apple silicon, macOS 14 or newer
             - `wren-qt-macos-arm64.zip` — Qt app for Apple silicon, including deployed Qt dependencies
+            - `wren-windows-x64-setup.exe` — Windows setup (English); can download signal-cli from its official GitHub releases
+            - `wren-windows-x64-portable.zip` — Windows, no installation (unzip and run `wren.exe`)
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS `brew install signal-cli`).
+            `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS `brew install signal-cli`; the Windows setup offers to download it).
           draft: false
           prerelease: false
           make_latest: true
@@ -591,4 +769,6 @@ jobs:
             dist/*.pkg.tar.zst
             dist/wren-macos-arm64.zip
             dist/wren-qt-macos-arm64.zip
+            dist/wren-windows-x64-setup.exe
+            dist/wren-windows-x64-portable.zip
             dist/SHA256SUMS
