@@ -29,6 +29,14 @@ Differences from the Qt app:
 - Settings live in the standard Settings window (⌘,).
 - The QR code for linking is drawn by the app itself, so `qrencode` is not needed.
 - The composer is multi-line: Return sends, Shift+Return or Option+Return starts a new line.
+- Clicking an attachment follows fixed rules (`Sources/WrenCore/AttachmentPolicy.swift`). File name *and* content type
+  are checked, and the stricter result wins:
+  - images, audio and video are shown or played inside the app
+  - files that can run code (`.sh`, `.command`, `.terminal`, `.app`, `.pkg`, scripts, files without an extension, …)
+    are never opened, only saved
+  - everything else is opened in the default app only after a confirmation dialog
+
+  Every file Wren writes from an attachment is marked as downloaded (quarantine), so Gatekeeper checks it before it runs.
 - The history is stored in `~/Library/Application Support/wren/wren/`, the same
   location a Qt build on macOS uses.
 

@@ -59,13 +59,21 @@ enum Media {
         return url
     }
 
-    private static let riskyExtensions: Set<String> = [
-        "exe", "bat", "cmd", "com", "scr", "msi", "ps1", "vbs", "js", "jar", "sh", "desktop", "appimage", "run",
-        "lnk", "reg", "dll", "app", "deb", "rpm", "apk", "command", "pkg", "dmg", "workflow", "scpt", "terminal",
-    ]
+    /// Like `writeTemp`, for data received from others: the file is marked as downloaded (quarantine).
+    static func writeAttachmentTemp(_ data: Data, name: String) throws -> URL {
+        let url = try writeTemp(data, name: name)
+        quarantine(url)
+        return url
+    }
 
-    static func isRisky(_ name: String) -> Bool {
-        riskyExtensions.contains((name as NSString).pathExtension.lowercased())
+    /// Sets the quarantine flag browsers set on downloads, so Gatekeeper checks the file (and anything
+    /// unpacked from it) before it can run.
+    static func quarantine(_ url: URL) {
+        var u = url
+        var values = URLResourceValues()
+        values.quarantineProperties = [kLSQuarantineAgentNameKey as String: "Wren",
+                                       kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String]
+        try? u.setResourceValues(values)
     }
 
     // MARK: Avatars

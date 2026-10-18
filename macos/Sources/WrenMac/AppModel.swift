@@ -1349,9 +1349,16 @@ final class AppModel {
         }
     }
 
+    /// A click on an attachment, following `AttachmentPolicy`: audio, video and images are shown by the app,
+    /// files that can run code are never opened (only saved), everything else is opened after confirmation.
     func openAttachment(_ m: Message, _ i: Int) {
         guard let key = current, i < m.attachments.count else { return }
         let att = m.attachments[i]
+        if (att.isAudio || att.isVideo)
+            && AttachmentPolicy.classify(filename: att.filename, contentType: att.contentType, isMedia: true) == .risky {
+            Task { await confirmAttachment(m, i, att, policy: .risky, data: nil) }
+            return
+        }
         if att.isAudio {
             toggleAudio(m, i)
             return
@@ -1365,18 +1372,11 @@ final class AppModel {
                 do {
                     let data = try await fetchAttachmentData(key, att)
                     guard !data.isEmpty else { throw RpcError("The video file is empty.") }
-                    var suffix = (att.filename as NSString).pathExtension
-                    if suffix.isEmpty { suffix = Media.preferredSuffix(forMime: att.contentType) }
-                    videoURLs[token] = try Media.writeTemp(data, name: "video." + (suffix.isEmpty ? "mp4" : suffix))
+                    let suffix = AttachmentPolicy.mediaSuffix(filename: att.filename, contentType: att.contentType, fallback: "mp4")
+                    videoURLs[token] = try Media.writeAttachmentTemp(data, name: "video." + suffix)
                 } catch {
                     showFlash("Video playback failed: \(error.localizedDescription)")
                 }
-            }
-            return
-        }
-        if !att.isImage && Media.isRisky(att.filename) {
-            Task {
-                await Dialogs.info("Attachment", "For safety, “\(att.filename)” is not opened directly. Use “Save …” from the message menu instead.")
             }
             return
         }
@@ -1394,17 +1394,50 @@ final class AppModel {
                 }
                 return
             }
-            if att.isImage && NSImage(data: data) != nil {
+            let name = attachmentFileName(att)
+            let decoded = att.isImage && NSImage(data: data) != nil
+            let policy = AttachmentPolicy.classify(filename: name, contentType: att.contentType, isMedia: decoded)
+            if policy == .inApp {
                 ImageViewerWindow.show(data: data, title: att.filename)
                 return
             }
-            var name = (att.filename as NSString).lastPathComponent
-            if name.isEmpty { name = "attachment." + Media.preferredSuffix(forMime: att.contentType) }
+            clearFlash()
+            await confirmAttachment(m, i, att, policy: policy, data: data)
+        }
+    }
+
+    /// The name a file attachment is written under (the sender's name without any directories).
+    private func attachmentFileName(_ att: Attachment) -> String {
+        let name = (att.filename as NSString).lastPathComponent
+        return name.isEmpty ? "attachment." + Media.preferredSuffix(forMime: att.contentType) : name
+    }
+
+    /// The dialog in front of every file that is not shown by the app itself. Risky files only offer "Save …".
+    private func confirmAttachment(_ m: Message, _ i: Int, _ att: Attachment, policy: AttachmentPolicy, data: Data?) async {
+        let name = attachmentFileName(att)
+        let save = { [self] in
+            if let data { presentSavePanel(data: data, filename: name) } else { saveAttachment(m, i) }
+        }
+        if policy == .risky {
+            let r = await Dialogs.ask("“\(name)” can run programs on your Mac",
+                                      "For your safety, Wren never opens files of this type. You can save it and check it first.",
+                                      buttons: ["Save …"], style: .warning, cancel: true)
+            if r == 0 { save() }
+            return
+        }
+        let r = await Dialogs.ask("Open “\(name)”?",
+                                  "Files from others can contain malware. Only open files you expected to receive.",
+                                  buttons: ["Open", "Save …"], cancel: true)
+        switch r {
+        case 0:
+            guard let data else { return }
             do {
-                NSWorkspace.shared.open(try Media.writeTemp(data, name: name))
+                NSWorkspace.shared.open(try Media.writeAttachmentTemp(data, name: name))
             } catch {
                 await Dialogs.warn("Attachment", "The file could not be written.")
             }
+        case 1: save()
+        default: break
         }
     }
 
@@ -1420,11 +1453,21 @@ final class AppModel {
                 return
             }
             clearFlash()
-            let panel = NSSavePanel()
-            panel.title = "Save attachment"
-            panel.nameFieldStringValue = (att.filename as NSString).lastPathComponent
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            do { try data.write(to: url) } catch { await Dialogs.warn("Attachment", "The file could not be written.") }
+            presentSavePanel(data: data, filename: (att.filename as NSString).lastPathComponent)
+        }
+    }
+
+    /// Saved files are marked as downloaded, so Gatekeeper checks them when they are opened later.
+    private func presentSavePanel(data: Data, filename: String) {
+        let panel = NSSavePanel()
+        panel.title = "Save attachment"
+        panel.nameFieldStringValue = filename
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url)
+            Media.quarantine(url)
+        } catch {
+            Task { await Dialogs.warn("Attachment", "The file could not be written.") }
         }
     }
 
@@ -1456,9 +1499,8 @@ final class AppModel {
                 let data = try await fetchAttachmentData(key, att)
                 guard audioToken == token else { return }
                 guard !data.isEmpty else { throw RpcError("The audio file is empty.") }
-                var suffix = (att.filename as NSString).pathExtension
-                if suffix.isEmpty { suffix = Media.preferredSuffix(forMime: att.contentType) }
-                let url = try Media.writeTemp(data, name: "audio." + (suffix.isEmpty ? "m4a" : suffix))
+                let suffix = AttachmentPolicy.mediaSuffix(filename: att.filename, contentType: att.contentType, fallback: "m4a")
+                let url = try Media.writeAttachmentTemp(data, name: "audio." + suffix)
                 let player = AVPlayer(url: url)
                 audioPlayer = player
                 audioObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 10), queue: .main) { [weak self] t in

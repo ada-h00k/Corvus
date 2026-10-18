@@ -313,3 +313,37 @@ final class SignalCliProcessTests: XCTestCase {
         XCTAssertFalse(cli.isRunning)
     }
 }
+
+final class AttachmentPolicyTests: XCTestCase {
+    private func policy(_ name: String, _ mime: String = "application/octet-stream", media: Bool = false) -> AttachmentPolicy {
+        AttachmentPolicy.classify(filename: name, contentType: mime, isMedia: media)
+    }
+
+    func testRunnableFilesAreRisky() {
+        for name in ["x.terminal", "run.sh", "a.command", "Tool.app", "x.py", "s.applescript", "l.fileloc", "noext",
+                     "X.TERMINAL", "x.terminal ", "x.terminal.", "dir/x.zsh"] {
+            XCTAssertEqual(policy(name), .risky, name)
+        }
+    }
+
+    func testSenderContentTypeCannotHideRiskyFiles() {
+        XCTAssertEqual(policy("x.terminal", "image/png", media: true), .risky)
+        XCTAssertEqual(policy("x.sh", "video/mp4", media: true), .risky)
+        XCTAssertEqual(policy("a.pdf", "application/x-sh"), .risky)
+        XCTAssertEqual(policy("a.pdf", "text/x-shellscript; charset=utf-8"), .risky)
+    }
+
+    func testOtherFilesAskAndMediaStaysInApp() {
+        XCTAssertEqual(policy("a.pdf", "application/pdf"), .ask)
+        XCTAssertEqual(policy("notes.txt", "text/plain"), .ask)
+        XCTAssertEqual(policy("archive.zip", "application/zip"), .ask)
+        XCTAssertEqual(policy("photo.jpg", "image/jpeg", media: true), .inApp)
+        XCTAssertEqual(policy("", "audio/aac", media: true), .inApp) // voice notes have no file name
+    }
+
+    func testMediaSuffixNeverTakesTheSendersExtension() {
+        XCTAssertEqual(AttachmentPolicy.mediaSuffix(filename: "clip.mov", contentType: "video/quicktime", fallback: "mp4"), "mov")
+        XCTAssertEqual(AttachmentPolicy.mediaSuffix(filename: "x.terminal", contentType: "video/mp4", fallback: "mp4"), "mp4")
+        XCTAssertEqual(AttachmentPolicy.mediaSuffix(filename: "x.terminal", contentType: "text/plain", fallback: "m4a"), "m4a")
+    }
+}

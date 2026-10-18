@@ -80,7 +80,7 @@ private struct FileRow: View {
             .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
-        .help("Open (risky file types can only be saved)")
+        .help("Open or save …")
     }
 }
 
