@@ -611,7 +611,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install "libqrencode[tools]:x64-windows-static"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install "libqrencode[tool]:x64-windows-static"
 
           ROOT="$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static"
           QR="$(find "$ROOT" -iname qrencode.exe -print -quit)"
@@ -624,14 +624,15 @@ jobs:
           mkdir -p "$OUT"
           cp "$QR" "$OUT/qrencode.exe"
 
-          # Smoke test, same call as src/LinkDialog.cpp: PNG on stdout. The output must be a
-          # valid PNG (a text-mode stdout would turn 0A into 0D0A and corrupt it).
+          # Smoke test, same call as src/LinkDialog.cpp: PNG written to a file. (Not to stdout:
+          # qrencode.exe does not switch stdout to binary mode on Windows, which would turn
+          # 0A into 0D0A and corrupt the PNG.)
           "$OUT/qrencode.exe" -V
-          "$OUT/qrencode.exe" -t PNG -s 6 -m 2 -o - \
-            "sgnl://linkdevice?uuid=ci-test&pub_key=ci-test" > "$OUT/test.png"
+          "$OUT/qrencode.exe" -t PNG -s 6 -m 2 -o "$OUT/test.png" \
+            "sgnl://linkdevice?uuid=ci-test&pub_key=ci-test"
           sig="$(head -c 8 "$OUT/test.png" | od -An -tx1 | tr -d ' \n')"
           if [ "$sig" != "89504e470d0a1a0a" ]; then
-            echo "::error::qrencode.exe did not write a valid PNG to stdout (signature: $sig)"
+            echo "::error::qrencode.exe did not write a valid PNG (signature: $sig)"
             exit 1
           fi
           rm -f "$OUT/test.png"

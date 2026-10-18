@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QClipboard>
+#include <QDir>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -12,6 +13,7 @@
 #include <QPushButton>
 #include <QSysInfo>
 #include <QStandardPaths>
+#include <QTemporaryFile>
 #include <QVBoxLayout>
 
 LinkDialog::LinkDialog(const QString &executable, QWidget *parent)
@@ -109,15 +111,22 @@ void LinkDialog::showUri(const QString &uri)
     if (qrencode.isEmpty())
         qrencode = QStandardPaths::findExecutable(QStringLiteral("qrencode"));
     if (!qrencode.isEmpty()) {
-        QProcess q;
-        q.start(qrencode, {QStringLiteral("-t"), QStringLiteral("PNG"), QStringLiteral("-s"), QStringLiteral("6"),
-                           QStringLiteral("-m"), QStringLiteral("2"), QStringLiteral("-o"), QStringLiteral("-"), uri});
-        if (q.waitForFinished(5000) && q.exitCode() == 0) {
-            QPixmap pm;
-            if (pm.loadFromData(q.readAllStandardOutput(), "PNG")) {
-                m_qr->setPixmap(pm);
-                m_status->setText(tr("Please scan the QR code with your phone …"));
-                return;
+        // Write the PNG to a temporary file instead of stdout: qrencode.exe on Windows does
+        // not put stdout into binary mode, which corrupts the PNG data.
+        QTemporaryFile png(QDir::temp().filePath(QStringLiteral("wren-qr-XXXXXX.png")));
+        if (png.open()) {
+            const QString pngPath = png.fileName();
+            png.close();
+            QProcess q;
+            q.start(qrencode, {QStringLiteral("-t"), QStringLiteral("PNG"), QStringLiteral("-s"), QStringLiteral("6"),
+                               QStringLiteral("-m"), QStringLiteral("2"), QStringLiteral("-o"), pngPath, uri});
+            if (q.waitForFinished(5000) && q.exitCode() == 0) {
+                QPixmap pm;
+                if (pm.load(pngPath, "PNG")) {
+                    m_qr->setPixmap(pm);
+                    m_status->setText(tr("Please scan the QR code with your phone …"));
+                    return;
+                }
             }
         }
     }
