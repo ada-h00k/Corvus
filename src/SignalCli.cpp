@@ -48,7 +48,7 @@ QString SignalCli::Result::describe() const
 
 QString SignalCli::maskNumbers(const QString &text)
 {
-    if (qEnvironmentVariableIsSet("SIGNAL_CLI_QT_DEBUG")) return text;
+    if (qEnvironmentVariableIsSet("WREN_DEBUG")) return text;
     static const QRegularExpression re(QStringLiteral(R"(\+?(\d{2})\d{5,}(\d{2}))"));
     QString t = text;
     t.replace(re, QStringLiteral("+\\1…\\2"));

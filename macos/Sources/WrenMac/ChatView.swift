@@ -1,5 +1,5 @@
 import AppKit
-import SignalCliCore
+import WrenCore
 import SwiftUI
 import UniformTypeIdentifiers
 

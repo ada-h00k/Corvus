@@ -1,12 +1,12 @@
 import AppKit
-import SignalCliCore
+import WrenCore
 import SwiftUI
 
 /// Resources of this target: inside the .app they are copied to Contents/Resources,
 /// with `swift run` they are next to the executable (Bundle.module).
 enum AppResources {
     static let bundle: Bundle = {
-        if let u = Bundle.main.url(forResource: "SignalCliMac_SignalCliMac", withExtension: "bundle"), let b = Bundle(url: u) {
+        if let u = Bundle.main.url(forResource: "WrenMac_WrenMac", withExtension: "bundle"), let b = Bundle(url: u) {
             return b
         }
         return Bundle.module
@@ -26,12 +26,14 @@ enum AppResources {
     }
 }
 
-/// Only one instance may use the chat history: two processes appending to history.scq (or compacting it)
+/// Only one instance may use the chat history: two processes appending to history.wren (or compacting it)
 /// at the same time would corrupt it.
 enum SingleInstance {
     private static var fd: Int32 = -1
 
     static func acquire() -> Bool {
+        _ = AppPaths.dataDir // runs the one-time data migration first
+        if LegacyMigration.olderInstanceRunning { return false } // an older version still uses the history
         fd = open(AppPaths.lockPath, O_RDWR | O_CREAT, 0o600)
         guard fd >= 0 else { return true } // cannot lock (permissions): let the store report problems
         if flock(fd, LOCK_EX | LOCK_NB) == 0 {
@@ -54,14 +56,17 @@ enum SingleInstance {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let model = AppModel()
+    let model: AppModel = {
+        LegacyMigration.migrateDefaults() // before anything reads the preferences
+        return AppModel()
+    }()
     private var inputMonitor: Any?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         guard SingleInstance.acquire() else {
             if !SingleInstance.activateOther() {
                 let alert = NSAlert()
-                alert.messageText = "signal-cli Mac is already running"
+                alert.messageText = "Wren is already running"
                 alert.informativeText = "Close the other instance first. Two instances would damage the chat history."
                 alert.runModal()
             }
@@ -103,12 +108,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct SignalCliMacApp: App {
+struct WrenMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
         let model = delegate.model
-        Window("signal-cli Mac", id: "main") {
+        Window("Wren", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 720, minHeight: 460)
@@ -153,7 +158,7 @@ private struct MenuBarContent: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         Divider()
-        Button("Quit signal-cli Mac") { NSApp.terminate(nil) }
+        Button("Quit Wren") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }
@@ -163,7 +168,7 @@ struct AppCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
-            Button("About signal-cli Mac") { model.showAbout() }
+            Button("About Wren") { model.showAbout() }
         }
         CommandGroup(replacing: .newItem) {
             Button("New conversation …") { Task { await model.newConversation() } }

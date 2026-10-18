@@ -1,8 +1,8 @@
-# signal-cli Qt
+# Wren
 
 | Light (Breeze Light) | Dark (Breeze Dark) |
 | --- | --- |
-| ![Hell](docs/screenshots/signal-cli-qt_BreezeLight.png) | ![Dunkel](docs/screenshots/signal-cli-qt_BreezeDark.png) |
+| ![Hell](docs/screenshots/wren_BreezeLight.png) | ![Dunkel](docs/screenshots/wren_BreezeDark.png) |
 
 A native Qt 6 GUI for [signal-cli](https://github.com/AsamK/signal-cli) with
 an **encrypted local chat history**.
@@ -32,7 +32,7 @@ an **encrypted local chat history**.
 ### Encrypted chat history (Rust)
 
 signal-cli does not keep a chat history, so the GUI stores one itself in
-`history.scq` (in the application data directory, see *About*). Design:
+`history.wren` (in the application data directory, see *About*). Design:
 
 - A random 256-bit **data key** encrypts every message with
   **XChaCha20-Poly1305** (random 192-bit nonce per record).
@@ -67,6 +67,21 @@ history depends on retaining access to the system keychain. Use
   app exits; afterwards only its preview (≤ 480 px) remains in the history.
 - The file reveals the number and approximate size of messages (no padding),
   and an attacker with write access could delete the *last* records unnoticed.
+
+## Upgrading from signal-cli Qt
+
+The project was formerly called *signal-cli Qt*. On the first start, Wren moves the data of
+the old version over automatically:
+
+- the chat history `history.scq` becomes `history.wren` in the new data folder
+  (`~/.local/share/wren/wren/` on Linux, `~/Library/Application Support/wren/wren/` on macOS),
+- the settings are copied to the new location (macOS: new bundle ID `io.github.wren.mac`),
+- the keychain entries `signal-cli-qt-history` and `signal-cli-qt` (GIPHY key) are copied to
+  `wren-history` and `wren` the first time they are read, and the old entries are removed.
+
+Close the old version before starting Wren; Wren refuses to migrate while the old program
+still uses the history. Files that were not migrated are never deleted. The binary format of
+the history file itself is unchanged.
 
 ## Features
 
@@ -167,9 +182,9 @@ as a release tagged `build-<commit SHA>`:
 
 | File | Description |
 |------|-------------|
-| `signal-cli-qt-linux-x86_64` | Linux x86_64 executable. Dynamically links to Qt; it does not bundle runtime libraries. |
-| `signal-cli-qt-linux-x86_64-installer.tar.gz` | Install bundle containing the executable, `install.sh`, desktop launcher, and icon. |
-| `signal-cli-mac-macos-arm64.zip` | Native macOS app for Apple silicon (macOS 14+), see [macos/README.md](macos/README.md). |
+| `wren-linux-x86_64` | Linux x86_64 executable. Dynamically links to Qt; it does not bundle runtime libraries. |
+| `wren-linux-x86_64-installer.tar.gz` | Install bundle containing the executable, `install.sh`, desktop launcher, and icon. |
+| `wren-macos-arm64.zip` | Native macOS app for Apple silicon (macOS 14+), see [macos/README.md](macos/README.md). |
 | `SHA256SUMS` | SHA-256 checksums for all files of the release. |
 
 Linux x86_64 only. Install Qt 6 runtime libraries (Widgets, Network, Multimedia
@@ -183,22 +198,22 @@ installer:
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf signal-cli-qt-linux-x86_64-installer.tar.gz
+tar -xzf wren-linux-x86_64-installer.tar.gz
 ./install.sh
 ```
 
 The installer adds the application to your desktop's application menu, installs
-its icon, places the executable in `~/.local/opt/signal-cli-qt/`, and creates a
-command link at `~/.local/bin/signal-cli-qt`. It makes no system-wide changes
+its icon, places the executable in `~/.local/opt/wren/`, and creates a
+command link at `~/.local/bin/wren`. It makes no system-wide changes
 and does not require `sudo`. Run it again after downloading a newer release to
 update the installation.
 
 ### Arch Linux
 
-Every release also contains a ready-made package (`signal-cli-qt-<version>-1-x86_64.pkg.tar.zst`):
+Every release also contains a ready-made package (`wren-<version>-1-x86_64.pkg.tar.zst`):
 
 ```
-sudo pacman -U signal-cli-qt-*.pkg.tar.zst
+sudo pacman -U wren-*.pkg.tar.zst
 ```
 
 It depends on `qt6-base`, `qt6-multimedia` and `qtkeychain-qt6`. `signal-cli` is not in the official
@@ -220,7 +235,7 @@ sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev qtkeychai
 
 cmake -S . -B build
 cmake --build build -j
-./build/signal-cli-qt
+./build/wren
 
 # Rust tests only
 cargo test --release --manifest-path history-store/Cargo.toml
@@ -270,12 +285,12 @@ One release per commit accumulates quickly – delete old ones from time to time
 - **Every call to signal-cli is logged to the terminal** (command, result, duration;
   phone numbers are masked). Start the app from a terminal to see it, e.g.
   `signal-cli: signal-cli -o json listAccounts -> exit code 1 (1530 ms) | stderr: …`.
-  Set `SIGNAL_CLI_QT_DEBUG=1` to see unmasked output.
+  Set `WREN_DEBUG=1` to see unmasked output.
 - If signal-cli cannot be run or fails, the app says so with the command and the
   error message. It reports *"no account"* only if signal-cli itself returns an
   empty account list. The window never blocks while signal-cli starts.
 - `qt.qpa.services: Failed to register with host portal … App info not found for
-  'signal-cli-qt'` is harmless. It appears when a desktop application ID is announced
+  'wren'` is harmless. It appears when a desktop application ID is announced
   but no matching `.desktop` file is installed; the app now announces its ID only if
   one exists.
 ## Tests
@@ -283,7 +298,7 @@ One release per commit accumulates quickly – delete old ones from time to time
 ```sh
 cargo test --release --manifest-path history-store/Cargo.toml   # Rust: crypto, file format, C ABI
 
-cmake -S . -B build -DSIGNAL_CLI_QT_TESTS=ON && cmake --build build
+cmake -S . -B build -DWREN_TESTS=ON && cmake --build build
 ctest --test-dir build --output-on-failure                        # headless GUI test
 ```
 

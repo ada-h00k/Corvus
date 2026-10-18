@@ -9,26 +9,26 @@ let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let rustLibDir = packageDir.appendingPathComponent("../history-store/target/release").standardized.path
 
 let package = Package(
-    name: "SignalCliMac",
+    name: "WrenMac",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "signal-cli-mac", targets: ["SignalCliMac"]),
+        .executable(name: "wren", targets: ["WrenMac"]),
     ],
     targets: [
         .systemLibrary(name: "CHistoryStore", path: "Sources/CHistoryStore"),
         .target(
-            name: "SignalCliCore",
+            name: "WrenCore",
             dependencies: ["CHistoryStore"],
             linkerSettings: [.unsafeFlags(["-L", rustLibDir])]
         ),
         .executableTarget(
-            name: "SignalCliMac",
-            dependencies: ["SignalCliCore"],
+            name: "WrenMac",
+            dependencies: ["WrenCore"],
             resources: [.process("Resources")]
         ),
         .testTarget(
-            name: "SignalCliCoreTests",
-            dependencies: ["SignalCliCore"]
+            name: "WrenCoreTests",
+            dependencies: ["WrenCore"]
         ),
     ]
 )

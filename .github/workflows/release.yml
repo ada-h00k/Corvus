@@ -150,10 +150,10 @@ jobs:
           BINARY=""
 
           for candidate in \
-            build/signal-cli-qt \
-            build/bin/signal-cli-qt \
-            build/signal-cli-Qt \
-            build/bin/signal-cli-Qt
+            build/wren \
+            build/bin/wren \
+            build/Wren \
+            build/bin/Wren
           do
             if [ -f "$candidate" ]; then
               BINARY="$candidate"
@@ -179,16 +179,16 @@ jobs:
 
           mkdir -p dist
 
-          cp "$BINARY" dist/signal-cli-qt-linux-x86_64
-          chmod +x dist/signal-cli-qt-linux-x86_64
+          cp "$BINARY" dist/wren-linux-x86_64
+          chmod +x dist/wren-linux-x86_64
 
-          mkdir -p "$RUNNER_TEMP/signal-cli-qt-installer"
-          cp dist/signal-cli-qt-linux-x86_64 "$RUNNER_TEMP/signal-cli-qt-installer/"
-          cp packaging/install.sh packaging/signal-cli-qt.desktop packaging/signal-cli-qt.svg \
-            "$RUNNER_TEMP/signal-cli-qt-installer/"
-          chmod +x "$RUNNER_TEMP/signal-cli-qt-installer/install.sh"
-          tar -czf "$GITHUB_WORKSPACE/dist/signal-cli-qt-linux-x86_64-installer.tar.gz" \
-            -C "$RUNNER_TEMP/signal-cli-qt-installer" .
+          mkdir -p "$RUNNER_TEMP/wren-installer"
+          cp dist/wren-linux-x86_64 "$RUNNER_TEMP/wren-installer/"
+          cp packaging/install.sh packaging/wren.desktop packaging/wren.svg \
+            "$RUNNER_TEMP/wren-installer/"
+          chmod +x "$RUNNER_TEMP/wren-installer/install.sh"
+          tar -czf "$GITHUB_WORKSPACE/dist/wren-linux-x86_64-installer.tar.gz" \
+            -C "$RUNNER_TEMP/wren-installer" .
 
       # --------------------------------------------------
       # Validate output and checksums
@@ -198,18 +198,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -s dist/signal-cli-qt-linux-x86_64
-          test -s dist/signal-cli-qt-linux-x86_64-installer.tar.gz
+          test -s dist/wren-linux-x86_64
+          test -s dist/wren-linux-x86_64-installer.tar.gz
 
-          tar -tzf dist/signal-cli-qt-linux-x86_64-installer.tar.gz
+          tar -tzf dist/wren-linux-x86_64-installer.tar.gz
 
-          file dist/signal-cli-qt-linux-x86_64
+          file dist/wren-linux-x86_64
 
           (
             cd dist
             sha256sum \
-              signal-cli-qt-linux-x86_64 \
-              signal-cli-qt-linux-x86_64-installer.tar.gz \
+              wren-linux-x86_64 \
+              wren-linux-x86_64-installer.tar.gz \
               > SHA256SUMS
           )
 
@@ -223,7 +223,7 @@ jobs:
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: signal-cli-qt-linux-${{ github.sha }}
+          name: wren-linux-${{ github.sha }}
           path: dist/*
           if-no-files-found: warn
           retention-days: 14
@@ -258,7 +258,7 @@ jobs:
 
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          base="$(sed -n 's/^project(signal-cli-qt VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          base="$(sed -n 's/^project(wren VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           count="$(git rev-list --count HEAD)"
           short="$(git rev-parse --short=7 HEAD)"
           pkgver="${base}.r${count}.g${short}"
@@ -272,8 +272,8 @@ jobs:
           mkdir -p "$build_dir"
 
           git archive --format=tar.gz \
-            --prefix="signal-cli-qt-${pkgver}/" \
-            -o "$build_dir/signal-cli-qt-${pkgver}.tar.gz" HEAD
+            --prefix="wren-${pkgver}/" \
+            -o "$build_dir/wren-${pkgver}.tar.gz" HEAD
           cp packaging/arch/PKGBUILD "$build_dir/PKGBUILD"
           sed -i "s/^pkgver=.*/pkgver=${pkgver}/" "$build_dir/PKGBUILD"
 
@@ -301,12 +301,12 @@ jobs:
           # the package must contain the executable, desktop entry, icon and license
           files="$(pacman -Qlp dist/*.pkg.tar.zst)"
           for path in \
-            /usr/bin/signal-cli-qt \
-            /usr/share/applications/signal-cli-qt.desktop \
-            /usr/share/icons/hicolor/scalable/apps/signal-cli-qt.svg \
-            /usr/share/licenses/signal-cli-qt/LICENSE
+            /usr/bin/wren \
+            /usr/share/applications/wren.desktop \
+            /usr/share/icons/hicolor/scalable/apps/wren.svg \
+            /usr/share/licenses/wren/LICENSE
           do
-            if ! grep -qxF "signal-cli-qt $path" <<< "$files"; then
+            if ! grep -qxF "wren $path" <<< "$files"; then
               echo "::error::Package is missing $path"
               exit 1
             fi
@@ -316,7 +316,7 @@ jobs:
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: signal-cli-qt-arch-${{ github.sha }}
+          name: wren-arch-${{ github.sha }}
           path: dist/*.pkg.tar.zst
           if-no-files-found: warn
           retention-days: 14
@@ -355,24 +355,24 @@ jobs:
           set -euo pipefail
 
           mkdir -p dist
-          ditto -c -k --keepParent "macos/build/signal-cli Mac.app" dist/signal-cli-mac-macos-arm64.zip
+          ditto -c -k --keepParent "macos/build/Wren.app" dist/wren-macos-arm64.zip
 
       - name: Verify artifacts
         shell: bash
         run: |
           set -euo pipefail
 
-          test -s dist/signal-cli-mac-macos-arm64.zip
-          unzip -l dist/signal-cli-mac-macos-arm64.zip
-          codesign --verify --verbose "macos/build/signal-cli Mac.app"
-          file "macos/build/signal-cli Mac.app/Contents/MacOS/signal-cli-mac"
+          test -s dist/wren-macos-arm64.zip
+          unzip -l dist/wren-macos-arm64.zip
+          codesign --verify --verbose "macos/build/Wren.app"
+          file "macos/build/Wren.app/Contents/MacOS/wren"
           ls -lh dist
 
       - name: Upload build artifacts
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: signal-cli-qt-macos-${{ github.sha }}
+          name: wren-macos-${{ github.sha }}
           path: dist/*
           if-no-files-found: warn
           retention-days: 14
@@ -392,7 +392,7 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: signal-cli-qt-*-${{ github.sha }}
+          pattern: wren-*-${{ github.sha }}
           path: dist
           merge-multiple: true
 
@@ -420,10 +420,10 @@ jobs:
             Commit: `${{ github.sha }}`
 
             Files:
-            - `signal-cli-qt-linux-x86_64` — plain executable
-            - `signal-cli-qt-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
-            - `signal-cli-qt-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
-            - `signal-cli-mac-macos-arm64.zip` — native macOS app for Apple silicon, macOS 14 or newer
+            - `wren-linux-x86_64` — plain executable
+            - `wren-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
+            - `wren-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
+            - `wren-macos-arm64.zip` — native macOS app for Apple silicon, macOS 14 or newer
               (ad-hoc signed: open it the first time with right-click → Open)
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
@@ -433,8 +433,8 @@ jobs:
           make_latest: true
           fail_on_unmatched_files: true
           files: |
-            dist/signal-cli-qt-linux-x86_64
-            dist/signal-cli-qt-linux-x86_64-installer.tar.gz
+            dist/wren-linux-x86_64
+            dist/wren-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
-            dist/signal-cli-mac-macos-arm64.zip
+            dist/wren-macos-arm64.zip
             dist/SHA256SUMS

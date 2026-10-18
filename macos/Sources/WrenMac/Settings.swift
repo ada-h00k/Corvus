@@ -118,21 +118,29 @@ struct Appearance: Equatable {
 }
 
 enum AppPaths {
-    /// Same location as Qt's AppDataLocation for organisation/application "signal-cli-qt" on macOS,
+    /// Same location as Qt's AppDataLocation for organisation/application "wren" on macOS,
     /// so a history created by the Qt build is found as well.
-    static var dataDir: URL {
+    private static var dataDirURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("signal-cli-qt/signal-cli-qt", isDirectory: true)
+        return base.appendingPathComponent("wren/wren", isDirectory: true)
+    }
+
+    /// Moves a history from the former "signal-cli-qt" location once per run.
+    private static let legacyMigration: Void = { LegacyMigration.migrateData(to: dataDirURL) }()
+
+    static var dataDir: URL {
+        _ = legacyMigration
+        let dir = dataDirURL
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    static var historyPath: String { dataDir.appendingPathComponent("history.scq").path }
+    static var historyPath: String { dataDir.appendingPathComponent("history.wren").path }
     static var lockPath: String { dataDir.appendingPathComponent("history.lock").path }
 
     /// Attachments that are opened, pasted screenshots, downloaded GIFs, … removed when the app quits.
     static let tempDir: URL = {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("signal-cli-mac-\(ProcessInfo.processInfo.processIdentifier)")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("wren-\(ProcessInfo.processInfo.processIdentifier)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
         return dir

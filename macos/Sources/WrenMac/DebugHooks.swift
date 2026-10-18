@@ -1,6 +1,6 @@
 #if DEBUG
 import AppKit
-import SignalCliCore
+import WrenCore
 
 /// Debug builds only: a tiny command channel for unattended UI checks against tests/mock-signal-cli.py.
 /// Set SIGNAL_CLI_MAC_DEBUG_COMMANDS=<file>; every line appended to it is executed:

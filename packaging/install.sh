@@ -3,23 +3,23 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
-app_dir="$HOME/.local/opt/signal-cli-qt"
+app_dir="$HOME/.local/opt/wren"
 bin_dir="$HOME/.local/bin"
 data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
 applications_dir="$data_home/applications"
 icons_dir="$data_home/icons/hicolor/scalable/apps"
 
-desktop_file="$applications_dir/signal-cli-qt.desktop"
-icon_file="$icons_dir/signal-cli-qt.svg"
-binary_file="$app_dir/signal-cli-qt"
-bin_link="$bin_dir/signal-cli-qt"
+desktop_file="$applications_dir/wren.desktop"
+icon_file="$icons_dir/wren.svg"
+binary_file="$app_dir/wren"
+bin_link="$bin_dir/wren"
 
 # ------------------------------------------------------------
 # Uninstall
 # ------------------------------------------------------------
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-    printf 'Uninstalling signal-cli Qt...\n'
+    printf 'Uninstalling Wren...\n'
 
     rm -f -- "$bin_link"
     rm -f -- "$desktop_file"
@@ -42,7 +42,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
         gtk-update-icon-cache -f -t "$data_home/icons/hicolor" >/dev/null 2>&1 || true
     fi
 
-    printf 'signal-cli Qt has been uninstalled.\n'
+    printf 'Wren has been uninstalled.\n'
     exit 0
 fi
 
@@ -56,9 +56,9 @@ fi
 # Install
 # ------------------------------------------------------------
 
-binary_source="$script_dir/signal-cli-qt-linux-x86_64"
-desktop_source="$script_dir/signal-cli-qt.desktop"
-icon_source="$script_dir/signal-cli-qt.svg"
+binary_source="$script_dir/wren-linux-x86_64"
+desktop_source="$script_dir/wren.desktop"
+icon_source="$script_dir/wren.svg"
 
 for source in "$binary_source" "$desktop_source" "$icon_source"; do
     if [[ ! -f "$source" ]]; then
@@ -93,7 +93,7 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -f -t "$data_home/icons/hicolor" >/dev/null 2>&1 || true
 fi
 
-printf 'Installed signal-cli Qt for %s\n' "$USER"
+printf 'Installed Wren for %s\n' "$USER"
 printf 'Application menu entry: %s\n' "$desktop_file"
 printf 'Command-line link: %s\n' "$bin_link"
 printf 'Install signal-cli and ensure its executable is on PATH before launching.\n'

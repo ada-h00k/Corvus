@@ -78,7 +78,7 @@ struct GiphyPicker: View {
 
     private static func get(_ url: URL) async throws -> Data {
         var req = URLRequest(url: url)
-        req.setValue("signal-cli-qt", forHTTPHeaderField: "User-Agent")
+        req.setValue("wren", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let code = (resp as? HTTPURLResponse)?.statusCode, code != 200 {
             throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "HTTP \(code)"])

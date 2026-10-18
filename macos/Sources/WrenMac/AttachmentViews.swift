@@ -1,6 +1,6 @@
 import AppKit
 import AVKit
-import SignalCliCore
+import WrenCore
 import SwiftUI
 
 /// One attachment inside a bubble: inline image / GIF, inline video, audio player or a file row.

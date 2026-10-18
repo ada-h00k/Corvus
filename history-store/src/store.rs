@@ -414,7 +414,7 @@ mod tests {
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!("sc-store-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         fs::create_dir_all(&d).unwrap();
-        d.join("h.scq")
+        d.join("h.wren")
     }
 
     fn msg(i: i64) -> Record {

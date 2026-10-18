@@ -25,7 +25,7 @@ LinkDialog::LinkDialog(const QString &executable, QWidget *parent)
 
     auto *row = new QHBoxLayout;
     row->addWidget(new QLabel(tr("Device name:")));
-    m_name = new QLineEdit(QStringLiteral("signal-cli-qt (%1)").arg(QSysInfo::machineHostName()));
+    m_name = new QLineEdit(QStringLiteral("wren (%1)").arg(QSysInfo::machineHostName()));
     row->addWidget(m_name, 1);
     m_start = new QPushButton(tr("Start"));
     row->addWidget(m_start);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(signal-cli-qt VERSION 0.2.0 LANGUAGES CXX)
+project(wren VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -87,6 +87,8 @@ set(APP_SOURCES
     src/MainWindow.cpp
     src/LinkDialog.h
     src/LinkDialog.cpp
+    src/LegacyMigration.h
+    src/LegacyMigration.cpp
 )
 
 add_library(app_core STATIC ${APP_SOURCES})
@@ -113,13 +115,13 @@ else()
     message(STATUS "Desktop notifications: tray icon fallback only (Qt DBus not found)")
 endif()
 
-add_executable(signal-cli-qt src/main.cpp)
-target_link_libraries(signal-cli-qt PRIVATE app_core)
+add_executable(wren src/main.cpp)
+target_link_libraries(wren PRIVATE app_core)
 
-# ---- Tests (headless): cmake -DSIGNAL_CLI_QT_TESTS=ON, then ctest ---------
-option(SIGNAL_CLI_QT_TESTS "Build the GUI integration test" OFF)
+# ---- Tests (headless): cmake -DWREN_TESTS=ON, then ctest ---------
+option(WREN_TESTS "Build the GUI integration test" OFF)
 
-if(SIGNAL_CLI_QT_TESTS)
+if(WREN_TESTS)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
 
@@ -133,6 +135,14 @@ if(SIGNAL_CLI_QT_TESTS)
     target_compile_definitions(gui_integration_test PRIVATE
         MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
     add_test(NAME gui_integration COMMAND gui_integration_test)
+
+    add_executable(migration_test tests/migration_test.cpp)
+    target_link_libraries(migration_test PRIVATE app_core Qt6::Test)
+    add_test(NAME migration COMMAND migration_test)
+    set_tests_properties(migration PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
 
     add_executable(startup_test tests/startup_test.cpp)
     target_link_libraries(startup_test PRIVATE app_core)
@@ -189,14 +199,14 @@ endif()
 
 include(GNUInstallDirs)
 
-install(TARGETS signal-cli-qt
+install(TARGETS wren
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-install(FILES packaging/signal-cli-qt.desktop
+install(FILES packaging/wren.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
 
-install(FILES packaging/signal-cli-qt.svg
+install(FILES packaging/wren.svg
     DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
 )

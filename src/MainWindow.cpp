@@ -72,7 +72,7 @@ static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload lim
 
 MainWindow::MainWindow()
 {
-    setWindowTitle(QStringLiteral("signal-cli Qt"));
+    setWindowTitle(QStringLiteral("Wren"));
     resize(1020, 680);
     setAcceptDrops(true);
 
@@ -595,7 +595,7 @@ void MainWindow::closeEvent(QCloseEvent *e)
         QSettings s;
         if (!s.value(QStringLiteral("trayHintShown")).toBool()) {
             s.setValue(QStringLiteral("trayHintShown"), true);
-            m_tray->showMessage(tr("signal-cli Qt is still running"),
+            m_tray->showMessage(tr("Wren is still running"),
                                 tr("Click the tray icon to open it again. Use the tray menu or File → Quit to quit."),
                                 QSystemTrayIcon::NoIcon, 7000);
         }
@@ -899,7 +899,7 @@ QString MainWindow::historyPath() const
 {
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(dir);
-    return dir + QStringLiteral("/history.scq");
+    return dir + QStringLiteral("/history.wren");
 }
 
 bool MainWindow::unlockHistory()
@@ -2908,7 +2908,7 @@ void MainWindow::saveAttachment(int msgIdx, int attIdx)
 void MainWindow::checkForUpdates(bool silent)
 {
     QNetworkRequest req(QUrl(QStringLiteral("https://api.github.com/repos/AsamK/signal-cli/releases/latest")));
-    req.setRawHeader("User-Agent", "signal-cli-qt");
+    req.setRawHeader("User-Agent", "wren");
     req.setRawHeader("Accept", "application/vnd.github+json");
     QNetworkReply *rep = m_nam.get(req);
 
@@ -2953,8 +2953,8 @@ void MainWindow::checkForUpdates(bool silent)
 
 void MainWindow::showAbout()
 {
-    QMessageBox::about(this, tr("About signal-cli Qt"),
-                       tr("<b>signal-cli Qt</b> %1<br><br>"
+    QMessageBox::about(this, tr("About Wren"),
+                       tr("<b>Wren</b> %1<br><br>"
                           "Graphical front end for <a href=\"https://github.com/AsamK/signal-cli\">signal-cli</a>.<br>"
                           "signal-cli is used as a standalone program and is not part of this GUI.<br><br>"
                           "Path: %2<br>Version: %3<br><br>"
@@ -2990,9 +2990,9 @@ void MainWindow::updateTray()
     if (unread != m_trayUnread) {
         m_trayUnread = unread;
         m_tray->setIcon(AppIcon::tray(unread));
-        setWindowTitle(unread > 0 ? QStringLiteral("(%1) signal-cli Qt").arg(unread) : QStringLiteral("signal-cli Qt"));
+        setWindowTitle(unread > 0 ? QStringLiteral("(%1) Wren").arg(unread) : QStringLiteral("Wren"));
     }
-    m_tray->setToolTip(unread > 0 ? tr("signal-cli Qt – %n unread message(s)", nullptr, unread) : tr("signal-cli Qt"));
+    m_tray->setToolTip(unread > 0 ? tr("Wren – %n unread message(s)", nullptr, unread) : tr("Wren"));
 }
 
 void MainWindow::alertIncoming(const QString &key, const Message &m)
@@ -3013,7 +3013,7 @@ void MainWindow::alertIncoming(const QString &key, const Message &m)
         QString title = it->title, body;
         switch (m_notify.content) {
         case NotificationSettings::Hidden:
-            title = tr("signal-cli Qt");
+            title = tr("Wren");
             body = tr("New message");
             break;
         case NotificationSettings::NameOnly:
@@ -3236,7 +3236,7 @@ void MainWindow::downloadAndSendGif(const QString &conversationKey, const QUrl &
         return;
     }
     QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", "signal-cli-qt");
+    request.setRawHeader("User-Agent", "wren");
     QNetworkReply *reply = m_nam.get(request);
     connect(reply, &QNetworkReply::metaDataChanged, this, [this, reply] {
         const qint64 length = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
@@ -3277,7 +3277,7 @@ void MainWindow::registerGiphyAnalytics(const QUrl &url)
 {
     if (url.scheme() != QLatin1String("https")) return;
     QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", "signal-cli-qt");
+    request.setRawHeader("User-Agent", "wren");
     QNetworkReply *reply = m_nam.get(request);
     connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
 }

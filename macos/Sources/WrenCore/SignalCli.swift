@@ -79,9 +79,9 @@ public final class SignalCli {
         return env
     }
 
-    /// Phone numbers are masked in diagnostics unless SIGNAL_CLI_QT_DEBUG is set.
+    /// Phone numbers are masked in diagnostics unless WREN_DEBUG is set.
     nonisolated public static func maskNumbers(_ text: String) -> String {
-        if ProcessInfo.processInfo.environment["SIGNAL_CLI_QT_DEBUG"] != nil { return text }
+        if ProcessInfo.processInfo.environment["WREN_DEBUG"] != nil { return text }
         let re = try! NSRegularExpression(pattern: #"\+?(\d{2})\d{5,}(\d{2})"#)
         return re.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "+$1…$2")
     }

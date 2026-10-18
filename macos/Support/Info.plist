@@ -5,17 +5,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>signal-cli Mac</string>
+    <string>Wren</string>
     <key>CFBundleExecutable</key>
-    <string>signal-cli-mac</string>
+    <string>wren</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.signal-cli-qt.mac</string>
+    <string>io.github.wren.mac</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>signal-cli Mac</string>
+    <string>Wren</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

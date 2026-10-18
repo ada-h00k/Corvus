@@ -53,7 +53,7 @@ public:
     // Environment for child processes: inside an AppImage the library/plugin
     // paths that point into the bundle are removed so Java etc. are not confused.
     static QProcessEnvironment childEnvironment(const QProcessEnvironment &base = QProcessEnvironment::systemEnvironment());
-    // Phone numbers are masked in diagnostics unless SIGNAL_CLI_QT_DEBUG is set.
+    // Phone numbers are masked in diagnostics unless WREN_DEBUG is set.
     static QString maskNumbers(const QString &text);
 
     // Long-running process (JSON-RPC over stdin/stdout)

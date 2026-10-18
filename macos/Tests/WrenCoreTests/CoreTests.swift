@@ -1,5 +1,5 @@
 import XCTest
-@testable import SignalCliCore
+@testable import WrenCore
 
 final class EnvelopeTests: XCTestCase {
     func testIncomingMessageWithQuoteAndAttachment() {
@@ -198,7 +198,7 @@ final class HistoryStoreTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let path = dir.appendingPathComponent("history.scq").path
+        let path = dir.appendingPathComponent("history.wren").path
 
         var m = Message()
         m.ts = 1_700_000_000_000

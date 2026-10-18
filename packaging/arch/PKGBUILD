@@ -1,21 +1,21 @@
 # Maintainer: ada-h00k
 #
-# Builds signal-cli Qt from a source tarball that sits next to this file.
+# Builds Wren from a source tarball that sits next to this file.
 # The release workflow creates it with `git archive`; to build locally:
 #
-#   pkgver=$(sed -n 's/^project(signal-cli-qt VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-#   git archive --format=tar.gz --prefix="signal-cli-qt-$pkgver/" \
-#       -o "packaging/arch/signal-cli-qt-$pkgver.tar.gz" HEAD
+#   pkgver=$(sed -n 's/^project(wren VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+#   git archive --format=tar.gz --prefix="wren-$pkgver/" \
+#       -o "packaging/arch/wren-$pkgver.tar.gz" HEAD
 #   cd packaging/arch && makepkg -si
 #
 # (pkgver below must match the version used for the tarball name/prefix.)
 
-pkgname=signal-cli-qt
+pkgname=wren
 pkgver=0.2.0
 pkgrel=1
 pkgdesc='Native Qt 6 GUI for signal-cli with an encrypted local chat history'
 arch=('x86_64')
-url='https://github.com/ada-h00k/signal-cli-Qt'
+url='https://github.com/ada-h00k/Wren'
 license=('AGPL-3.0-only')
 depends=(
   'gcc-libs'
