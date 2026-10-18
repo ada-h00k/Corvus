@@ -506,8 +506,10 @@ private struct MaxWidth: ViewModifier {
 private struct BubbleContentLayout: Layout {
     let spacing: CGFloat
 
+    // Children are always measured by width only: a proposed height would stretch flexible parts
+    // (e.g. the quote's accent bar) when sizing, but not when placing, leaving the bubble too tall.
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let sizes = subviews.map { $0.sizeThatFits(proposal) }
+        let sizes = subviews.map { $0.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) }
         let height = sizes.map(\.height).reduce(0, +) + spacing * CGFloat(max(sizes.count - 1, 0))
         return CGSize(width: sizes.map(\.width).max() ?? 0, height: height)
     }

@@ -162,7 +162,10 @@ private struct AttachmentTray: View {
 struct MessageInput: NSViewRepresentable {
     static let insertText = Notification.Name("MessageInput.insertText")
 
+    static let spellCheckKey = "composer.spellCheck"
+
     @Environment(AppModel.self) private var model
+    @AppStorage(MessageInput.spellCheckKey) private var spellCheck = false
     @Binding var text: String
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -183,7 +186,6 @@ struct MessageInput: NSViewRepresentable {
         tv.textContainerInset = NSSize(width: 2, height: 7)
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
-        tv.isContinuousSpellCheckingEnabled = true
         tv.drawsBackground = false
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
@@ -209,6 +211,12 @@ struct MessageInput: NSViewRepresentable {
             tv.needsDisplay = true
         }
         tv.isEditable = model.connected
+        // Settings → General: spell checking, grammar and autocorrect follow one switch.
+        if tv.isContinuousSpellCheckingEnabled != spellCheck {
+            tv.isContinuousSpellCheckingEnabled = spellCheck
+            tv.isGrammarCheckingEnabled = spellCheck
+            tv.isAutomaticSpellingCorrectionEnabled = spellCheck
+        }
         if c.focusRequest != model.composerFocusRequest {
             c.focusRequest = model.composerFocusRequest
             DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }

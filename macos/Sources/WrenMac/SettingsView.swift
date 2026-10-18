@@ -19,6 +19,7 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(MessageInput.spellCheckKey) private var spellCheck = false
 
     var body: some View {
         Form {
@@ -43,6 +44,9 @@ private struct GeneralSettings: View {
                 LabeledContent("Protection", value: model.historyProtectionMode == "keychain" ? "System keychain" : "Passphrase")
                 Button("Change history protection …") { Task { await model.changeHistoryProtection() } }
                     .disabled(!model.historyReady)
+            }
+            Section("Message field") {
+                Toggle("Check spelling while typing", isOn: $spellCheck)
             }
             Section("GIPHY") {
                 Button("GIPHY API key …") { Task { await model.configureGiphyApiKey() } }
