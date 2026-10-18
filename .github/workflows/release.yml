@@ -644,8 +644,15 @@ jobs:
           find "$QTKEYCHAIN_PREFIX" -iname 'qt*keychain*.dll' -exec cp {} stage/ \;
           ls stage
 
+          # windeployqt treats "qt6keychain.dll" as a Qt module and looks for it in Qt's bin
+          # directory, so make it available there.
+          find "$QTKEYCHAIN_PREFIX" -iname 'qt*keychain*.dll' -exec cp {} "$QT_ROOT_DIR/bin/" \;
+
           windeployqt --release --no-translations --compiler-runtime \
             --dir stage stage/wren.exe
+
+          # the keychain DLL must be next to wren.exe, whatever windeployqt did with it
+          find "$QTKEYCHAIN_PREFIX" -iname 'qt*keychain*.dll' -exec cp {} stage/ \;
 
           if [ -n "${QRENCODE_EXE:-}" ] && [ -f "$QRENCODE_EXE" ]; then
             cp "$QRENCODE_EXE" stage/qrencode.exe
