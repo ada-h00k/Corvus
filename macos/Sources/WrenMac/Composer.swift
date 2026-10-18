@@ -312,6 +312,11 @@ final class InputTextView: NSTextView {
         pasteAsPlainText(sender)
     }
 
+    // A plain-text view only accepts text types, so Paste would be disabled for a screenshot on the clipboard.
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        super.readablePasteboardTypes + [.png, .tiff, .fileURL]
+    }
+
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         if let coordinator, MainActor.assumeIsolated({ coordinator.paste(from: pboard) }) { return true }
         return super.readSelection(from: pboard, type: type)

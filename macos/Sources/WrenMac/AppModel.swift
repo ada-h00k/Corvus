@@ -844,8 +844,15 @@ final class AppModel {
     // MARK: - Receiving
 
     private func onEnvelope(_ env: JSON) {
-        let pe = parseEnvelope(env)
+        var pe = parseEnvelope(env)
         if pe.kind == .none { return }
+        if !pe.mentions.isEmpty {
+            pe.msg.text = applyMentions(pe.msg.text, pe.mentions) { m in
+                let key = chats.resolveKey(m.number.isEmpty ? m.uuid : m.number)
+                let n = key.isEmpty ? "" : displayName(key)
+                return n.isEmpty ? (m.name.isEmpty ? m.number : m.name) : n
+            }
+        }
 
         let group = !pe.groupId.isEmpty
         let srcKey = chats.resolveKey(pe.src)

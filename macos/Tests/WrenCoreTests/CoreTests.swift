@@ -24,6 +24,22 @@ final class EnvelopeTests: XCTestCase {
         XCTAssertEqual(pe.msg.quote.attachmentNote, "image/jpeg")
     }
 
+    func testMentions() {
+        let pe = parseEnvelope(["sourceNumber": "+49111", "dataMessage": [
+            "timestamp": 1, "message": "\u{FFFC} hi \u{FFFC}",
+            "mentions": [["name": "+49222", "number": "+49222", "uuid": "u-2", "start": 0, "length": 1],
+                         ["name": "Bob", "number": "", "uuid": "u-3", "start": 5, "length": 1]],
+        ] as JSON])
+        XCTAssertEqual(pe.mentions, [Mention(start: 0, length: 1, number: "+49222", uuid: "u-2", name: "+49222"),
+                                     Mention(start: 5, length: 1, uuid: "u-3", name: "Bob")])
+        let names = ["+49222": "Alice", "u-3": "Bob"]
+        XCTAssertEqual(applyMentions(pe.msg.text, pe.mentions) { names[$0.number.isEmpty ? $0.uuid : $0.number]! }, "@Alice hi @Bob")
+        // Emoji before the placeholder: offsets are UTF-16 units.
+        XCTAssertEqual(applyMentions("😀 \u{FFFC}", [Mention(start: 3, length: 1)]) { _ in "X" }, "😀 @X")
+        // Out of range mentions are ignored.
+        XCTAssertEqual(applyMentions("hi", [Mention(start: 5, length: 1)]) { _ in "X" }, "hi")
+    }
+
     func testReactionEditSyncAndReceipts() {
         let reaction = parseEnvelope(["sourceUuid": "u-1", "dataMessage": [
             "reaction": ["emoji": "👍", "targetAuthorNumber": "+49111", "targetSentTimestamp": 77, "isRemove": false],

@@ -248,10 +248,11 @@ private struct MessageRow: View {
                     Button(e) { model.sendReaction(message.id, e) }
                 }
             } label: {
-                Image(systemName: "face.smiling")
+                Image(systemName: "face.smiling").foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .tint(.secondary)
             .fixedSize()
             .help("React")
             Button { model.startReply(message.id) } label: { Image(systemName: "arrowshape.turn.up.left") }
@@ -309,7 +310,7 @@ private struct Bubble: View {
                     MetaRow(message: m, pending: pending, color: .secondary)
                 }
             } else {
-                VStack(alignment: .trailing, spacing: 3) {
+                BubbleContentLayout(spacing: 3) {
                     VStack(alignment: .leading, spacing: 6) {
                         if showSender { senderLabel }
                         if m.quote.valid { QuoteView(quote: m.quote, foreground: fg, outgoing: m.outgoing) }
@@ -498,6 +499,28 @@ private struct MaxWidth: ViewModifier {
     let width: CGFloat
     init(_ width: CGFloat) { self.width = width }
     func body(content: Content) -> some View { MaxWidthLayout(maxWidth: width) { content } }
+}
+
+/// Stacks the bubble content vertically: everything leading, only the last view (the time row) trailing.
+/// A VStack can only align all children the same way, which pushed short texts to the right.
+private struct BubbleContentLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(proposal) }
+        let height = sizes.map(\.height).reduce(0, +) + spacing * CGFloat(max(sizes.count - 1, 0))
+        return CGSize(width: sizes.map(\.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for (i, v) in subviews.enumerated() {
+            let size = v.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+            let x = i == subviews.count - 1 ? bounds.maxX - size.width : bounds.minX
+            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: size.width, height: size.height))
+            y += size.height + spacing
+        }
+    }
 }
 
 private struct MaxWidthLayout: Layout {

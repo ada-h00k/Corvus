@@ -20,7 +20,45 @@ public struct ParsedEnvelope {
     public var targetUuid = ""
     public var targetTs: Int64 = 0     // reaction: reacted message; edit: timestamp of the message being edited
 
+    // @mentions in msg.text (message, edit)
+    public var mentions: [Mention] = []
+
     public init() {}
+}
+
+/// An @mention: Signal puts U+FFFC into the text and names the person separately (offsets in UTF-16 units).
+public struct Mention: Equatable {
+    public var start = 0
+    public var length = 0
+    public var number = ""
+    public var uuid = ""
+    public var name = ""
+
+    public init(start: Int = 0, length: Int = 0, number: String = "", uuid: String = "", name: String = "") {
+        self.start = start
+        self.length = length
+        self.number = number
+        self.uuid = uuid
+        self.name = name
+    }
+}
+
+/// Replaces the mention placeholders in `text` with "@" + name.
+public func applyMentions(_ text: String, _ mentions: [Mention], name: (Mention) -> String) -> String {
+    let s = NSMutableString(string: text)
+    for m in mentions.sorted(by: { $0.start > $1.start }) {
+        guard m.start >= 0, m.length > 0, m.start + m.length <= s.length else { continue }
+        s.replaceCharacters(in: NSRange(location: m.start, length: m.length), with: "@" + name(m))
+    }
+    return s as String
+}
+
+private func parseMentions(_ dm: JSON) -> [Mention] {
+    jsonArray(dm["mentions"]).map { v in
+        let o = jsonObject(v)
+        return Mention(start: Int(jsonInt64(o["start"])), length: Int(jsonInt64(o["length"])),
+                       number: jsonString(o["number"]), uuid: jsonString(o["uuid"]), name: jsonString(o["name"]))
+    }
 }
 
 private func parseAttachments(_ dm: JSON) -> [Attachment] {
@@ -78,6 +116,7 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
     }
 
     out.msg.text = jsonString(dm["message"])
+    out.mentions = parseMentions(dm)
     out.msg.attachments = parseAttachments(dm)
     out.msg.quote = parseQuote(dm)
     out.msg.expiresInSeconds = out.expirationSeconds
@@ -103,6 +142,7 @@ private func parseEdit(_ edit: JSON, _ out: inout ParsedEnvelope, envelopeTs: In
     out.kind = .edit
     out.targetTs = target
     out.msg.text = text
+    out.mentions = parseMentions(dm)
     out.msg.ts = ts > 0 ? ts : nowMs()
     out.groupId = groupIdOf(dm)
     return true
