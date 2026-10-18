@@ -1,101 +1,154 @@
-
-name: Wren Release
+name: Build Linux Release
 
 on:
   push:
     branches:
       - main
       - master
-      - macos-build
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: wren-release-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  BUILD_TYPE: Release
+  QT_VERSION: "6.12"
+
 jobs:
-  # ==================================================
-  # 1. Linux x86_64: App + Archiv mit Installationsskript
-  # ==================================================
-  linux-build:
-    name: Linux x86_64
+  build:
+    name: Build Linux x86_64
     runs-on: ubuntu-24.04
 
     steps:
+      # --------------------------------------------------
+      # Checkout
+      # --------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      # --------------------------------------------------
+      # System dependencies
+      # --------------------------------------------------
+      - name: Install dependencies
+        shell: bash
         run: |
+          set -euxo pipefail
+
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
             cmake \
             ninja-build \
             pkg-config \
-            qtkeychain-qt6-dev \
-            libssl-dev \
-            libsecret-1-dev \
+            file \
+            curl \
+            wget \
+            ca-certificates \
+            fuse3 \
+            libfuse2t64 \
             libgl1-mesa-dev \
             libxkbcommon-dev \
+            libxkbcommon-x11-0 \
             libxcb-cursor0 \
-            libxcb-cursor-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxext-dev \
-            libxfixes-dev \
-            libxi-dev \
-            libxrender-dev \
-            libxcb1-dev \
-            libxcb-glx0-dev \
-            libxcb-keysyms1-dev \
-            libxcb-image0-dev \
-            libxcb-shm0-dev \
-            libxcb-icccm4-dev \
-            libxcb-sync-dev \
-            libxcb-xfixes0-dev \
-            libxcb-shape0-dev \
-            libxcb-randr0-dev \
-            libxcb-render-util0-dev \
-            libxcb-util-dev \
-            libxcb-xinerama0-dev \
-            libxcb-xkb-dev
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxcb-util1 \
+            libx11-xcb1 \
+            libdbus-1-3 \
+            libfontconfig1 \
+            libfreetype6 \
+            libegl1 \
+            libopengl0 \
+            libqrencode-dev \
+            qtkeychain-qt6-dev
 
+      # --------------------------------------------------
+      # Qt
+      # --------------------------------------------------
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.12'
+          version: ${{ env.QT_VERSION }}
           host: linux
           target: desktop
           arch: linux_gcc_64
           modules: qtmultimedia
           cache: true
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Test Rust history store
-        run: cargo test --manifest-path history-store/Cargo.toml
-
-      - name: Configure CMake
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build Wren
-        run: cmake --build build --parallel 2
-
-      - name: Package Linux archive
+      - name: Configure Qt environment
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p dist/wren-linux-x86_64
+          echo "QT_ROOT_DIR=$QT_ROOT_DIR"
 
-          BIN=""
+          QMAKE_PATH="$(find "$QT_ROOT_DIR" \
+            -type f -name qmake -print -quit)"
+
+          if [ -z "$QMAKE_PATH" ]; then
+            echo "::error::qmake not found in $QT_ROOT_DIR"
+            exit 1
+          fi
+
+          echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
+          "$QMAKE_PATH" --version
+
+      # --------------------------------------------------
+      # Rust
+      # --------------------------------------------------
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Rust tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo test \
+            --release \
+            --locked \
+            --manifest-path history-store/Cargo.toml
+
+      # --------------------------------------------------
+      # CMake
+      # --------------------------------------------------
+      - name: Configure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # --------------------------------------------------
+      # Locate application executable
+      # --------------------------------------------------
+      - name: Locate executable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find build -maxdepth 4 -type f -executable -print
+
+          BINARY=""
+
           for candidate in \
             build/wren \
             build/bin/wren \
@@ -103,186 +156,176 @@ jobs:
             build/bin/Wren
           do
             if [ -f "$candidate" ]; then
-              BIN="$candidate"
+              BINARY="$candidate"
               break
             fi
           done
 
-          if [ -z "$BIN" ]; then
-            echo "::error::Wren executable not found."
-            find build -maxdepth 4 -type f -executable -print
+          if [ -z "$BINARY" ]; then
+            echo "::error::Application binary not found. Check the CMake target name."
             exit 1
           fi
 
-          install -m 755 "$BIN" \
-            dist/wren-linux-x86_64/wren
+          echo "BINARY=$BINARY" >> "$GITHUB_ENV"
+          file "$BINARY"
 
-          # Locate the existing installer script.
-          INSTALL_SCRIPT=""
-          for candidate in \
-            install.sh \
-            install-linux.sh \
-            scripts/install.sh \
-            scripts/install-linux.sh \
-            packaging/install.sh \
-            packaging/install-linux.sh
-          do
-            if [ -f "$candidate" ]; then
-              INSTALL_SCRIPT="$candidate"
-              break
-            fi
-          done
+      # --------------------------------------------------
+      # Plain Linux binary
+      # --------------------------------------------------
+      - name: Package binary
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          if [ -z "$INSTALL_SCRIPT" ]; then
-            echo "::error::Existing install script not found."
-            echo "Update the candidate paths in this workflow to match your repository."
-            exit 1
-          fi
+          mkdir -p dist
 
-          install -m 755 "$INSTALL_SCRIPT" \
-            dist/wren-linux-x86_64/install.sh
+          cp "$BINARY" dist/wren-linux-x86_64
+          chmod +x dist/wren-linux-x86_64
 
-          if [ -f LICENSE ]; then
-            cp LICENSE dist/wren-linux-x86_64/LICENSE
-          fi
+          mkdir -p "$RUNNER_TEMP/wren-installer"
+          cp dist/wren-linux-x86_64 "$RUNNER_TEMP/wren-installer/"
+          cp packaging/install.sh packaging/wren.desktop packaging/wren.svg \
+            "$RUNNER_TEMP/wren-installer/"
+          chmod +x "$RUNNER_TEMP/wren-installer/install.sh"
+          tar -czf "$GITHUB_WORKSPACE/dist/wren-linux-x86_64-installer.tar.gz" \
+            -C "$RUNNER_TEMP/wren-installer" .
 
-          cat > dist/wren-linux-x86_64/README.txt <<'EOF'
-          Wren for Linux x86_64
+      # --------------------------------------------------
+      # Validate output and checksums
+      # --------------------------------------------------
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          Extract the archive and run:
+          test -s dist/wren-linux-x86_64
+          test -s dist/wren-linux-x86_64-installer.tar.gz
 
-            chmod +x install.sh
-            ./install.sh
+          tar -tzf dist/wren-linux-x86_64-installer.tar.gz
 
-          The installer may require sudo privileges.
-          EOF
+          file dist/wren-linux-x86_64
 
-          tar -C dist \
-            -czf dist/wren-linux-x86_64.tar.gz \
-            wren-linux-x86_64
+          (
+            cd dist
+            sha256sum \
+              wren-linux-x86_64 \
+              wren-linux-x86_64-installer.tar.gz \
+              > SHA256SUMS
+          )
 
-          test -s dist/wren-linux-x86_64.tar.gz
-          ls -lh dist/wren-linux-x86_64.tar.gz
+          cat dist/SHA256SUMS
+          ls -lh dist
 
-      - name: Upload Linux artifact
+      # --------------------------------------------------
+      # Preserve artifacts even when a later step fails
+      # --------------------------------------------------
+      - name: Upload build artifacts
+        if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
           name: wren-linux-${{ github.sha }}
-          path: dist/wren-linux-x86_64.tar.gz
-          if-no-files-found: error
+          path: dist/*
+          if-no-files-found: warn
           retention-days: 14
 
-  # ==================================================
-  # 2. Arch Linux package
-  # ==================================================
+
+  # ------------------------------------------------------
+  # Arch Linux package (built natively in an Arch container)
+  # ------------------------------------------------------
   arch-package:
-    name: Arch Linux package
+    name: Build Arch Linux package
     runs-on: ubuntu-24.04
     container:
       image: archlinux:base-devel
 
     steps:
-      - name: Install prerequisites
+      # git must exist before checkout so that the full history is cloned
+      - name: Install git
+        shell: bash
         run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm git sudo
+          set -euxo pipefail
+          pacman -Syu --noconfirm --needed git
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fix Git safe directory
+      - name: Prepare source tarball and PKGBUILD
         shell: bash
         run: |
+          set -euxo pipefail
+
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory /__w/Wren/Wren
 
-      - name: Prepare package source
+          base="$(sed -n 's/^project(wren VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          count="$(git rev-list --count HEAD)"
+          short="$(git rev-parse --short=7 HEAD)"
+          pkgver="${base}.r${count}.g${short}"
+          echo "PKGVER=$pkgver" >> "$GITHUB_ENV"
+
+          # makepkg refuses to run as root
+          useradd --create-home builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+
+          build_dir=/home/builder/pkg
+          mkdir -p "$build_dir"
+
+          git archive --format=tar.gz \
+            --prefix="wren-${pkgver}/" \
+            -o "$build_dir/wren-${pkgver}.tar.gz" HEAD
+          cp packaging/arch/PKGBUILD "$build_dir/PKGBUILD"
+          sed -i "s/^pkgver=.*/pkgver=${pkgver}/" "$build_dir/PKGBUILD"
+
+          chown -R builder:builder /home/builder
+          cat "$build_dir/PKGBUILD"
+
+      - name: Build package
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
+          su builder -c 'cd ~/pkg && makepkg --syncdeps --noconfirm --nocolor'
 
-          test -f packaging/arch/PKGBUILD
-
-          VERSION="$(sed -nE \
-            's/^[[:space:]]*project\(wren VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' \
-            CMakeLists.txt | head -n1)"
-
-          if [ -z "$VERSION" ]; then
-            VERSION="0.1.0"
-            echo "::warning::Version not found in CMakeLists.txt; using $VERSION."
-          fi
-
-          REVISION="$(git rev-list --count HEAD)"
-          SHORT_SHA="$(git rev-parse --short HEAD)"
-          PKGVER="${VERSION}.r${REVISION}.g${SHORT_SHA}"
-
-          mkdir -p package-work dist
-
-          git archive \
-            --format=tar \
-            --prefix="wren-${PKGVER}/" \
-            HEAD | gzip > "package-work/wren-${PKGVER}.tar.gz"
-
-          cp packaging/arch/PKGBUILD package-work/PKGBUILD
-
-          sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" \
-            package-work/PKGBUILD
-
-          # Use the generated local source archive.
-          sed -i \
-            "s|^source=.*|source=(\"wren-${PKGVER}.tar.gz\")|" \
-            package-work/PKGBUILD
-
-          # The archive was generated from this exact checkout.
-          sed -i \
-            '/^sha256sums=/c\sha256sums=("SKIP")' \
-            package-work/PKGBUILD
-
-          echo "PKGVER=${PKGVER}" >> "$GITHUB_ENV"
-
-      - name: Build Arch package
+      - name: Inspect package
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
+          mkdir -p dist
+          cp /home/builder/pkg/*.pkg.tar.zst dist/
 
-          useradd --create-home builder || true
+          for pkg in dist/*.pkg.tar.zst; do
+            pacman -Qip "$pkg"
+            pacman -Qlp "$pkg"
+          done
 
-          chown -R builder:builder "$GITHUB_WORKSPACE/package-work"
+          # the package must contain the executable, desktop entry, icon and license
+          files="$(pacman -Qlp dist/*.pkg.tar.zst)"
+          for path in \
+            /usr/bin/wren \
+            /usr/share/applications/wren.desktop \
+            /usr/share/icons/hicolor/scalable/apps/wren.svg \
+            /usr/share/licenses/wren/LICENSE
+          do
+            if ! grep -qxF "wren $path" <<< "$files"; then
+              echo "::error::Package is missing $path"
+              exit 1
+            fi
+          done
 
-          # makepkg must not run as root.
-          su builder -c \
-            "cd '$GITHUB_WORKSPACE/package-work' && makepkg --cleanbuild --syncdeps --noconfirm"
-
-          find package-work -maxdepth 1 \
-            -name '*.pkg.tar.zst' \
-            -exec cp {} dist/ \;
-
-          test -n "$(find dist -maxdepth 1 \
-            -name '*.pkg.tar.zst' -print -quit)"
-
-      - name: Verify Arch package
-        shell: bash
-        run: |
-          set -euo pipefail
-          PKG="$(find dist -maxdepth 1 -name '*.pkg.tar.zst' -print -quit)"
-          pacman -Qip "$PKG"
-          pacman -Qlp "$PKG"
-
-      - name: Upload Arch package
+      - name: Upload Arch package artifact
+        if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
           name: wren-arch-${{ github.sha }}
           path: dist/*.pkg.tar.zst
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
-  # ==================================================
-  # 3. Native macOS Swift / SwiftUI app
-  # ==================================================
+  # ------------------------------------------------------
+  # macOS app (Swift / SwiftUI, Apple silicon)
+  # ------------------------------------------------------
   macos-app:
-    name: macOS Swift / SwiftUI
+    name: Build macOS app (arm64)
     runs-on: macos-15
 
     steps:
@@ -292,292 +335,58 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test Rust history store
-        run: cargo test --manifest-path history-store/Cargo.toml
-
-      - name: Build Swift app
+      # Builds the Rust history store, the Swift package and the .app bundle
+      - name: Build app bundle
+        shell: bash
         run: |
           set -euo pipefail
-          chmod +x macos/scripts/build-app.sh
+          xcodebuild -version
           macos/scripts/build-app.sh
 
       - name: Run Swift tests
-        run: swift test --package-path macos
-
-      - name: Verify app bundle
-        run: |
-          test -d macos/build/Wren.app
-          test -f macos/build/Wren.app/Contents/Info.plist
-
-      - name: Package Swift app
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
+          swift test --package-path macos
 
-          ditto -c -k --keepParent \
-            macos/build/Wren.app \
-            dist/wren-macos-arm64.zip
+      - name: Package app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          ditto -c -k --keepParent "macos/build/Wren.app" dist/wren-macos-arm64.zip
+
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
 
           test -s dist/wren-macos-arm64.zip
+          unzip -l dist/wren-macos-arm64.zip
+          codesign --verify --verbose "macos/build/Wren.app"
+          file "macos/build/Wren.app/Contents/MacOS/wren"
+          ls -lh dist
 
-          shasum -a 256 dist/wren-macos-arm64.zip \
-            > dist/wren-macos-arm64.zip.sha256
-
-      - name: Upload Swift app
+      - name: Upload build artifacts
+        if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
           name: wren-macos-${{ github.sha }}
-          path: |
-            dist/wren-macos-arm64.zip
-            dist/wren-macos-arm64.zip.sha256
-          if-no-files-found: error
+          path: dist/*
+          if-no-files-found: warn
           retention-days: 14
 
-  # ==================================================
-  # 4. Qt-based macOS app
-  # ==================================================
-  macos-qt-app:
-    name: macOS Qt
-    runs-on: macos-26
-
-    env:
-      QTKEYCHAIN_VERSION: v0.14.0
-      MACOSX_DEPLOYMENT_TARGET: '12.0'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install build tools
-        run: brew install cmake ninja pkg-config librsvg
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.12'
-          host: mac
-          target: desktop
-          arch: clang_64
-          modules: qtmultimedia
-          cache: true
-
-      - name: Test Rust history store
-        run: cargo test --manifest-path history-store/Cargo.toml
-
-      - name: Build QtKeychain
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git clone --depth 1 \
-            --branch "$QTKEYCHAIN_VERSION" \
-            https://github.com/frankosterfeld/qtkeychain.git \
-            "$RUNNER_TEMP/qtkeychain"
-
-          cd "$RUNNER_TEMP/qtkeychain"
-
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qtkeychain-install" \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
-
-          cmake --build build --parallel 2
-          cmake --install build
-
-      - name: Configure Qt app
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
-            "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR;$RUNNER_TEMP/qtkeychain-install"
-
-      - name: Build Qt app
-        run: cmake --build build --parallel 2
-
-      - name: Create Qt app bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p dist
-
-          BIN=""
-          for candidate in \
-            build/wren \
-            build/bin/wren \
-            build/Wren \
-            build/bin/Wren
-          do
-            if [ -f "$candidate" ]; then
-              BIN="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$BIN" ]; then
-            echo "::error::Qt executable not found."
-            find build -maxdepth 4 -type f -executable -print
-            exit 1
-          fi
-
-          APP="dist/Wren-macos-qt.app"
-          CONTENTS="$APP/Contents"
-
-          mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
-
-          install -m 755 "$BIN" "$CONTENTS/MacOS/wren"
-
-          cat > "$CONTENTS/Info.plist" <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key>
-            <string>Wren Qt</string>
-            <key>CFBundleDisplayName</key>
-            <string>Wren Qt</string>
-            <key>CFBundleIdentifier</key>
-            <string>org.wren.app.qt</string>
-            <key>CFBundleExecutable</key>
-            <string>wren</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>CFBundleVersion</key>
-            <string>1</string>
-            <key>CFBundleShortVersionString</key>
-            <string>1.0</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>12.0</string>
-          </dict>
-          </plist>
-          PLIST
-
-          if [ -f packaging/wren.svg ]; then
-            rsvg-convert -w 1024 -h 1024 \
-              packaging/wren.svg \
-              -o "$RUNNER_TEMP/wren-icon.png"
-
-            mkdir -p "$RUNNER_TEMP/wren.iconset"
-
-            for size in 16 32 128 256 512; do
-              sips -z "$size" "$size" \
-                "$RUNNER_TEMP/wren-icon.png" \
-                --out "$RUNNER_TEMP/wren.iconset/icon_${size}x${size}.png" \
-                >/dev/null
-
-              double=$((size * 2))
-              sips -z "$double" "$double" \
-                "$RUNNER_TEMP/wren-icon.png" \
-                --out "$RUNNER_TEMP/wren.iconset/icon_${size}x${size}@2x.png" \
-                >/dev/null
-            done
-
-            iconutil -c icns "$RUNNER_TEMP/wren.iconset" \
-              -o "$CONTENTS/Resources/wren.icns"
-
-            /usr/libexec/PlistBuddy \
-              -c 'Add :CFBundleIconFile string wren' \
-              "$CONTENTS/Info.plist"
-          fi
-
-      - name: Bundle Qt libraries and plugins
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APP="dist/Wren-macos-qt.app"
-
-          macdeployqt "$APP" \
-            -always-overwrite \
-            -libpath "$RUNNER_TEMP/qtkeychain-install/lib"
-
-          PLUGIN="$(find "$QT_ROOT_DIR" \
-            -name libqcocoa.dylib -print -quit)"
-
-          if [ -n "$PLUGIN" ]; then
-            mkdir -p "$APP/Contents/PlugIns/platforms"
-            cp "$PLUGIN" "$APP/Contents/PlugIns/platforms/"
-          fi
-
-          STYLE="$(find "$QT_ROOT_DIR" \
-            -name libqmacstyle.dylib -print -quit)"
-
-          if [ -n "$STYLE" ]; then
-            mkdir -p "$APP/Contents/PlugIns/styles"
-            cp "$STYLE" "$APP/Contents/PlugIns/styles/"
-          fi
-
-          KEYCHAIN_LIB="$(find "$RUNNER_TEMP/qtkeychain-install" \
-            -name '*qt*keychain*.dylib' -print -quit)"
-
-          if [ -n "$KEYCHAIN_LIB" ]; then
-            mkdir -p "$APP/Contents/Frameworks"
-            cp "$KEYCHAIN_LIB" "$APP/Contents/Frameworks/"
-          fi
-
-          find "$APP/Contents" -type f -name '*.dylib' -print0 |
-            while IFS= read -r -d '' lib; do
-              codesign --force --sign - "$lib"
-            done
-
-          codesign --force --deep --sign - "$APP"
-          codesign --verify --deep --strict "$APP"
-
-          lipo -archs "$APP/Contents/MacOS/wren"
-
-      - name: Package Qt app
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd dist
-
-          ditto -c -k --keepParent \
-            Wren-macos-qt.app \
-            wren-macos-qt-arm64.zip
-
-          test -s wren-macos-qt-arm64.zip
-          unzip -l wren-macos-qt-arm64.zip
-
-          shasum -a 256 wren-macos-qt-arm64.zip \
-            > wren-macos-qt-arm64.zip.sha256
-
-      - name: Upload Qt app
-        uses: actions/upload-artifact@v4
-        with:
-          name: wren-macos-qt-${{ github.sha }}
-          path: |
-            dist/wren-macos-qt-arm64.zip
-            dist/wren-macos-qt-arm64.zip.sha256
-          if-no-files-found: error
-          retention-days: 14
-
-  # ==================================================
-  # 5. Publish all four artifacts
-  # ==================================================
+  # ------------------------------------------------------
+  # Create a release for every commit (all artifacts together)
+  # ------------------------------------------------------
   release:
-    name: Publish GitHub Release
+    name: Publish release
     runs-on: ubuntu-24.04
-
     needs:
-      - linux-build
+      - build
       - arch-package
       - macos-app
-      - macos-qt-app
-
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.ref == 'refs/heads/main' ||
-      github.ref == 'refs/heads/master'
-
-    permissions:
-      contents: write
 
     steps:
       - name: Download build artifacts
@@ -587,35 +396,45 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Create checksums
+      - name: Regenerate checksums
         shell: bash
         run: |
           set -euo pipefail
-          cd dist
 
-          find . -maxdepth 1 -type f \
-            ! -name SHA256SUMS \
-            ! -name '*.sha256' \
-            -printf '%f\n' |
-            sort |
-            while IFS= read -r file; do
-              sha256sum "$file"
-            done > SHA256SUMS
+          cd dist
+          rm -f SHA256SUMS
+          find . -maxdepth 1 -type f -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS
 
           cat SHA256SUMS
           ls -lh
 
-      - name: Publish GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.sha }}
-          name: Wren build ${{ github.sha }}
-          prerelease: true
-          generate_release_notes: true
+          name: Build ${{ github.sha }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            Automatic Linux x86_64 and macOS (Apple silicon) build.
+
+            Commit: `${{ github.sha }}`
+
+            Files:
+            - `wren-linux-x86_64` — plain executable
+            - `wren-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
+            - `wren-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
+            - `wren-macos-arm64.zip` — native macOS app for Apple silicon, macOS 14 or newer
+              (ad-hoc signed: open it the first time with right-click → Open)
+            - `SHA256SUMS` — SHA-256 checksums for all files above
+
+            `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS `brew install signal-cli`).
+          draft: false
+          prerelease: false
+          make_latest: true
           fail_on_unmatched_files: true
           files: |
-            dist/wren-linux-x86_64.tar.gz
+            dist/wren-linux-x86_64
+            dist/wren-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
             dist/wren-macos-arm64.zip
-            dist/wren-macos-qt-arm64.zip
             dist/SHA256SUMS
