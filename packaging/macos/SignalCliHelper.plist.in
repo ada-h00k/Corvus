@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+<key>CFBundleDevelopmentRegion</key>
+<string>en</string>
+
+<key>CFBundleExecutable</key>
+<string>wren-signal-cli</string>
+
+<key>CFBundleIdentifier</key>
+<string>io.github.wren.signal-cli</string>
+
+<key>CFBundleInfoDictionaryVersion</key>
+<string>6.0</string>
+
+<key>CFBundleName</key>
+<string>Wren signal-cli</string>
+
+<key>CFBundlePackageType</key>
+<string>APPL</string>
+
+<key>CFBundleShortVersionString</key>
+<string>@PROJECT_VERSION@</string>
+
+<key>CFBundleVersion</key>
+<string>@PROJECT_VERSION@</string>
+
+<!-- No Dock icon, no menu bar. -->
+<key>LSBackgroundOnly</key>
+<true/>
+
+<!-- No App Nap: signal-cli has to stay connected while Wren is in the background. -->
+<key>NSAppSleepDisabled</key>
+<true/>
+
+<!-- No LSFileQuarantineEnabled: signal-cli's native libraries must not be quarantined. -->
+</dict>
+</plist>

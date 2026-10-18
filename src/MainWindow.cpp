@@ -2326,7 +2326,7 @@ void MainWindow::sendMessage()
     if (!text.isEmpty()) p[QStringLiteral("message")] = text;
 
     QList<Attachment> atts;
-    QJsonArray paths;
+    QStringList paths;
     for (const QString &f : files) {
         const QFileInfo fi(f);
         Attachment a;
@@ -2345,7 +2345,9 @@ void MainWindow::sendMessage()
         atts << a;
         paths.append(a.path);
     }
-    if (!paths.isEmpty()) p[QStringLiteral("attachments")] = paths;
+    const QString stageDir = m_tmp.path() + QStringLiteral("/send-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    if (!paths.isEmpty())
+        p[QStringLiteral("attachments")] = QJsonArray::fromStringList(SignalCli::stageFiles(paths, stageDir));
 
     if (quote.valid && !quote.authorKey.isEmpty()) {
         p[QStringLiteral("quoteTimestamp")] = QJsonValue(static_cast<qint64>(quote.id));
@@ -2392,7 +2394,8 @@ void MainWindow::sendMessage()
     if (key == m_current) showConversation(true);
 
     m_cli.call(QStringLiteral("send"), p,
-               [this, pendingId, key, text, files, quote, giphySentAnalyticsUrl](const QJsonValue &res, const QString &err) {
+               [this, pendingId, key, text, files, quote, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
+        QDir(stageDir).removeRecursively();
         auto pendingIt = m_pendingSends.find(pendingId);
         if (pendingIt == m_pendingSends.end()) return;
 
@@ -3103,7 +3106,10 @@ void MainWindow::editProfile()
                           tr("Signal display name updated."));
     });
     connect(dlg, &ProfileDialog::avatarChosen, this, [this](const QString &path) {
-        sendProfileUpdate({{QStringLiteral("avatar"), path}, {QStringLiteral("removeAvatar"), false}},
+        // The copy stays in the temporary directory until Wren quits.
+        const QString staged = SignalCli::stageFiles({path}, m_tmp.path() + QStringLiteral("/avatar-") +
+                                                                  QUuid::createUuid().toString(QUuid::WithoutBraces)).first();
+        sendProfileUpdate({{QStringLiteral("avatar"), staged}, {QStringLiteral("removeAvatar"), false}},
                           tr("Signal avatar updated."));
     });
     connect(dlg, &ProfileDialog::avatarRemoveRequested, this, [this] {

@@ -365,9 +365,12 @@ jobs:
 
           test -s dist/wren-macos-arm64.zip
           unzip -l dist/wren-macos-arm64.zip
-          codesign --verify --verbose "macos/build/Wren.app"
+          codesign --verify --deep --strict --verbose "macos/build/Wren.app"
           file "macos/build/Wren.app/Contents/MacOS/wren"
           ls -lh dist
+
+          # Files created by the app must be quarantined; signal-cli runs through the helper app.
+          packaging/macos/check-signal-cli-helper.sh macos/build/Wren.app
 
       - name: Upload build artifacts
         if: always() && hashFiles('dist/*') != ''
@@ -477,10 +480,10 @@ jobs:
         run: |
           set -euxo pipefail
 
-          APP_PATH="$(find build-qt -maxdepth 5 \
-            -type d -name '*.app' -print -quit)"
+          # By name: build-qt also contains the helper bundle (wren-signal-cli.app).
+          APP_PATH=build-qt/wren.app
 
-          if [ -z "$APP_PATH" ]; then
+          if [ ! -d "$APP_PATH" ]; then
             echo "::error::No .app bundle found. Check the CMake executable target and MACOSX_BUNDLE setting."
             exit 1
           fi
@@ -509,14 +512,8 @@ jobs:
 
           codesign --verify --deep --strict --verbose=2 "$QT_APP_PATH"
 
-          # Files created by the app must be quarantined (Gatekeeper check).
-          quarantine="$(/usr/libexec/PlistBuddy \
-            -c 'Print :LSFileQuarantineEnabled' \
-            "$QT_APP_PATH/Contents/Info.plist")"
-          if [ "$quarantine" != "true" ]; then
-            echo "::error::LSFileQuarantineEnabled is not set in Info.plist"
-            exit 1
-          fi
+          # Files created by the app must be quarantined; signal-cli runs through the helper app.
+          packaging/macos/check-signal-cli-helper.sh "$QT_APP_PATH"
 
           find "$QT_APP_PATH/Contents/MacOS" \
             -maxdepth 1 -type f -exec file {} \;

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 <key>CFBundleDevelopmentRegion</key>
@@ -33,21 +33,9 @@
 <string>public.app-category.social-networking</string>
 
 <!-- Quarantine files created by the application by default.
-Child processes (signal-cli) inherit this, so their files are quarantined too. -->
+signal-cli runs through Contents/Helpers/wren-signal-cli.app so it does not inherit this. -->
 <key>LSFileQuarantineEnabled</key>
 <true/>
-
-<!-- Native libraries that signal-cli's JVM extracts to $TMPDIR and then loads.
-A quarantined dylib can fail to load, so these must stay unquarantined.
-libsignal: $TMPDIR/libsignal<random>/<lib> (Files.createTempDirectory("libsignal"))
-sqlite-jdbc: $TMPDIR/sqlite-<ver>-<uuid>-<lib> (+ .lck lock file) -->
-<key>LSFileQuarantineExcludedPathPatterns</key>
-<array>
-<string>/var/folders/*/*/T/libsignal*/*</string>
-<string>/private/var/folders/*/*/T/libsignal*/*</string>
-<string>/var/folders/*/*/T/sqlite-*</string>
-<string>/private/var/folders/*/*/T/sqlite-*</string>
-</array>
 
 <key>NSHighResolutionCapable</key>
 <true/>

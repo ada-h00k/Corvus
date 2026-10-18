@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QTimer>
 #include <memory>
@@ -108,6 +109,38 @@ QProcessEnvironment SignalCli::childEnvironment(const QProcessEnvironment &base)
     return env;
 }
 
+void SignalCli::startProcess(QProcess *p, const QString &exe, const QStringList &args)
+{
+#ifdef Q_OS_MACOS
+    const QString helper = QCoreApplication::applicationDirPath() +
+                           QStringLiteral("/../Helpers/wren-signal-cli.app/Contents/MacOS/wren-signal-cli");
+    // A missing signal-cli is started directly, so QProcess reports FailedToStart right away.
+    const QString resolved = QFileInfo(exe).isAbsolute() ? exe : QStandardPaths::findExecutable(exe);
+    if (QFileInfo::exists(helper) && QFileInfo(resolved).isExecutable()) {
+        p->start(helper, QStringList{resolved} + args);
+        return;
+    }
+#endif
+    p->start(exe, args);
+}
+
+QStringList SignalCli::stageFiles(const QStringList &paths, const QString &dir)
+{
+#ifdef Q_OS_MACOS
+    QStringList staged;
+    for (const QString &path : paths) {
+        // One folder per file: signal-cli sends the file name along.
+        const QString target = dir + QLatin1Char('/') + QString::number(staged.size()) + QLatin1Char('/') +
+                               QFileInfo(path).fileName();
+        staged << (QDir().mkpath(QFileInfo(target).path()) && QFile::copy(path, target) ? target : path);
+    }
+    return staged;
+#else
+    Q_UNUSED(dir);
+    return paths;
+#endif
+}
+
 static void logResult(const QString &exe, const QStringList &args, const SignalCli::Result &r)
 {
     auto show = [](QString t) {
@@ -166,7 +199,7 @@ void SignalCli::runAsync(const QStringList &args, int timeoutMs, ResultCallback 
         p->waitForFinished(1000);
         finish(true, QString());
     });
-    p->start(m_exe, args);
+    startProcess(p, m_exe, args);
     p->closeWriteChannel(); // signal-cli never needs stdin for these commands
     timer->start(timeoutMs);
 }
@@ -239,7 +272,7 @@ void SignalCli::start(const QString &account)
         emit stopped(reason);
     });
 
-    p->start(m_exe, {QStringLiteral("-a"), account, QStringLiteral("jsonRpc")});
+    startProcess(p, m_exe, {QStringLiteral("-a"), account, QStringLiteral("jsonRpc")});
 }
 
 void SignalCli::stop()

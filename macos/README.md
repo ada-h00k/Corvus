@@ -41,6 +41,8 @@ Differences from the Qt app:
   - everything else is opened in the default app only after a confirmation dialog
 
   Every file Wren writes from an attachment is marked as downloaded (quarantine), so Gatekeeper checks it before it runs.
+  The app quarantines all files it creates (`LSFileQuarantineEnabled`); signal-cli runs through the embedded helper
+  `Contents/Helpers/wren-signal-cli.app` so it does not inherit that and can load its native libraries.
 - The history is stored in `~/Library/Application Support/wren/wren/`, the same
   location a Qt build on macOS uses.
 

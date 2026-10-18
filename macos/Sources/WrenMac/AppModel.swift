@@ -1016,7 +1016,8 @@ final class AppModel {
             }
             atts.append(a)
         }
-        if !files.isEmpty { p["attachments"] = files }
+        let staged = Media.stageForSignalCli(files)
+        if !files.isEmpty { p["attachments"] = staged.paths }
         if quote.valid && !quote.authorKey.isEmpty {
             p["quoteTimestamp"] = quote.id
             p["quoteAuthor"] = quote.authorKey
@@ -1054,6 +1055,7 @@ final class AppModel {
             var result: Any?
             var err: String?
             do { result = try await cli.call("send", p) } catch { err = error.localizedDescription }
+            try? FileManager.default.removeItem(at: staged.dir)
             guard let pendingNow = chats.pendingSends[pendingId] else { return }
 
             if let err, !pendingNow.echoReceived {

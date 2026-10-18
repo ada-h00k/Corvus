@@ -2,7 +2,7 @@
 # Builds "Wren.app" into macos/build/.
 #   1. the Rust history store (static library, shared with the Qt app)
 #   2. the Swift package (release)
-#   3. the app bundle: executable, resources, Info.plist, icon, ad-hoc signature
+#   3. the app bundle: executable, resources, Info.plist, icon, signal-cli helper, ad-hoc signature
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -49,7 +49,16 @@ else
     echo "warning: icon could not be rendered, the app uses the generic icon"
 fi
 
+# signal-cli runs through this helper app (src/SignalCliHelper.cpp, shared with the Qt app).
+echo "==> Building signal-cli helper"
+HELPER="$APP/Contents/Helpers/wren-signal-cli.app"
+mkdir -p "$HELPER/Contents/MacOS"
+xcrun clang++ -std=c++17 -O2 -mmacosx-version-min=14.0 "$REPO_DIR/src/SignalCliHelper.cpp" \
+    -o "$HELPER/Contents/MacOS/wren-signal-cli"
+sed "s/@PROJECT_VERSION@/$VERSION/g" "$REPO_DIR/packaging/macos/SignalCliHelper.plist.in" > "$HELPER/Contents/Info.plist"
+
 echo "==> Signing (ad hoc)"
+codesign --force --sign - --timestamp=none "$HELPER"
 codesign --force --sign - --timestamp=none "$APP"
 
 echo "Done: $APP"

@@ -70,6 +70,20 @@ public final class SignalCli {
         return ""
     }
 
+    /// Points `p` at signal-cli; inside the app bundle through the helper app (src/SignalCliHelper.cpp).
+    nonisolated public static func configure(_ p: Process, executable: String, arguments: [String]) {
+        let helper = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/wren-signal-cli.app/Contents/MacOS/wren-signal-cli")
+        // A missing signal-cli is started directly, so run() throws right away.
+        if FileManager.default.isExecutableFile(atPath: helper.path), FileManager.default.isExecutableFile(atPath: executable) {
+            p.executableURL = helper
+            p.arguments = [executable] + arguments
+        } else {
+            p.executableURL = URL(fileURLWithPath: executable)
+            p.arguments = arguments
+        }
+    }
+
     /// Environment for child processes. Apps started from Finder get a minimal PATH; signal-cli
     /// (a shell script that starts Java) needs the usual Homebrew locations to find `java`.
     nonisolated public static func childEnvironment(_ base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
@@ -139,8 +153,7 @@ public final class SignalCli {
         r.command = exe + " " + args.joined(separator: " ")
         let start = Date()
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: exe)
-        p.arguments = args
+        configure(p, executable: exe, arguments: args)
         p.environment = childEnvironment()
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
@@ -169,9 +182,10 @@ public final class SignalCli {
             if exited.wait(timeout: .now() + 1) == .timedOut { kill(p.processIdentifier, SIGKILL) }
             r.timedOut = true
         }
-        _ = group.wait(timeout: .now() + 2)
-        r.out = String(decoding: outData, as: UTF8.self)
-        r.err = String(decoding: errData, as: UTF8.self)
+        if group.wait(timeout: .now() + 2) == .success { // otherwise the readers may still be writing
+            r.out = String(decoding: outData, as: UTF8.self)
+            r.err = String(decoding: errData, as: UTF8.self)
+        }
         if !r.timedOut {
             r.exitCode = p.terminationStatus
             r.ok = p.terminationReason == .exit && r.exitCode == 0
@@ -198,8 +212,7 @@ public final class SignalCli {
     public func start(account: String) {
         stop()
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: executable)
-        p.arguments = ["-a", account, "jsonRpc"]
+        SignalCli.configure(p, executable: executable, arguments: ["-a", account, "jsonRpc"])
         p.environment = SignalCli.childEnvironment()
         p.qualityOfService = .userInitiated
         let input = Pipe(), output = Pipe(), errors = Pipe()
