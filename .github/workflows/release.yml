@@ -604,20 +604,48 @@ jobs:
           echo "QTKEYCHAIN_PREFIX=$(cygpath -m "$RUNNER_TEMP")/qtkeychain-install" >> "$GITHUB_ENV"
 
       # qrencode.exe is used to show the QR code when linking a device. Statically linked,
-      # so a single .exe. Optional: without it Wren only shows the link URI.
-      - name: Build qrencode (optional)
-        continue-on-error: true
+      # so a single .exe. It is part of both the setup and the portable zip; the build fails
+      # if it cannot be built or does not work.
+      - name: Build qrencode
         shell: bash
         run: |
           set -euxo pipefail
 
           "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install "libqrencode[tools]:x64-windows-static"
 
-          QR="$(find "$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static" -name qrencode.exe -print -quit)"
-          test -n "$QR"
-          mkdir -p "$RUNNER_TEMP/qrencode"
-          cp "$QR" "$RUNNER_TEMP/qrencode/qrencode.exe"
-          echo "QRENCODE_EXE=$(cygpath -m "$RUNNER_TEMP")/qrencode/qrencode.exe" >> "$GITHUB_ENV"
+          ROOT="$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static"
+          QR="$(find "$ROOT" -iname qrencode.exe -print -quit)"
+          if [ -z "$QR" ]; then
+            echo "::error::vcpkg did not produce qrencode.exe"
+            exit 1
+          fi
+
+          OUT="$RUNNER_TEMP/qrencode"
+          mkdir -p "$OUT"
+          cp "$QR" "$OUT/qrencode.exe"
+
+          # Smoke test, same call as src/LinkDialog.cpp: PNG on stdout. The output must be a
+          # valid PNG (a text-mode stdout would turn 0A into 0D0A and corrupt it).
+          "$OUT/qrencode.exe" -V
+          "$OUT/qrencode.exe" -t PNG -s 6 -m 2 -o - \
+            "sgnl://linkdevice?uuid=ci-test&pub_key=ci-test" > "$OUT/test.png"
+          sig="$(head -c 8 "$OUT/test.png" | od -An -tx1 | tr -d ' \n')"
+          if [ "$sig" != "89504e470d0a1a0a" ]; then
+            echo "::error::qrencode.exe did not write a valid PNG to stdout (signature: $sig)"
+            exit 1
+          fi
+          rm -f "$OUT/test.png"
+
+          # libqrencode is LGPL-2.1+: ship its license text with the binary
+          LIC="$(find "$ROOT/share/libqrencode" -iname copyright -print -quit 2>/dev/null || true)"
+          if [ -n "$LIC" ]; then
+            cp "$LIC" "$OUT/libqrencode-COPYING.txt"
+          else
+            echo "::warning::libqrencode license file not found in vcpkg"
+          fi
+
+          echo "QRENCODE_EXE=$(cygpath -m "$OUT")/qrencode.exe" >> "$GITHUB_ENV"
+          echo "QRENCODE_LICENSE=$(cygpath -m "$OUT")/libqrencode-COPYING.txt" >> "$GITHUB_ENV"
 
       - name: Run Rust tests
         shell: bash
@@ -663,10 +691,12 @@ jobs:
           # the keychain DLL must be next to wren.exe, whatever windeployqt did with it
           find "$QTKEYCHAIN_PREFIX" -iname 'qt*keychain*.dll' -exec cp {} stage/ \;
 
-          if [ -n "${QRENCODE_EXE:-}" ] && [ -f "$QRENCODE_EXE" ]; then
-            cp "$QRENCODE_EXE" stage/qrencode.exe
-          else
-            echo "::warning::qrencode.exe is not included; the QR code cannot be shown on Windows."
+          # qrencode.exe next to wren.exe (src/LinkDialog.cpp looks there first)
+          test -f "$QRENCODE_EXE"
+          cp "$QRENCODE_EXE" stage/qrencode.exe
+          if [ -f "$QRENCODE_LICENSE" ]; then
+            mkdir -p stage/licenses
+            cp "$QRENCODE_LICENSE" stage/licenses/libqrencode-COPYING.txt
           fi
 
           find stage -maxdepth 1 -type f | sort
@@ -706,6 +736,34 @@ jobs:
 
           Get-ChildItem dist | Format-Table Name, Length
 
+      # Install the real setup silently (no signal-cli / Java download) and check that
+      # qrencode.exe really ends up in the install folder and runs from there.
+      - name: Test setup installs qrencode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $setup = (Resolve-Path 'dist\wren-windows-x64-setup.exe').Path
+          $dir = Join-Path $env:RUNNER_TEMP 'wren-install-test'
+          $log = Join-Path $env:RUNNER_TEMP 'wren-setup.log'
+
+          $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir", "/LOG=$log")
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log -Tail 50 }
+            throw "Setup exited with code $($p.ExitCode)"
+          }
+
+          foreach ($f in 'wren.exe', 'qrencode.exe') {
+            if (-not (Test-Path (Join-Path $dir $f))) { throw "$f was not installed by the setup" }
+          }
+
+          & (Join-Path $dir 'qrencode.exe') -V
+          if ($LASTEXITCODE -ne 0) { throw 'Installed qrencode.exe does not run' }
+
+          $unins = Get-ChildItem $dir -Filter 'unins*.exe' | Select-Object -First 1
+          if ($unins) { Start-Process -FilePath $unins.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait }
+
       - name: Verify artifacts
         shell: pwsh
         run: |
@@ -717,7 +775,7 @@ jobs:
           $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path dist\wren-windows-x64-portable.zip).Path)
           $names = $zip.Entries | ForEach-Object { $_.FullName }
           $zip.Dispose()
-          foreach ($n in 'wren.exe', 'Qt6Core.dll', 'Qt6Widgets.dll') {
+          foreach ($n in 'wren.exe', 'qrencode.exe', 'Qt6Core.dll', 'Qt6Widgets.dll') {
             if ($names -notcontains $n) { throw "$n is missing in the portable zip" }
           }
           Get-ChildItem dist | Format-Table Name, Length

@@ -55,12 +55,12 @@ Install `signal-cli` separately, for example from the AUR.
 ### Windows (Qt, x86_64)
 
 1. Download and run `wren-windows-x64-setup.exe` from the release.
-2. Follow the setup wizard. It installs the Qt runtime with Wren.
+2. Follow the setup wizard. It installs the Qt runtime and `qrencode` (used to show the QR code when linking a device) with Wren.
 3. On the `signal-cli` step, you can optionally let the installer download `signal-cli` and a private Java runtime.
 
 The installer is for Windows 10 or newer. It does not require administrator rights for a per-user installation. The setup is not code-signed, so Windows SmartScreen may show a warning.
 
-**Portable version:** download `wren-windows-x64-portable.zip`, extract it, and run `wren.exe`. You must install and configure `signal-cli` yourself for this option.
+**Portable version:** download `wren-windows-x64-portable.zip`, extract it, and run `wren.exe` (`qrencode.exe` is included). You must install and configure `signal-cli` yourself for this option.
 
 ### macOS (recommended: Homebrew)
 
