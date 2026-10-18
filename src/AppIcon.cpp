@@ -2,7 +2,13 @@
 
 #include <QFont>
 #include <QPainter>
-#include <QPainterPath>
+#include <QSvgRenderer>
+
+// Ensure the embedded icon resource is linked into the application.
+static void initIconsResource()
+{
+    Q_INIT_RESOURCE(icons);
+}
 
 namespace AppIcon {
 
@@ -14,31 +20,15 @@ QPixmap render(int size, int unread)
     p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
     const qreal s = size;
 
-    // background
-    p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0x2c, 0x6b, 0xed));
-    p.drawRoundedRect(QRectF(s * 0.04, s * 0.04, s * 0.92, s * 0.92), s * 0.22, s * 0.22);
-
-    // chat bubble with a small tail
-    QPainterPath bubble;
-    bubble.addEllipse(QRectF(s * 0.20, s * 0.22, s * 0.60, s * 0.50));
-    QPainterPath tail;
-    tail.moveTo(s * 0.30, s * 0.62);
-    tail.lineTo(s * 0.24, s * 0.82);
-    tail.lineTo(s * 0.46, s * 0.68);
-    tail.closeSubpath();
-    p.setBrush(Qt::white);
-    p.drawPath(bubble.united(tail));
-
-    // three dots
-    p.setBrush(QColor(0x2c, 0x6b, 0xed));
-    const qreal r = s * 0.045;
-    for (int i = 0; i < 3; ++i) p.drawEllipse(QPointF(s * (0.37 + 0.13 * i), s * 0.47), r, r);
+    // packaging/wren.svg, embedded via resources/icons.qrc
+    static QSvgRenderer renderer((initIconsResource(), QStringLiteral(":/icons/wren.svg")));
+    renderer.render(&p, QRectF(0, 0, s, s));
 
     if (unread > 0) {
         // Keep the badge legible in small system-tray icons.
         const qreal d = s * 0.62;
         const QRectF badge(s - d - s * 0.01, s * 0.01, d, d);
+        p.setPen(Qt::NoPen);
         p.setBrush(Qt::white);
         p.drawEllipse(badge.adjusted(-s * 0.03, -s * 0.03, s * 0.03, s * 0.03));
         p.setBrush(QColor(0xe5, 0x39, 0x35));

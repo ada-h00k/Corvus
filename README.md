@@ -216,7 +216,7 @@ Every release also contains a ready-made package (`wren-<version>-1-x86_64.pkg.t
 sudo pacman -U wren-*.pkg.tar.zst
 ```
 
-It depends on `qt6-base`, `qt6-multimedia` and `qtkeychain-qt6`. `signal-cli` is not in the official
+It depends on `qt6-base`, `qt6-multimedia`, `qt6-svg` and `qtkeychain-qt6`. `signal-cli` is not in the official
 repositories and must be installed separately (e.g. from the AUR). To build it yourself,
 see the instructions at the top of `packaging/arch/PKGBUILD`.
 
@@ -231,7 +231,7 @@ QtKeychain 0.14 or newer,
 
 ```sh
 # Debian/Ubuntu
-sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev qtkeychain-qt6-dev cargo qrencode
+sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev qt6-svg-dev qtkeychain-qt6-dev cargo qrencode
 
 cmake -S . -B build
 cmake --build build -j
