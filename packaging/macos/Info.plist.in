@@ -1,55 +1,61 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
 <plist version="1.0">
-  <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+<dict>
+<key>CFBundleDevelopmentRegion</key>
+<string>en</string>
 
-    <key>CFBundleDisplayName</key>
-    <string>Wren</string>
+<key>CFBundleDisplayName</key>
+<string>Wren</string>
 
-    <key>CFBundleExecutable</key>
-    <string>wren</string>
+<key>CFBundleExecutable</key>
+<string>wren</string>
 
-    <key>CFBundleIdentifier</key>
-    <string>io.github.wren.qt</string>
+<key>CFBundleIdentifier</key>
+<string>io.github.wren.qt</string>
 
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
+<key>CFBundleInfoDictionaryVersion</key>
+<string>6.0</string>
 
-    <key>CFBundleName</key>
-    <string>Wren</string>
+<key>CFBundleName</key>
+<string>Wren</string>
 
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
+<key>CFBundlePackageType</key>
+<string>APPL</string>
 
-    <key>CFBundleShortVersionString</key>
-    <string>@PROJECT_VERSION@</string>
+<key>CFBundleShortVersionString</key>
+<string>@PROJECT_VERSION@</string>
 
-    <key>CFBundleVersion</key>
-    <string>@PROJECT_VERSION@</string>
+<key>CFBundleVersion</key>
+<string>@PROJECT_VERSION@</string>
 
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.social-networking</string>
+<key>LSApplicationCategoryType</key>
+<string>public.app-category.social-networking</string>
 
-    <!-- Quarantine files created by the application by default. -->
-    <key>LSFileQuarantineEnabled</key>
-    <true/>
+<!-- Quarantine files created by the application by default.
+Child processes (signal-cli) inherit this, so their files are quarantined too. -->
+<key>LSFileQuarantineEnabled</key>
+<true/>
 
-    <!-- Exclude files created in signal-cli temporary directories. -->
-    <key>LSFileQuarantineExcludedPathPatterns</key>
-    <array>
-      <string>/var/folders/*/*/T/libsignal*/*</string>
-      <string>/private/var/folders/*/*/T/libsignal*/*</string>
-    </array>
+<!-- Native libraries that signal-cli's JVM extracts to $TMPDIR and then loads.
+A quarantined dylib can fail to load, so these must stay unquarantined.
+libsignal: $TMPDIR/libsignal<random>/<lib> (Files.createTempDirectory("libsignal"))
+sqlite-jdbc: $TMPDIR/sqlite-<ver>-<uuid>-<lib> (+ .lck lock file) -->
+<key>LSFileQuarantineExcludedPathPatterns</key>
+<array>
+<string>/var/folders/*/*/T/libsignal*/*</string>
+<string>/private/var/folders/*/*/T/libsignal*/*</string>
+<string>/var/folders/*/*/T/sqlite-*</string>
+<string>/private/var/folders/*/*/T/sqlite-*</string>
+</array>
 
-    <key>NSHighResolutionCapable</key>
-    <true/>
+<key>NSHighResolutionCapable</key>
+<true/>
 
-    <key>NSHumanReadableCopyright</key>
-    <string>AGPL-3.0 licensed. signal-cli is a separate program.</string>
+<key>NSHumanReadableCopyright</key>
+<string>AGPL-3.0 licensed. signal-cli is a separate program.</string>
 
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-  </dict>
+<key>NSPrincipalClass</key>
+<string>NSApplication</string>
+</dict>
 </plist>
