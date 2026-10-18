@@ -81,6 +81,12 @@ MainWindow::MainWindow()
     m_list->setMinimumWidth(240);
     m_list->setIconSize(QSize(32, 32));
     split->addWidget(m_list);
+#ifdef Q_OS_MACOS
+    // Sidebar like a macOS source list: no frame, no focus ring, hairline divider.
+    m_list->setFrameShape(QFrame::NoFrame);
+    m_list->setAttribute(Qt::WA_MacShowFocusRect, false);
+    split->setHandleWidth(1);
+#endif
 
     auto *right = new QWidget;
     auto *v = new QVBoxLayout(right);
@@ -152,6 +158,11 @@ MainWindow::MainWindow()
     m_gifBtn->setText(QStringLiteral("GIF"));
     m_gifBtn->setToolTip(tr("Search GIPHY GIFs"));
     m_gifBtn->setFixedSize(40, 40);
+#ifdef Q_OS_MACOS
+    // Flat, borderless buttons next to the input field, as in Messages.
+    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_gifBtn})
+        b->setAutoRaise(true);
+#endif
     m_input = new MessageInput;
     m_input->setPlaceholderText(tr("Write a message …"));
     // Floating "popout" handle: it hovers centered above the message field,
@@ -235,6 +246,9 @@ MainWindow::MainWindow()
     m_updateLabel->setOpenExternalLinks(true);
     statusBar()->addWidget(m_statusLabel, 1);
     statusBar()->addPermanentWidget(m_updateLabel);
+#ifdef Q_OS_MACOS
+    statusBar()->setSizeGripEnabled(false);
+#endif
 
     // Menus
     QMenu *file = menuBar()->addMenu(tr("&File"));

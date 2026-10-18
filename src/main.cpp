@@ -10,6 +10,7 @@
 #include <QLockFile>
 #include <QMessageBox>
 #include <QStandardPaths>
+#include <QStringList>
 #include <cstdio>
 
 // Brings the running window to the front (also out of the tray). A modal dialog that is open,

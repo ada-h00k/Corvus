@@ -1,10 +1,11 @@
-name: Build Linux Release
+name: Build Wren Release
 
 on:
   push:
     branches:
       - main
       - master
+      - macos-build
   workflow_dispatch:
 
 permissions:
@@ -19,20 +20,17 @@ env:
   QT_VERSION: "6.12"
 
 jobs:
+  # ======================================================
+  # Linux x86_64
+  # ======================================================
   build:
     name: Build Linux x86_64
     runs-on: ubuntu-24.04
 
     steps:
-      # --------------------------------------------------
-      # Checkout
-      # --------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # System dependencies
-      # --------------------------------------------------
       - name: Install dependencies
         shell: bash
         run: |
@@ -72,9 +70,6 @@ jobs:
             libqrencode-dev \
             qtkeychain-qt6-dev
 
-      # --------------------------------------------------
-      # Qt
-      # --------------------------------------------------
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -103,9 +98,6 @@ jobs:
           echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
           "$QMAKE_PATH" --version
 
-      # --------------------------------------------------
-      # Rust
-      # --------------------------------------------------
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -119,9 +111,6 @@ jobs:
             --locked \
             --manifest-path history-store/Cargo.toml
 
-      # --------------------------------------------------
-      # CMake
-      # --------------------------------------------------
       - name: Configure CMake
         shell: bash
         run: |
@@ -137,9 +126,6 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      # --------------------------------------------------
-      # Locate application executable
-      # --------------------------------------------------
       - name: Locate executable
         shell: bash
         run: |
@@ -169,9 +155,6 @@ jobs:
           echo "BINARY=$BINARY" >> "$GITHUB_ENV"
           file "$BINARY"
 
-      # --------------------------------------------------
-      # Plain Linux binary
-      # --------------------------------------------------
       - name: Package binary
         shell: bash
         run: |
@@ -190,9 +173,6 @@ jobs:
           tar -czf "$GITHUB_WORKSPACE/dist/wren-linux-x86_64-installer.tar.gz" \
             -C "$RUNNER_TEMP/wren-installer" .
 
-      # --------------------------------------------------
-      # Validate output and checksums
-      # --------------------------------------------------
       - name: Verify artifacts
         shell: bash
         run: |
@@ -216,9 +196,6 @@ jobs:
           cat dist/SHA256SUMS
           ls -lh dist
 
-      # --------------------------------------------------
-      # Preserve artifacts even when a later step fails
-      # --------------------------------------------------
       - name: Upload build artifacts
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
@@ -228,18 +205,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-
-  # ------------------------------------------------------
-  # Arch Linux package (built natively in an Arch container)
-  # ------------------------------------------------------
+  # ======================================================
+  # Arch Linux package
+  # ======================================================
   arch-package:
     name: Build Arch Linux package
     runs-on: ubuntu-24.04
+
     container:
       image: archlinux:base-devel
 
     steps:
-      # git must exist before checkout so that the full history is cloned
       - name: Install git
         shell: bash
         run: |
@@ -262,6 +238,7 @@ jobs:
           count="$(git rev-list --count HEAD)"
           short="$(git rev-parse --short=7 HEAD)"
           pkgver="${base}.r${count}.g${short}"
+
           echo "PKGVER=$pkgver" >> "$GITHUB_ENV"
 
           # makepkg refuses to run as root
@@ -275,7 +252,9 @@ jobs:
             --prefix="wren-${pkgver}/" \
             -o "$build_dir/wren-${pkgver}.tar.gz" HEAD
           cp packaging/arch/PKGBUILD "$build_dir/PKGBUILD"
-          sed -i "s/^pkgver=.*/pkgver=${pkgver}/" "$build_dir/PKGBUILD"
+
+          sed -i "s/^pkgver=.*/pkgver=${pkgver}/" \
+            "$build_dir/PKGBUILD"
 
           chown -R builder:builder /home/builder
           cat "$build_dir/PKGBUILD"
@@ -290,6 +269,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           mkdir -p dist
           cp /home/builder/pkg/*.pkg.tar.zst dist/
 
@@ -298,8 +278,8 @@ jobs:
             pacman -Qlp "$pkg"
           done
 
-          # the package must contain the executable, desktop entry, icon and license
           files="$(pacman -Qlp dist/*.pkg.tar.zst)"
+
           for path in \
             /usr/bin/wren \
             /usr/share/applications/wren.desktop \
@@ -382,7 +362,9 @@ jobs:
   # ------------------------------------------------------
   release:
     name: Publish release
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
+
     needs:
       - build
       - arch-package
@@ -403,7 +385,10 @@ jobs:
 
           cd dist
           rm -f SHA256SUMS
-          find . -maxdepth 1 -type f -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS
+
+          find . -maxdepth 1 -type f -printf '%P\n' \
+            | sort \
+            | xargs -r sha256sum > SHA256SUMS
 
           cat SHA256SUMS
           ls -lh
