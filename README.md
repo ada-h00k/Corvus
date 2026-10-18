@@ -2,7 +2,7 @@
 
 Wren is a desktop interface for [signal-cli](https://github.com/AsamK/signal-cli) with an encrypted local chat history. The Qt app runs on Linux, Windows and macOS; macOS also has a native SwiftUI app.
 
-### Qt version
+### Linux and Windows (Qt)
 
 | Breeze Light | Breeze Dark |
 |---|---|
