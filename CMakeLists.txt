@@ -274,3 +274,6 @@ if(NOT WIN32)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
     )
 endif()
+# Screenshot tool (only built on request: cmake --build build --target shots)
+add_executable(shots EXCLUDE_FROM_ALL tests/shots.cpp)
+target_link_libraries(shots PRIVATE app_core)
