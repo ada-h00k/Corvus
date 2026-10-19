@@ -122,9 +122,9 @@ QIcon app()
 QIcon tray(int unread)
 {
     QIcon icon;
-    // The tray sits on the panel, so it always contrasts with the theme (light raven on a dark
-    // theme, dark raven on a light one); the App icon setting only picks the tile.
-    const bool dark = themeIsDark();
+    // Same raven colour as the app icon: with "Follow theme" it contrasts with the theme (light
+    // raven on a dark theme, dark raven on a light one), otherwise it is the one chosen in Appearance.
+    const bool dark = prefersDark();
     for (int sz : {16, 22, 24, 32, 48, 64, 128}) icon.addPixmap(renderTray(sz, unread, dark));
     return icon;
 }

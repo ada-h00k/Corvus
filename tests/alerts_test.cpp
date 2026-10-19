@@ -320,13 +320,12 @@ int main(int argc, char **argv)
         // Settings → Appearance can pin a variant regardless of the theme
         AppIcon::setMode(AppIcon::Mode::Dark);
         CHECK(AppIcon::prefersDark());
-        // ... but the tray keeps contrasting with the theme
-        {
-            const bool themeDark = AppIcon::themeIsDark();
-            AppIcon::setMode(themeDark ? AppIcon::Mode::Light : AppIcon::Mode::Dark);
+        // ... and the tray follows that choice too
+        for (const bool dark : {false, true}) {
+            AppIcon::setMode(dark ? AppIcon::Mode::Dark : AppIcon::Mode::Light);
             const QImage t = AppIcon::tray(0).pixmap(64).toImage();
             CHECK(t.width() == 64 && qAlpha(t.pixel(34, 32)) == 255);
-            CHECK(themeDark ? qGray(t.pixel(34, 32)) > 220 : qGray(t.pixel(34, 32)) < 40);
+            CHECK(dark ? qGray(t.pixel(34, 32)) > 220 : qGray(t.pixel(34, 32)) < 40); // light raven when dark
         }
         AppIcon::setMode(AppIcon::Mode::Light);
         CHECK(!AppIcon::prefersDark());
