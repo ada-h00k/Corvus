@@ -15,6 +15,8 @@ void applyExtras(Message &m, const QJsonObject &d);
 
 // Text edit of a message (an "update" record with the extra "ed"); ts = original timestamp.
 QJsonObject edit(const QString &conv, const Message &m);
+// Marks a message as deleted for everyone (an "update" record with the extra "dl").
+QJsonObject deletion(const QString &conv, const Message &m);
 QJsonObject expirationUpdate(const QString &conv, const Message &m);
 QJsonObject attachmentsUpdate(const QString &conv, const Message &m);
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji);

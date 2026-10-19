@@ -903,6 +903,25 @@ int main(int argc, char **argv)
             lim.outgoing = true;
             lim.text.clear();
             CHECK(!lim.canEdit(now));
+
+            // Delete for everyone leaves a placeholder where the message was.
+            // Bob cannot delete *our* message ...
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+49222"}, {"sourceUuid", "u-bob"}, {"timestamp", now + 7000},
+                {"dataMessage", QJsonObject{{"timestamp", now + 7000},
+                    {"remoteDelete", QJsonObject{{"timestamp", now}}}}}});
+            QTest::qWait(300);
+            CHECK(!html(view).contains("You deleted this message."));
+            CHECK(html(view).contains("phone, via original ts"));
+            // ... but our phone can (sync message).
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+491234567"}, {"timestamp", now + 8000},
+                {"syncMessage", QJsonObject{{"sentMessage", QJsonObject{
+                    {"destinationNumber", "+49222"}, {"timestamp", now + 8000},
+                    {"remoteDelete", QJsonObject{{"timestamp", now}}}}}}}});
+            CHECK(waitFor([&] { return html(view).contains("You deleted this message."); }));
+            CHECK(!html(view).contains("phone, via original ts"));
+            CHECK(view->messageCount() == 3); // placeholder, not removed
         }
 
         // --- emoji picker emits what was clicked

@@ -1330,7 +1330,7 @@ void MainWindow::deleteMessage(int idx)
     }
 
     const qint64 age = QDateTime::currentMSecsSinceEpoch() - message.ts();
-    const bool canDeleteForEveryone = message.outgoing && age >= 0 && age <= 24LL * 60 * 60 * 1000;
+    const bool canDeleteForEveryone = message.outgoing && !message.deleted && age >= 0 && age <= 24LL * 60 * 60 * 1000;
     QMessageBox box(QMessageBox::Question, tr("Delete message"),
                     canDeleteForEveryone ? tr("Delete this message from this device or for everyone?")
                                          : tr("Delete this message from this device?"),
@@ -1360,7 +1360,8 @@ void MainWindow::deleteMessage(int idx)
             statusBar()->showMessage(tr("Could not delete message for everyone: %1").arg(err), 10000);
             return;
         }
-        if (!removeMessage(key, timestamp)) return;
+        // Like the official clients: a placeholder stays where the message was.
+        if (!applyDelete(key, timestamp, {})) return;
         statusBar()->showMessage(tr("Message deleted for everyone."), 5000);
     });
 }
@@ -1579,9 +1580,41 @@ bool MainWindow::applyReaction(const QString &key, qint64 ts, const QStringList 
     const int i = findMessage(c, ts, authors);
     if (i < 0) return false;
     Message &m = c.msgs[i];
+    if (m.deleted) return false; // nothing to react to any more
     if (emoji.isEmpty()) m.reactions.remove(reactor); else m.reactions[reactor] = emoji;
     persist(Records::reaction(key, m.ts(), effectiveAuthor(c, m), reactor, emoji)); // original ts = stable identity
     if (key == m_current) showConversation(true);
+    return true;
+}
+
+// Delete for everyone (ours or the author's): the message turns into a placeholder.
+// Authors empty => match by timestamp only.
+bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringList &authors)
+{
+    auto it = m_convs.find(key);
+    if (it == m_convs.end()) return false;
+    Conversation &c = it.value();
+    const int i = findMessage(c, targetTs, authors);
+    if (i < 0) return false;
+    Message &m = c.msgs[i];
+    if (m.deleted) return false; // redelivery
+    if (m_editKey == key && m_editTs == m.ts()) cancelEdit();
+    m.deleted = true;
+    m.text.clear();
+    m.attachments.clear();
+    m.quote = Quote();
+    m.reactions.clear();
+    m.editTs = 0;
+    m.editCount = 0;
+
+    // Rewrite instead of append: the old ciphertext of the message must not stay in the file.
+    const int rc = m_store.rewrite(allRecords());
+    if (rc != SC_OK) {
+        statusBar()->showMessage(tr("Could not remove message from history: %1").arg(HistoryStore::errorText(rc)), 10000);
+        persist(Records::deletion(key, m)); // at least keep the placeholder after a restart
+    }
+    if (key == m_current) showConversation(true);
+    refreshList();
     return true;
 }
 
@@ -2190,6 +2223,13 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         return;
     }
 
+    if (pe.kind == ParsedEnvelope::Delete) {
+        // Only the author can delete a message for everyone (the phone or the other side).
+        const QString author = pe.outgoing ? m_account : srcKey;
+        applyDelete(key, pe.targetTs, {author});
+        return;
+    }
+
     if (pe.kind == ParsedEnvelope::Edit) {
         // Like the official clients: an edit is only applied to a known message written by the
         // same author. Anything else (unknown target, someone else's message) is dropped.
@@ -2299,6 +2339,7 @@ void MainWindow::startReply(int idx)
     if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
     const Conversation &c = m_convs[m_current];
     const Message &m = c.msgs[idx];
+    if (m.deleted) return;
     m_replyQuote = Quote();
     m_replyQuote.valid = true;
     m_replyQuote.id = m.latestTs(); // peers know an edited message by its latest timestamp
@@ -2581,6 +2622,7 @@ void MainWindow::sendReaction(int idx, const QString &emoji)
     if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
     const Conversation c = m_convs[m_current];
     const Message m = c.msgs[idx];
+    if (m.deleted) return;
     const QString author = effectiveAuthor(c, m);
     const bool remove = m.reactions.value(m_account) == emoji; // same emoji again = take it back
 

@@ -49,26 +49,27 @@ static QJsonObject editToJson(const Message &m)
 QJsonObject message(const QString &conv, const Message &m)
 {
     QJsonObject d;
+    if (m.deleted) d["dl"] = true; // placeholder only: no quote, attachments or edit state
     if (m.expiresInSeconds > 0) {
         d["ex"] = m.expiresInSeconds;
         d["es"] = QJsonValue(static_cast<qint64>(m.expirationStartMs));
     }
-    if (m.quote.valid) {
+    if (m.quote.valid && !m.deleted) {
         d["q"] = QJsonObject{{"id", QJsonValue(static_cast<qint64>(m.quote.id))},
                              {"a", m.quote.authorKey},
                              {"t", m.quote.text},
                              {"n", m.quote.attachmentNote}};
     }
-    if (!m.attachments.isEmpty()) d["at"] = attachmentsToJson(m.attachments);
+    if (!m.attachments.isEmpty() && !m.deleted) d["at"] = attachmentsToJson(m.attachments);
 
     QJsonObject rec{{"t", "m"},
                     {"c", conv},
                     {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
                     {"s", m.sender},
-                    {"x", m.text},
+                    {"x", m.deleted ? QString() : m.text},
                     {"o", m.outgoing},
                     {"au", m.authorKey}};
-    if (m.editCount > 0) d["ed"] = editToJson(m);
+    if (m.editCount > 0 && !m.deleted) d["ed"] = editToJson(m);
     if (!d.isEmpty()) rec["d"] = d;
     return rec;
 }
@@ -82,6 +83,15 @@ QJsonObject edit(const QString &conv, const Message &m)
             {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
             {"au", m.authorKey},
             {"d", QJsonObject{{"ed", editToJson(m)}}}};
+}
+
+QJsonObject deletion(const QString &conv, const Message &m)
+{
+    return {{"t", "u"},
+            {"c", conv},
+            {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
+            {"au", m.authorKey},
+            {"d", QJsonObject{{"dl", true}}}};
 }
 
 QJsonObject expirationUpdate(const QString &conv, const Message &m)
@@ -117,6 +127,13 @@ void applyExtras(Message &m, const QJsonObject &d)
     if (d.contains("at")) {
         m.attachments.clear();
         for (const QJsonValue &v : d["at"].toArray()) m.attachments.append(attachmentFromJson(v.toObject()));
+    }
+    if (d["dl"].toBool()) { // last: wins over anything else in the same record
+        m.deleted = true;
+        m.text.clear();
+        m.attachments.clear();
+        m.quote = Quote();
+        m.reactions.clear();
     }
 }
 

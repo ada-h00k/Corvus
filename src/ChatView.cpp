@@ -60,6 +60,13 @@ QColor mutedOn(const QColor &bg)
     return bg.lightness() < 128 ? QColor(0xb5, 0xb5, 0xb8) : QColor(0x6b, 0x6b, 0x70);
 }
 
+// Placeholder shown instead of a message that was deleted for everyone (wording as in Signal Desktop).
+QString deletedText(const Message &m)
+{
+    return m.outgoing ? QCoreApplication::translate("ChatView", "You deleted this message.")
+                      : QCoreApplication::translate("ChatView", "This message was deleted.");
+}
+
 QString linkify(const QString &text)
 {
     QString esc = text.toHtmlEscaped();
@@ -549,6 +556,10 @@ QString ChatView::plainText() const
             else
                 lines << QStringLiteral("[file: %1]").arg(n);
         }
+        if (m.deleted) {
+            lines << (who + QStringLiteral(": ") + deletedText(m));
+            continue;
+        }
         lines << (who + QStringLiteral(": ") + m.text + (m.isEdited() ? tr(" (edited)") : QString()));
         if (!m.reactions.isEmpty()) {
             QStringList e = m.reactions.values();
@@ -573,7 +584,7 @@ void ChatView::buildItem(int i)
     const Message &m = m_msgs[i];
 
     it.timeText = QLocale().toString(m.time.time(), QLocale::ShortFormat);
-    if (m.isEdited()) it.timeText = tr("edited") + QStringLiteral(" · ") + it.timeText;
+    if (m.isEdited() && !m.deleted) it.timeText = tr("edited") + QStringLiteral(" · ") + it.timeText;
     if (!m.outgoing) it.sender = m.sender.isEmpty() ? nameOf(m.authorKey) : m.sender;
     if (m.quote.valid) {
         it.quoteAuthor = nameOf(m.quote.authorKey);
@@ -600,7 +611,18 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
     if (it.renderResourcesBuilt) return;
 
     const Message &m = m_msgs[i];
-    if (!m.text.isEmpty()) {
+    if (m.deleted) {
+        // "This message was deleted." / "You deleted this message." in a muted italic style
+        const QColor fg = m.outgoing ? m_ap.outText : m_ap.inText;
+        const QColor bg = m.outgoing ? m_ap.outBg : m_ap.inBg;
+        const QColor muted((fg.red() * 7 + bg.red() * 3) / 10, (fg.green() * 7 + bg.green() * 3) / 10,
+                           (fg.blue() * 7 + bg.blue() * 3) / 10);
+        it.doc = std::make_shared<QTextDocument>();
+        it.doc->setDocumentMargin(0);
+        it.doc->setDefaultFont(font());
+        it.doc->setHtml(QStringLiteral("<i style=\"color: %1\">%2</i>").arg(muted.name(), deletedText(m).toHtmlEscaped()));
+        if (it.textRect.width() > 0) it.doc->setTextWidth(it.textRect.width());
+    } else if (!m.text.isEmpty()) {
         const QColor fg = m.outgoing ? m_ap.outText : m_ap.inText;
         it.doc = std::make_shared<QTextDocument>();
         it.doc->setDocumentMargin(0);
@@ -1247,6 +1269,11 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
     }
     const Message m = m_msgs[idx];
     if (!menu.isEmpty()) menu.addSeparator();
+    if (m.deleted) { // placeholder: only removing it from this device is left
+        menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });
+        menu.exec(e->globalPos());
+        return;
+    }
     menu.addAction(tr("Reply"), this, [this, idx] { emit replyRequested(idx); });
     QMenu *react = menu.addMenu(tr("React"));
     const QString own = m.reactions.value(m_self);
@@ -1256,7 +1283,7 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
     }
     const QPoint gp = e->globalPos();
     react->addAction(tr("More …"), this, [this, idx, gp] { emit moreReactionsRequested(idx, gp); });
-    if (m.canEdit(QDateTime::currentMSecsSinceEpoch()) && !m.text.contains(QLatin1Char('\n')))
+    if (m.canEdit(QDateTime::currentMSecsSinceEpoch()))
         menu.addAction(tr("Edit"), this, [this, idx] { emit editRequested(idx); });
     menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });
     if (!m.text.isEmpty())

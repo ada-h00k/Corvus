@@ -175,6 +175,7 @@ private:
     void switchConversation(const QString &key);
     void sendEdit(const QString &text);
     // Applies an edit (own or received). author = who must have written the message.
+    bool applyDelete(const QString &key, qint64 targetTs, const QStringList &authors);
     bool applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text, qint64 newTs);
     void updateEditBar();
     void sendReaction(int idx, const QString &emoji);

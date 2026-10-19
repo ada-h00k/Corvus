@@ -44,6 +44,13 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
         out.kind = ParsedEnvelope::ExpirationUpdate;
         return;
     }
+    // signal-cli: {"remoteDelete": {"timestamp": <sent timestamp of the deleted message>}}
+    const QJsonObject del = dm["remoteDelete"].toObject();
+    if (!del.isEmpty()) {
+        out.targetTs = del["timestamp"].toVariant().toLongLong();
+        if (out.targetTs > 0) out.kind = ParsedEnvelope::Delete;
+        return;
+    }
     const QJsonObject r = dm["reaction"].toObject();
     if (!r.isEmpty()) {
         out.kind = ParsedEnvelope::Reaction;

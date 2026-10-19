@@ -68,6 +68,10 @@ struct Message {
     int expiresInSeconds = 0;
     qint64 expirationStartMs = 0;
 
+    // "Delete for everyone" (by us or by the author): like the official clients the message stays
+    // in the chat as a placeholder. Text, attachments, quote and reactions are gone for good.
+    bool deleted = false;
+
     qint64 ts() const { return time.toMSecsSinceEpoch(); }
     qint64 latestTs() const { return editTs > 0 ? editTs : ts(); }
     bool isEdited() const { return editCount > 0; }
@@ -76,7 +80,7 @@ struct Message {
     static constexpr int kMaxEdits = 10;
     bool canEdit(qint64 nowMs) const
     {
-        return outgoing && !text.isEmpty() && editCount < kMaxEdits && nowMs - ts() <= kEditWindowMs;
+        return outgoing && !deleted && !text.isEmpty() && editCount < kMaxEdits && nowMs - ts() <= kEditWindowMs;
     }
 };
 
