@@ -72,6 +72,15 @@ static const QString kBackKey = QStringLiteral("::back");
 static const qint64 kMaxThumbSource = 30LL * 1024 * 1024;
 static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload limit
 
+static AppIcon::Mode iconMode(const Appearance &a)
+{
+    switch (a.appIcon) {
+    case Appearance::IconLight: return AppIcon::Mode::Light;
+    case Appearance::IconDark: return AppIcon::Mode::Dark;
+    default: return AppIcon::Mode::FollowTheme;
+    }
+}
+
 MainWindow::MainWindow()
 {
     setWindowTitle(QStringLiteral("Corvus"));
@@ -113,6 +122,9 @@ MainWindow::MainWindow()
     m_appearance = Appearance::load(palette());
     m_view->setAppearance(m_appearance);
     v->addWidget(m_view, 1);
+    // main() set the application icon before the icon choice was known
+    AppIcon::setMode(iconMode(m_appearance));
+    QApplication::setWindowIcon(AppIcon::app());
 
     // reply / attachment bars above the input
     auto makeBar = [&](QLabel *&label, std::function<void()> onClose) {
@@ -3081,6 +3093,8 @@ void MainWindow::editAppearance()
     m_appearance = dlg.appearance();
     m_appearance.save(palette());
     m_view->setAppearance(m_appearance);
+    AppIcon::setMode(iconMode(m_appearance));
+    refreshIcons();
     refreshList(); // shows or hides the avatars (and fetches them if needed)
 }
 
@@ -3093,11 +3107,16 @@ void MainWindow::applyNotificationSettings()
     updateTray();
 }
 
-void MainWindow::applyTheme()
+void MainWindow::refreshIcons()
 {
     QApplication::setWindowIcon(AppIcon::app());
     setWindowIcon(AppIcon::app());
     if (m_tray) m_tray->setIcon(AppIcon::tray(qMax(m_trayUnread, 0)));
+}
+
+void MainWindow::applyTheme()
+{
+    refreshIcons(); // with "Follow theme" the icon variant changes along
 
     // Default chat colours derive from the palette; colours the user picked stay as they are.
     // A theme switch arrives both as colorSchemeChanged and as a palette change, so only

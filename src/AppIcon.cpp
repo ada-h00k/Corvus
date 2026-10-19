@@ -15,8 +15,16 @@ static void initIconsResource()
 
 namespace AppIcon {
 
+static Mode s_mode = Mode::FollowTheme;
+
+void setMode(Mode mode)
+{
+    s_mode = mode;
+}
+
 bool prefersDark()
 {
+    if (s_mode != Mode::FollowTheme) return s_mode == Mode::Dark;
     switch (QGuiApplication::styleHints()->colorScheme()) {
     case Qt::ColorScheme::Dark: return true;
     case Qt::ColorScheme::Light: return false;

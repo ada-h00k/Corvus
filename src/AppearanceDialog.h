@@ -6,11 +6,12 @@
 
 class ChatView;
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QPushButton;
 class QSlider;
 
-// Settings → Appearance …: bubble colours, corner radius (live preview) and the avatar switch.
+// Settings → Appearance …: bubble colours, corner radius (live preview), the avatar switch and the app icon.
 class AppearanceDialog : public QDialog
 {
     Q_OBJECT
@@ -34,5 +35,6 @@ private:
     QSlider *m_radius;
     QLabel *m_radiusLabel;
     QCheckBox *m_showAvatars;
+    QComboBox *m_appIcon;
     ChatView *m_preview;
 };

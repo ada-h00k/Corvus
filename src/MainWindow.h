@@ -139,6 +139,7 @@ private:
     void applyNotificationSettings();
     void updateTray();
     void applyTheme(); // icons and chat colours follow a light / dark theme switch while running
+    void refreshIcons(); // window and tray icon in the current variant (Settings → Appearance)
     void alertIncoming(const QString &key, const Message &m);
     void installInputWatcher();
     qint64 m_lastInputMs = 0; // last keyboard/mouse input inside this window

@@ -309,6 +309,12 @@ int main(int argc, char **argv)
         CHECK(qRed(light.pixel(8, 32)) > 230 && qGreen(light.pixel(8, 32)) > 220
               && qBlue(light.pixel(8, 32)) > 200);                    // creme background (light theme)
         CHECK(!hasRed(light, QRect(0, 0, 64, 64)));
+        // Settings → Appearance can pin a variant regardless of the theme
+        AppIcon::setMode(AppIcon::Mode::Dark);
+        CHECK(AppIcon::prefersDark());
+        AppIcon::setMode(AppIcon::Mode::Light);
+        CHECK(!AppIcon::prefersDark());
+        AppIcon::setMode(AppIcon::Mode::FollowTheme);
         CHECK(!hasRed(plain, QRect(0, 0, 64, 64)));
         CHECK(hasRed(badge, QRect(32, 0, 32, 32)));                   // badge top right
         CHECK(!hasRed(badge, QRect(0, 32, 32, 32)));
