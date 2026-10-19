@@ -1,5 +1,5 @@
 <#
-  Used by the Wren setup (wren.iss) to look up download locations.
+  Used by the Corvus setup (corvus.iss) to look up download locations.
 
   * signal-cli: latest release of https://github.com/AsamK/signal-cli (GitHub API).
     The JVM build "signal-cli-<version>.tar.gz" is used; GitHub publishes its SHA-256 digest.
@@ -24,7 +24,7 @@ $lines = New-Object System.Collections.Generic.List[string]
 
 try {
     if ($WantSignalCli -eq 1) {
-        $headers = @{ 'User-Agent' = 'Wren-Setup'; 'Accept' = 'application/vnd.github+json' }
+        $headers = @{ 'User-Agent' = 'Corvus-Setup'; 'Accept' = 'application/vnd.github+json' }
         $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/AsamK/signal-cli/releases/latest' `
                                  -Headers $headers -TimeoutSec 30
         $version = $rel.tag_name.TrimStart('v')
@@ -43,7 +43,7 @@ try {
 
     if ($WantJava -eq 1) {
         $uri = "https://api.adoptium.net/v3/assets/latest/$JavaMajor/hotspot?architecture=x64&image_type=jre&os=windows&vendor=eclipse"
-        $assets = Invoke-RestMethod -Uri $uri -Headers @{ 'User-Agent' = 'Wren-Setup' } -TimeoutSec 30
+        $assets = Invoke-RestMethod -Uri $uri -Headers @{ 'User-Agent' = 'Corvus-Setup' } -TimeoutSec 30
         $pkg = $assets | Where-Object { $_.binary.package.name -like '*.zip' } |
                Select-Object -First 1 -ExpandProperty binary | Select-Object -ExpandProperty package
         if (-not $pkg) { throw "No Temurin JRE $JavaMajor (Windows x64, zip) found." }

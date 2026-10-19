@@ -118,21 +118,21 @@ struct Appearance: Equatable {
 }
 
 enum AppPaths {
-    /// Same location as Qt's AppDataLocation for organisation/application "wren" on macOS,
+    /// Same location as Qt's AppDataLocation for organisation/application "corvus" on macOS,
     /// so a history created by the Qt build is found as well.
     private static var dataDirURL: URL {
         #if DEBUG
         // Debug builds only: a separate data folder for demo/screenshot runs against tests/mock-signal-cli.py.
-        if let dir = ProcessInfo.processInfo.environment["WREN_DATA_DIR"] { return URL(fileURLWithPath: dir, isDirectory: true) }
+        if let dir = ProcessInfo.processInfo.environment["CORVUS_DATA_DIR"] { return URL(fileURLWithPath: dir, isDirectory: true) }
         #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("wren/wren", isDirectory: true)
+        return base.appendingPathComponent("corvus/corvus", isDirectory: true)
     }
 
-    /// Moves a history from the former "signal-cli-qt" location once per run.
+    /// Moves a history from the former "wren" / "signal-cli-qt" locations once per run.
     private static let legacyMigration: Void = {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["WREN_DATA_DIR"] != nil { return }
+        if ProcessInfo.processInfo.environment["CORVUS_DATA_DIR"] != nil { return }
         #endif
         LegacyMigration.migrateData(to: dataDirURL)
     }()
@@ -144,12 +144,12 @@ enum AppPaths {
         return dir
     }
 
-    static var historyPath: String { dataDir.appendingPathComponent("history.wren").path }
+    static var historyPath: String { dataDir.appendingPathComponent("history.corvus").path }
     static var lockPath: String { dataDir.appendingPathComponent("history.lock").path }
 
     /// Attachments that are opened, pasted screenshots, downloaded GIFs, … removed when the app quits.
     static let tempDir: URL = {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("wren-\(ProcessInfo.processInfo.processIdentifier)")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("corvus-\(ProcessInfo.processInfo.processIdentifier)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
         return dir

@@ -1,6 +1,6 @@
 import AppKit
 import CoreImage.CIFilterBuiltins
-import WrenCore
+import CorvusCore
 import SwiftUI
 
 /// Links this Mac as a secondary device: runs `signal-cli link -n <name>` and shows the
@@ -9,7 +9,7 @@ struct LinkView: View {
     let executable: String
     let onFinish: (Bool) -> Void
 
-    @State private var name = "wren (\(Host.current().localizedName ?? "Mac"))"
+    @State private var name = "corvus (\(Host.current().localizedName ?? "Mac"))"
     @State private var uri = ""
     @State private var status = ""
     @State private var running = false

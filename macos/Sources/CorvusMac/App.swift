@@ -1,12 +1,12 @@
 import AppKit
-import WrenCore
+import CorvusCore
 import SwiftUI
 
 /// Resources of this target: inside the .app they are copied to Contents/Resources,
 /// with `swift run` they are next to the executable (Bundle.module).
 enum AppResources {
     static let bundle: Bundle = {
-        if let u = Bundle.main.url(forResource: "WrenMac_WrenMac", withExtension: "bundle"), let b = Bundle(url: u) {
+        if let u = Bundle.main.url(forResource: "CorvusMac_CorvusMac", withExtension: "bundle"), let b = Bundle(url: u) {
             return b
         }
         return Bundle.module
@@ -26,7 +26,7 @@ enum AppResources {
     }
 }
 
-/// Only one instance may use the chat history: two processes appending to history.wren (or compacting it)
+/// Only one instance may use the chat history: two processes appending to history.corvus (or compacting it)
 /// at the same time would corrupt it.
 enum SingleInstance {
     private static var fd: Int32 = -1
@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard SingleInstance.acquire() else {
             if !SingleInstance.activateOther() {
                 let alert = NSAlert()
-                alert.messageText = "Wren is already running"
+                alert.messageText = "Corvus is already running"
                 alert.informativeText = "Close the other instance first. Two instances would damage the chat history."
                 alert.runModal()
             }
@@ -108,12 +108,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct WrenMacApp: App {
+struct CorvusMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
         let model = delegate.model
-        Window("Wren", id: "main") {
+        Window("Corvus", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 720, minHeight: 460)
@@ -137,7 +137,7 @@ struct WrenMacApp: App {
 private struct MenuBarLabel: View {
     let unread: Int
 
-    /// The wren as a template image, so the menu bar tints it for light and dark appearance.
+    /// The corvus as a template image, so the menu bar tints it for light and dark appearance.
     private static let icon: NSImage? = {
         guard let image = AppResources.bundle.image(forResource: "MenuBarIcon") else { return nil }
         image.isTemplate = true
@@ -176,7 +176,7 @@ private struct MenuBarContent: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         Divider()
-        Button("Quit Wren") { NSApp.terminate(nil) }
+        Button("Quit Corvus") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }
@@ -186,7 +186,7 @@ struct AppCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
-            Button("About Wren") { model.showAbout() }
+            Button("About Corvus") { model.showAbout() }
         }
         CommandGroup(replacing: .newItem) {
             Button("New conversation …") { Task { await model.newConversation() } }

@@ -20,8 +20,8 @@ QPixmap render(int size, int unread)
     p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
     const qreal s = size;
 
-    // packaging/wren.svg, embedded via resources/icons.qrc
-    static QSvgRenderer renderer((initIconsResource(), QStringLiteral(":/icons/wren.svg")));
+    // packaging/corvus.svg, embedded via resources/icons.qrc
+    static QSvgRenderer renderer((initIconsResource(), QStringLiteral(":/icons/corvus.svg")));
     renderer.render(&p, QRectF(0, 0, s, s));
 
     if (unread > 0) {

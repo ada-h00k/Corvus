@@ -1,5 +1,5 @@
 import AppKit
-import WrenCore
+import CorvusCore
 import SwiftUI
 
 /// Edit / reply / attachment previews and the message input of the current conversation.

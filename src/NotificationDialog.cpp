@@ -97,7 +97,7 @@ NotificationDialog::NotificationDialog(const NotificationSettings &current, Soun
         if (!m_notifier) return;
         const int c = m_content->currentData().toInt();
         const bool hide = c == NotificationSettings::Hidden;
-        m_notifier->notify(QStringLiteral("::test"), hide ? tr("Wren") : tr("Alex"),
+        m_notifier->notify(QStringLiteral("::test"), hide ? tr("Corvus") : tr("Alex"),
                            hide || c == NotificationSettings::NameOnly ? tr("New message") : tr("This is a test notification 👋"));
     });
     connect(m_testSound, &QPushButton::clicked, this, [this] {

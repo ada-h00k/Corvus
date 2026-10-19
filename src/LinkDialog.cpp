@@ -28,7 +28,7 @@ LinkDialog::LinkDialog(const QString &executable, QWidget *parent)
 
     auto *row = new QHBoxLayout;
     row->addWidget(new QLabel(tr("Device name:")));
-    m_name = new QLineEdit(QStringLiteral("wren (%1)").arg(QSysInfo::machineHostName()));
+    m_name = new QLineEdit(QStringLiteral("corvus (%1)").arg(QSysInfo::machineHostName()));
     row->addWidget(m_name, 1);
     m_start = new QPushButton(tr("Start"));
     row->addWidget(m_start);
@@ -116,7 +116,7 @@ void LinkDialog::showUri(const QString &uri)
     if (!qrencode.isEmpty()) {
         // Write the PNG to a temporary file instead of stdout: qrencode.exe on Windows does
         // not put stdout into binary mode, which corrupts the PNG data.
-        QTemporaryFile png(QDir::temp().filePath(QStringLiteral("wren-qr-XXXXXX.png")));
+        QTemporaryFile png(QDir::temp().filePath(QStringLiteral("corvus-qr-XXXXXX.png")));
         if (png.open()) {
             const QString pngPath = png.fileName();
             png.close();

@@ -9,26 +9,26 @@ let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let rustLibDir = packageDir.appendingPathComponent("../history-store/target/release").standardized.path
 
 let package = Package(
-    name: "WrenMac",
+    name: "CorvusMac",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "wren", targets: ["WrenMac"]),
+        .executable(name: "corvus", targets: ["CorvusMac"]),
     ],
     targets: [
         .systemLibrary(name: "CHistoryStore", path: "Sources/CHistoryStore"),
         .target(
-            name: "WrenCore",
+            name: "CorvusCore",
             dependencies: ["CHistoryStore"],
             linkerSettings: [.unsafeFlags(["-L", rustLibDir])]
         ),
         .executableTarget(
-            name: "WrenMac",
-            dependencies: ["WrenCore"],
+            name: "CorvusMac",
+            dependencies: ["CorvusCore"],
             resources: [.process("Resources")]
         ),
         .testTarget(
-            name: "WrenCoreTests",
-            dependencies: ["WrenCore"]
+            name: "CorvusCoreTests",
+            dependencies: ["CorvusCore"]
         ),
     ]
 )

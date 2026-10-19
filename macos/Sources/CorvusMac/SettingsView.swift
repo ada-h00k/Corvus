@@ -1,5 +1,5 @@
 import AppKit
-import WrenCore
+import CorvusCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -251,7 +251,7 @@ private struct ProfileSettings: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg, .gif, .webP, .heic]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        // The copy stays in the temporary directory until Wren quits.
+        // The copy stays in the temporary directory until Corvus quits.
         let avatar = Media.stageForSignalCli([url.path]).paths[0]
         model.sendProfileUpdate(["avatar": avatar, "removeAvatar": false], success: "Signal avatar updated.")
     }

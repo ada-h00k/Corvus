@@ -1,22 +1,25 @@
 # Maintainer: ada-h00k
 #
-# Builds Wren from a source tarball that sits next to this file.
+# Builds Corvus from a source tarball that sits next to this file.
 # The release workflow creates it with `git archive`; to build locally:
 #
-#   pkgver=$(sed -n 's/^project(wren VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-#   git archive --format=tar.gz --prefix="wren-$pkgver/" \
-#       -o "packaging/arch/wren-$pkgver.tar.gz" HEAD
+#   pkgver=$(sed -n 's/^project(corvus VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+#   git archive --format=tar.gz --prefix="corvus-$pkgver/" \
+#       -o "packaging/arch/corvus-$pkgver.tar.gz" HEAD
 #   cd packaging/arch && makepkg -si
 #
 # (pkgver below must match the version used for the tarball name/prefix.)
 
-pkgname=wren
+pkgname=corvus
 pkgver=0.2.0
 pkgrel=1
 pkgdesc='Native Qt 6 GUI for signal-cli with an encrypted local chat history'
 arch=('x86_64')
-url='https://github.com/ada-h00k/Wren'
+url='https://github.com/ada-h00k/Corvus'
 license=('AGPL-3.0-only')
+# Corvus was called Wren before: replace the old package instead of clashing with it.
+replaces=('wren')
+conflicts=('wren')
 depends=(
   'gcc-libs'
   'glibc'

@@ -103,13 +103,13 @@ void Notifier::notify(const QString &key, const QString &title, const QString &b
 #ifdef HAVE_QT_DBUS
     if (ensureDBus()) {
         QVariantMap hints;
-        hints.insert(QStringLiteral("desktop-entry"), QStringLiteral("wren"));
+        hints.insert(QStringLiteral("desktop-entry"), QStringLiteral("corvus"));
         hints.insert(QStringLiteral("category"), QStringLiteral("im.received"));
         if (!icon.isNull()) hints.insert(QStringLiteral("image-data"), imageHint(icon)); // preferred over app_icon
         const QString text = m_markup ? body.toHtmlEscaped() : body; // servers with markup would eat "<"
-        const QDBusMessage reply = m_iface->call(QStringLiteral("Notify"), QStringLiteral("Wren"),
+        const QDBusMessage reply = m_iface->call(QStringLiteral("Notify"), QStringLiteral("Corvus"),
                                                  QVariant::fromValue<uint>(m_idForKey.value(key, 0)),
-                                                 QStringLiteral("wren"), title, text,
+                                                 QStringLiteral("corvus"), title, text,
                                                  QStringList{QStringLiteral("default"), tr("Open")}, hints, -1);
         if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
             const uint id = reply.arguments().first().toUInt();

@@ -151,10 +151,10 @@ jobs:
           BINARY=""
 
           for candidate in \
-            build/wren \
-            build/bin/wren \
-            build/Wren \
-            build/bin/Wren
+            build/corvus \
+            build/bin/corvus \
+            build/Corvus \
+            build/bin/Corvus
           do
             if [ -f "$candidate" ]; then
               BINARY="$candidate"
@@ -180,16 +180,16 @@ jobs:
 
           mkdir -p dist
 
-          cp "$BINARY" dist/wren-linux-x86_64
-          chmod +x dist/wren-linux-x86_64
+          cp "$BINARY" dist/corvus-linux-x86_64
+          chmod +x dist/corvus-linux-x86_64
 
-          mkdir -p "$RUNNER_TEMP/wren-installer"
-          cp dist/wren-linux-x86_64 "$RUNNER_TEMP/wren-installer/"
-          cp packaging/install.sh packaging/wren.desktop packaging/wren.svg \
-            "$RUNNER_TEMP/wren-installer/"
-          chmod +x "$RUNNER_TEMP/wren-installer/install.sh"
-          tar -czf "$GITHUB_WORKSPACE/dist/wren-linux-x86_64-installer.tar.gz" \
-            -C "$RUNNER_TEMP/wren-installer" .
+          mkdir -p "$RUNNER_TEMP/corvus-installer"
+          cp dist/corvus-linux-x86_64 "$RUNNER_TEMP/corvus-installer/"
+          cp packaging/install.sh packaging/corvus.desktop packaging/corvus.svg \
+            "$RUNNER_TEMP/corvus-installer/"
+          chmod +x "$RUNNER_TEMP/corvus-installer/install.sh"
+          tar -czf "$GITHUB_WORKSPACE/dist/corvus-linux-x86_64-installer.tar.gz" \
+            -C "$RUNNER_TEMP/corvus-installer" .
 
       # --------------------------------------------------
       # Validate output and checksums
@@ -199,18 +199,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -s dist/wren-linux-x86_64
-          test -s dist/wren-linux-x86_64-installer.tar.gz
+          test -s dist/corvus-linux-x86_64
+          test -s dist/corvus-linux-x86_64-installer.tar.gz
 
-          tar -tzf dist/wren-linux-x86_64-installer.tar.gz
+          tar -tzf dist/corvus-linux-x86_64-installer.tar.gz
 
-          file dist/wren-linux-x86_64
+          file dist/corvus-linux-x86_64
 
           (
             cd dist
             sha256sum \
-              wren-linux-x86_64 \
-              wren-linux-x86_64-installer.tar.gz \
+              corvus-linux-x86_64 \
+              corvus-linux-x86_64-installer.tar.gz \
               > SHA256SUMS
           )
 
@@ -224,7 +224,7 @@ jobs:
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: wren-linux-${{ github.sha }}
+          name: corvus-linux-${{ github.sha }}
           path: dist/*
           if-no-files-found: warn
           retention-days: 14
@@ -259,7 +259,7 @@ jobs:
 
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          base="$(sed -n 's/^project(wren VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          base="$(sed -n 's/^project(corvus VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           count="$(git rev-list --count HEAD)"
           short="$(git rev-parse --short=7 HEAD)"
           pkgver="${base}.r${count}.g${short}"
@@ -273,8 +273,8 @@ jobs:
           mkdir -p "$build_dir"
 
           git archive --format=tar.gz \
-            --prefix="wren-${pkgver}/" \
-            -o "$build_dir/wren-${pkgver}.tar.gz" HEAD
+            --prefix="corvus-${pkgver}/" \
+            -o "$build_dir/corvus-${pkgver}.tar.gz" HEAD
           cp packaging/arch/PKGBUILD "$build_dir/PKGBUILD"
           sed -i "s/^pkgver=.*/pkgver=${pkgver}/" "$build_dir/PKGBUILD"
 
@@ -302,12 +302,12 @@ jobs:
           # the package must contain the executable, desktop entry, icon and license
           files="$(pacman -Qlp dist/*.pkg.tar.zst)"
           for path in \
-            /usr/bin/wren \
-            /usr/share/applications/wren.desktop \
-            /usr/share/icons/hicolor/scalable/apps/wren.svg \
-            /usr/share/licenses/wren/LICENSE
+            /usr/bin/corvus \
+            /usr/share/applications/corvus.desktop \
+            /usr/share/icons/hicolor/scalable/apps/corvus.svg \
+            /usr/share/licenses/corvus/LICENSE
           do
-            if ! grep -qxF "wren $path" <<< "$files"; then
+            if ! grep -qxF "corvus $path" <<< "$files"; then
               echo "::error::Package is missing $path"
               exit 1
             fi
@@ -317,7 +317,7 @@ jobs:
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: wren-arch-${{ github.sha }}
+          name: corvus-arch-${{ github.sha }}
           path: dist/*.pkg.tar.zst
           if-no-files-found: warn
           retention-days: 14
@@ -356,27 +356,27 @@ jobs:
           set -euo pipefail
 
           mkdir -p dist
-          ditto -c -k --keepParent "macos/build/Wren.app" dist/wren-macos-arm64.zip
+          ditto -c -k --keepParent "macos/build/Corvus.app" dist/corvus-macos-arm64.zip
 
       - name: Verify artifacts
         shell: bash
         run: |
           set -euo pipefail
 
-          test -s dist/wren-macos-arm64.zip
-          unzip -l dist/wren-macos-arm64.zip
-          codesign --verify --deep --strict --verbose "macos/build/Wren.app"
-          file "macos/build/Wren.app/Contents/MacOS/wren"
+          test -s dist/corvus-macos-arm64.zip
+          unzip -l dist/corvus-macos-arm64.zip
+          codesign --verify --deep --strict --verbose "macos/build/Corvus.app"
+          file "macos/build/Corvus.app/Contents/MacOS/corvus"
           ls -lh dist
 
           # Files created by the app must be quarantined; signal-cli runs through the helper app.
-          packaging/macos/check-signal-cli-helper.sh macos/build/Wren.app
+          packaging/macos/check-signal-cli-helper.sh macos/build/Corvus.app
 
       - name: Upload build artifacts
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: wren-macos-${{ github.sha }}
+          name: corvus-macos-${{ github.sha }}
           path: dist/*
           if-no-files-found: warn
           retention-days: 14
@@ -480,8 +480,8 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # By name: build-qt also contains the helper bundle (wren-signal-cli.app).
-          APP_PATH=build-qt/wren.app
+          # By name: build-qt also contains the helper bundle (corvus-signal-cli.app).
+          APP_PATH=build-qt/corvus.app
 
           if [ ! -d "$APP_PATH" ]; then
             echo "::error::No .app bundle found. Check the CMake executable target and MACOSX_BUNDLE setting."
@@ -520,17 +520,17 @@ jobs:
 
           ditto -c -k --keepParent \
             "$QT_APP_PATH" \
-            dist/wren-qt-macos-arm64.zip
+            dist/corvus-qt-macos-arm64.zip
 
-          test -s dist/wren-qt-macos-arm64.zip
-          unzip -l dist/wren-qt-macos-arm64.zip
+          test -s dist/corvus-qt-macos-arm64.zip
+          unzip -l dist/corvus-qt-macos-arm64.zip
           ls -lh dist
 
       - name: Upload Qt macOS artifact
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: wren-qt-macos-${{ github.sha }}
+          name: corvus-qt-macos-${{ github.sha }}
           path: dist/*
           if-no-files-found: warn
           retention-days: 14
@@ -673,7 +673,7 @@ jobs:
           set -euxo pipefail
 
           mkdir -p stage
-          cp build/wren.exe stage/
+          cp build/corvus.exe stage/
 
           # QtKeychain DLL (name differs between versions)
           find "$QTKEYCHAIN_PREFIX" -iname 'qt*keychain*.dll' -exec cp {} stage/ \;
@@ -684,12 +684,12 @@ jobs:
           find "$QTKEYCHAIN_PREFIX" -iname 'qt*keychain*.dll' -exec cp {} "$QT_ROOT_DIR/bin/" \;
 
           windeployqt --release --no-translations --compiler-runtime \
-            --dir stage stage/wren.exe
+            --dir stage stage/corvus.exe
 
-          # the keychain DLL must be next to wren.exe, whatever windeployqt did with it
+          # the keychain DLL must be next to corvus.exe, whatever windeployqt did with it
           find "$QTKEYCHAIN_PREFIX" -iname 'qt*keychain*.dll' -exec cp {} stage/ \;
 
-          # qrencode.exe next to wren.exe (src/LinkDialog.cpp looks there first)
+          # qrencode.exe next to corvus.exe (src/LinkDialog.cpp looks there first)
           test -f "$QRENCODE_EXE"
           cp "$QRENCODE_EXE" stage/qrencode.exe
           if [ -f "$QRENCODE_LICENSE" ]; then
@@ -724,13 +724,13 @@ jobs:
           }
           if (-not (Test-Path $iscc)) { throw 'ISCC.exe not found' }
 
-          $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(wren VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(corvus VERSION ([0-9.]+)').Matches[0].Groups[1].Value
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-          & $iscc "/DAppVersion=$version" "/DStageDir=$((Resolve-Path stage).Path)" packaging\windows\wren.iss
+          & $iscc "/DAppVersion=$version" "/DStageDir=$((Resolve-Path stage).Path)" packaging\windows\corvus.iss
           if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
 
-          Compress-Archive -Path stage\* -DestinationPath dist\wren-windows-x64-portable.zip -Force
+          Compress-Archive -Path stage\* -DestinationPath dist\corvus-windows-x64-portable.zip -Force
 
           Get-ChildItem dist | Format-Table Name, Length
 
@@ -741,9 +741,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $setup = (Resolve-Path 'dist\wren-windows-x64-setup.exe').Path
-          $dir = Join-Path $env:RUNNER_TEMP 'wren-install-test'
-          $log = Join-Path $env:RUNNER_TEMP 'wren-setup.log'
+          $setup = (Resolve-Path 'dist\corvus-windows-x64-setup.exe').Path
+          $dir = Join-Path $env:RUNNER_TEMP 'corvus-install-test'
+          $log = Join-Path $env:RUNNER_TEMP 'corvus-setup.log'
 
           $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
             '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir", "/LOG=$log")
@@ -752,7 +752,7 @@ jobs:
             throw "Setup exited with code $($p.ExitCode)"
           }
 
-          foreach ($f in 'wren.exe', 'qrencode.exe') {
+          foreach ($f in 'corvus.exe', 'qrencode.exe') {
             if (-not (Test-Path (Join-Path $dir $f))) { throw "$f was not installed by the setup" }
           }
 
@@ -766,14 +766,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($f in 'dist\wren-windows-x64-setup.exe', 'dist\wren-windows-x64-portable.zip') {
+          foreach ($f in 'dist\corvus-windows-x64-setup.exe', 'dist\corvus-windows-x64-portable.zip') {
             if (-not (Test-Path $f) -or (Get-Item $f).Length -eq 0) { throw "$f is missing or empty" }
           }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path dist\wren-windows-x64-portable.zip).Path)
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path dist\corvus-windows-x64-portable.zip).Path)
           $names = $zip.Entries | ForEach-Object { $_.FullName }
           $zip.Dispose()
-          foreach ($n in 'wren.exe', 'qrencode.exe', 'Qt6Core.dll', 'Qt6Widgets.dll') {
+          foreach ($n in 'corvus.exe', 'qrencode.exe', 'Qt6Core.dll', 'Qt6Widgets.dll') {
             if ($names -notcontains $n) { throw "$n is missing in the portable zip" }
           }
           Get-ChildItem dist | Format-Table Name, Length
@@ -782,7 +782,7 @@ jobs:
         if: always() && hashFiles('dist/*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: wren-windows-${{ github.sha }}
+          name: corvus-windows-${{ github.sha }}
           path: dist/*
           if-no-files-found: warn
           retention-days: 14
@@ -804,7 +804,7 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: wren-*-${{ github.sha }}
+          pattern: corvus-*-${{ github.sha }}
           path: dist
           merge-multiple: true
 
@@ -833,13 +833,13 @@ jobs:
             Commit: `${{ github.sha }}`
 
             Files:
-            - `wren-linux-x86_64` — plain executable
-            - `wren-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
-            - `wren-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
-            - `wren-macos-arm64.zip` — native SwiftUI app for Apple silicon, macOS 14 or newer
-            - `wren-qt-macos-arm64.zip` — Qt app for Apple silicon, including deployed Qt dependencies
-            - `wren-windows-x64-setup.exe` — Windows setup (English); can download signal-cli from its official GitHub releases
-            - `wren-windows-x64-portable.zip` — Windows, no installation (unzip and run `wren.exe`)
+            - `corvus-linux-x86_64` — plain executable
+            - `corvus-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
+            - `corvus-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
+            - `corvus-macos-arm64.zip` — native SwiftUI app for Apple silicon, macOS 14 or newer
+            - `corvus-qt-macos-arm64.zip` — Qt app for Apple silicon, including deployed Qt dependencies
+            - `corvus-windows-x64-setup.exe` — Windows setup (English); can download signal-cli from its official GitHub releases
+            - `corvus-windows-x64-portable.zip` — Windows, no installation (unzip and run `corvus.exe`)
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
             `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS `brew install signal-cli`; the Windows setup offers to download it).
@@ -848,11 +848,11 @@ jobs:
           make_latest: true
           fail_on_unmatched_files: true
           files: |
-            dist/wren-linux-x86_64
-            dist/wren-linux-x86_64-installer.tar.gz
+            dist/corvus-linux-x86_64
+            dist/corvus-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
-            dist/wren-macos-arm64.zip
-            dist/wren-qt-macos-arm64.zip
-            dist/wren-windows-x64-setup.exe
-            dist/wren-windows-x64-portable.zip
+            dist/corvus-macos-arm64.zip
+            dist/corvus-qt-macos-arm64.zip
+            dist/corvus-windows-x64-setup.exe
+            dist/corvus-windows-x64-portable.zip
             dist/SHA256SUMS

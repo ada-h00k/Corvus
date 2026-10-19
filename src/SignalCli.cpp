@@ -31,6 +31,9 @@ QString SignalCli::autodetect()
 #ifdef Q_OS_WIN
         // Installed by the Windows setup next to the application (signal-cli/bin/signal-cli.bat).
         QCoreApplication::applicationDirPath() + QStringLiteral("/signal-cli/bin"),
+        qEnvironmentVariable("LOCALAPPDATA") + QStringLiteral("/Programs/Corvus/signal-cli/bin"),
+        qEnvironmentVariable("ProgramFiles") + QStringLiteral("/Corvus/signal-cli/bin"),
+        // Installations made under the former name "Wren".
         qEnvironmentVariable("LOCALAPPDATA") + QStringLiteral("/Programs/Wren/signal-cli/bin"),
         qEnvironmentVariable("ProgramFiles") + QStringLiteral("/Wren/signal-cli/bin"),
         qEnvironmentVariable("ProgramFiles") + QStringLiteral("/signal-cli/bin"),
@@ -69,7 +72,7 @@ QString SignalCli::Result::describe() const
 
 QString SignalCli::maskNumbers(const QString &text)
 {
-    if (qEnvironmentVariableIsSet("WREN_DEBUG")) return text;
+    if (qEnvironmentVariableIsSet("CORVUS_DEBUG")) return text;
     static const QRegularExpression re(QStringLiteral(R"(\+?(\d{2})\d{5,}(\d{2}))"));
     QString t = text;
     t.replace(re, QStringLiteral("+\\1…\\2"));
@@ -113,7 +116,7 @@ void SignalCli::startProcess(QProcess *p, const QString &exe, const QStringList 
 {
 #ifdef Q_OS_MACOS
     const QString helper = QCoreApplication::applicationDirPath() +
-                           QStringLiteral("/../Helpers/wren-signal-cli.app/Contents/MacOS/wren-signal-cli");
+                           QStringLiteral("/../Helpers/corvus-signal-cli.app/Contents/MacOS/corvus-signal-cli");
     // A missing signal-cli is started directly, so QProcess reports FailedToStart right away.
     const QString resolved = QFileInfo(exe).isAbsolute() ? exe : QStandardPaths::findExecutable(exe);
     if (QFileInfo::exists(helper) && QFileInfo(resolved).isExecutable()) {

@@ -13,7 +13,7 @@ fi
 
 # The command prints its parent's parent: launchd (1) when the helper app ran it. The direct fallback
 # would print the caller instead, and a warning on stderr.
-helper="$app/Contents/Helpers/wren-signal-cli.app/Contents/MacOS/wren-signal-cli"
+helper="$app/Contents/Helpers/corvus-signal-cli.app/Contents/MacOS/corvus-signal-cli"
 err=$(mktemp)
 out=$("$helper" /bin/sh -c 'ps -o ppid= -p $PPID | tr -d " "; exit 3' 2>"$err") && rc=0 || rc=$?
 if [ "$out" != 1 ] || [ "$rc" != 3 ] || [ -s "$err" ]; then

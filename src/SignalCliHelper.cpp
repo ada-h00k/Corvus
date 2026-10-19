@@ -1,4 +1,4 @@
-// Runs signal-cli outside the app's process tree (macOS bundle: Contents/Helpers/wren-signal-cli.app).
+// Runs signal-cli outside the app's process tree (macOS bundle: Contents/Helpers/corvus-signal-cli.app).
 //
 // The app sets LSFileQuarantineEnabled and its child processes inherit it, so signal-cli could not load
 // the native libraries it unpacks to $TMPDIR. The app starts this program in place of signal-cli; it
@@ -36,14 +36,14 @@ constexpr int kStopSignals[] = {SIGTERM, SIGINT, SIGHUP};
 
 [[noreturn]] void fail(const std::string &what, int code = 255)
 {
-    std::fprintf(stderr, "wren-signal-cli: %s\n", what.c_str());
+    std::fprintf(stderr, "corvus-signal-cli: %s\n", what.c_str());
     _exit(code);
 }
 
 // No helper: run signal-cli directly; quarantined, it may fail to load libsignal, but says so itself.
 [[noreturn]] void runDirectly(char **argv, const std::string &why)
 {
-    std::fprintf(stderr, "wren-signal-cli: %s; running %s directly\n", why.c_str(), argv[1]);
+    std::fprintf(stderr, "corvus-signal-cli: %s; running %s directly\n", why.c_str(), argv[1]);
     for (int s : kStopSignals) signal(s, SIG_DFL); // ignored signals would stay ignored after exec
     execvp(argv[1], argv + 1);
     fail(std::string("cannot start ") + argv[1] + ": " + std::strerror(errno), 127);
@@ -107,7 +107,7 @@ int relay(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
 
-    // Termination requests (signals, or Wren quitting) arrive through kqueue from the start, so a stop
+    // Termination requests (signals, or Corvus quitting) arrive through kqueue from the start, so a stop
     // during startup still removes the socket directory.
     const int kq = kqueue();
     if (kq < 0) runDirectly(argv, "kqueue failed");
@@ -119,13 +119,13 @@ int relay(int argc, char **argv)
     }
     struct kevent parent;
     EV_SET(&parent, getppid(), EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, nullptr);
-    if (getppid() == 1 || kevent(kq, &parent, 1, nullptr, 0, nullptr) < 0) _exit(128 + SIGTERM); // Wren gone
+    if (getppid() == 1 || kevent(kq, &parent, 1, nullptr, 0, nullptr) < 0) _exit(128 + SIGTERM); // Corvus gone
 
     // Private directory for the socket (mkdtemp creates it with mode 0700).
     const char *tmp = getenv("TMPDIR");
     std::string dir = tmp && *tmp ? tmp : "/tmp/";
     if (dir.back() != '/') dir += '/';
-    dir += "wren-sc-XXXXXX";
+    dir += "corvus-sc-XXXXXX";
     if (!mkdtemp(dir.data())) runDirectly(argv, "cannot create a temporary directory");
     const std::string path = dir + "/s";
     auto cleanup = [&] {
@@ -141,7 +141,7 @@ int relay(int argc, char **argv)
         runDirectly(argv, "cannot create the helper socket");
     }
 
-    // This bundle: <bundle>/Contents/MacOS/wren-signal-cli
+    // This bundle: <bundle>/Contents/MacOS/corvus-signal-cli
     char exe[PATH_MAX], real[PATH_MAX];
     uint32_t size = sizeof exe;
     if (_NSGetExecutablePath(exe, &size) != 0 || !realpath(exe, real)) {
@@ -209,7 +209,7 @@ int relay(int argc, char **argv)
     for (int i = 1; i < argc; ++i) add(argv[i]);
     for (char **e = environ; *e; ++e) add(*e);
 
-    // stdin/stdout/stderr go along with the first message: signal-cli uses Wren's pipes directly.
+    // stdin/stdout/stderr go along with the first message: signal-cli uses Corvus's pipes directly.
     uint32_t len = uint32_t(payload.size());
     iovec iov = {&len, sizeof len};
     const int fds[3] = {0, 1, 2};
@@ -296,7 +296,7 @@ int serve(const char *path)
     std::vector<char *> env(strings.begin() + 1 + counts[0], strings.end());
     args.push_back(nullptr);
     env.push_back(nullptr);
-    for (char *e : env) // posix_spawnp searches the caller's PATH: use Wren's
+    for (char *e : env) // posix_spawnp searches the caller's PATH: use Corvus's
         if (e && std::strncmp(e, "PATH=", 5) == 0) setenv("PATH", e + 5, 1);
     if (chdir(strings[0]) != 0) (void)chdir("/");
 
@@ -357,7 +357,7 @@ int main(int argc, char **argv)
 {
     if (argc >= 3 && std::strcmp(argv[1], "--serve") == 0) return serve(argv[2]);
     if (argc < 2) {
-        std::fprintf(stderr, "usage: wren-signal-cli <signal-cli> [args...]\n");
+        std::fprintf(stderr, "usage: corvus-signal-cli <signal-cli> [args...]\n");
         return 2;
     }
     return relay(argc, argv);

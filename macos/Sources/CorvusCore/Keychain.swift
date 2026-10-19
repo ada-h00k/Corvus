@@ -50,22 +50,29 @@ public enum Keychain {
 
 /// The random secret that protects the history in "keychain" mode.
 public enum HistoryKeychain {
-    static let service = "wren-history"
-    /// Service name used before the rename to Wren; entries are moved over on first read.
-    static let legacyService = "signal-cli-qt-history"
+    static let service = "corvus-history"
+    /// Service names used under former names of the app (newest first); entries are moved over on first read.
+    static let legacyServices = ["wren-history", "signal-cli-qt-history"]
     static let account = "history-encryption-key"
+
+    private static func clearLegacy() {
+        for legacy in legacyServices { try? Keychain.clear(service: legacy, account: account) }
+    }
 
     public static func load() throws -> String? {
         if let secret = try Keychain.load(service: service, account: account) { return secret }
-        guard let old = try Keychain.load(service: legacyService, account: account) else { return nil }
-        try Keychain.save(service: service, account: account, secret: old)
-        try? Keychain.clear(service: legacyService, account: account)
-        return old
+        for legacy in legacyServices {
+            guard let old = try Keychain.load(service: legacy, account: account) else { continue }
+            try Keychain.save(service: service, account: account, secret: old)
+            clearLegacy()
+            return old
+        }
+        return nil
     }
     public static func save(_ secret: String) throws { try Keychain.save(service: service, account: account, secret: secret) }
     public static func clear() throws {
         try Keychain.clear(service: service, account: account)
-        try? Keychain.clear(service: legacyService, account: account) // must not resurrect the old secret
+        clearLegacy() // must not resurrect the old secret
     }
 
     /// 256 random bits as 64 hex characters.
@@ -77,19 +84,26 @@ public enum HistoryKeychain {
 }
 
 public enum GiphyApiKeyStore {
-    static let service = "wren"
-    /// Service name used before the rename to Wren; entries are moved over on first read.
-    static let legacyService = "signal-cli-qt"
+    static let service = "corvus"
+    /// Service names used under former names of the app (newest first); entries are moved over on first read.
+    static let legacyServices = ["wren", "signal-cli-qt"]
     static let account = "giphy-api-key"
+
+    private static func clearLegacy() {
+        for legacy in legacyServices { try? Keychain.clear(service: legacy, account: account) }
+    }
 
     public static func load() throws -> String {
         if let key = try Keychain.load(service: service, account: account) {
             return key.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        guard let old = try Keychain.load(service: legacyService, account: account) else { return "" }
-        try Keychain.save(service: service, account: account, secret: old)
-        try? Keychain.clear(service: legacyService, account: account)
-        return old.trimmingCharacters(in: .whitespacesAndNewlines)
+        for legacy in legacyServices {
+            guard let old = try Keychain.load(service: legacy, account: account) else { continue }
+            try Keychain.save(service: service, account: account, secret: old)
+            clearLegacy()
+            return old.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return ""
     }
 
     /// An empty key removes the entry.
@@ -97,7 +111,7 @@ public enum GiphyApiKeyStore {
         let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
         if k.isEmpty {
             try Keychain.clear(service: service, account: account)
-            try? Keychain.clear(service: legacyService, account: account)
+            clearLegacy()
         }
         else { try Keychain.save(service: service, account: account, secret: k) }
     }
