@@ -363,6 +363,7 @@ MainWindow::MainWindow()
         m_sendBtn->setVisible(expanded);
         if (expanded) m_input->setFocus();
         positionExpandButton();
+        updateEditBar(); // the save hint depends on the mode
     });
     connect(m_input, &MessageInput::upPressed, this, &MainWindow::editLastMessage);
     connect(m_attachBtn, &QToolButton::clicked, this, [this] {
@@ -2454,10 +2455,6 @@ void MainWindow::startEdit(int idx)
     if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
     const Conversation &c = m_convs[m_current];
     const Message &m = c.msgs[idx];
-    if (m.text.contains(QLatin1Char('\n'))) {
-        statusBar()->showMessage(tr("Multi-line messages cannot be edited here yet."), 6000);
-        return;
-    }
     if (!m.canEdit(QDateTime::currentMSecsSinceEpoch())) {
         statusBar()->showMessage(tr("This message can no longer be edited (3 hours / 10 edits)."), 6000);
         return;
@@ -2465,6 +2462,12 @@ void MainWindow::startEdit(int idx)
     if (m_editKey.isEmpty()) m_editDraft = m_input->text(); // keep an already running edit's draft
     m_editKey = c.key;
     m_editTs = m.ts();
+    // A multi-line message needs the expanded field, otherwise only one line would be visible.
+    // Remember that we opened it ourselves so it is collapsed again when the edit ends.
+    if (m.text.contains(QLatin1Char('\n')) && !m_input->isExpanded()) {
+        m_input->setExpanded(true);
+        m_editExpandedInput = true;
+    }
     m_input->setText(m.text);
     m_input->setCursorPosition(m.text.size());
     updateEditBar();
@@ -2500,6 +2503,10 @@ void MainWindow::cancelEdit(bool restoreDraft)
     m_editTs = 0;
     if (restoreDraft) m_input->setText(m_editDraft);
     m_editDraft.clear();
+    if (m_editExpandedInput) {
+        m_editExpandedInput = false;
+        m_input->setExpanded(false);
+    }
     updateEditBar();
 }
 
@@ -2509,7 +2516,9 @@ void MainWindow::updateEditBar()
         m_editBar->hide();
         return;
     }
-    m_editLabel->setText(tr("✎ Editing message – Enter to save, Esc to cancel"));
+    // In the expanded field Enter inserts a line break, so saving goes through the Send button.
+    m_editLabel->setText(m_input->isExpanded() ? tr("✎ Editing message – click Send to save, Esc to cancel")
+                                               : tr("✎ Editing message – Enter to save, Esc to cancel"));
     m_editBar->show();
 }
 

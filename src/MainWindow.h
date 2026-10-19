@@ -245,6 +245,7 @@ private:
     QString m_editKey;
     qint64 m_editTs = 0;
     QString m_editDraft; // what was typed before editing started
+    bool m_editExpandedInput = false; // the edit expanded the field itself (multi-line) and collapses it again
     QStringList m_pendingFiles;
     QSet<QString> m_thumbPending;
     QSet<QString> m_gifPending;
