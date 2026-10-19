@@ -140,6 +140,10 @@ MainWindow::MainWindow()
         l->setContentsMargins(4, 0, 4, 0);
         label = new QLabel;
         label->setTextFormat(Qt::PlainText);
+        // Ignored: the label's text width must not count towards the window's minimum width,
+        // otherwise showing a long reply / edit / file bar makes a small window grow by itself.
+        label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        label->setMinimumWidth(0);
         l->addWidget(label, 1);
         auto *x = new QToolButton;
         x->setText(QStringLiteral("✕"));
@@ -474,6 +478,15 @@ MainWindow::MainWindow()
     QSettings s;
     restoreGeometry(s.value(QStringLiteral("geometry")).toByteArray());
     QTimer::singleShot(0, this, &MainWindow::initialise);
+
+    // The window must never resize itself: showing the edit / reply / file bars or expanding the
+    // input field raises the layout's minimum size, and Qt would then grow a small window to fit.
+    // Fix the floor at the minimum of the plain layout (bars hidden, compact input) and stop the
+    // layout from raising it later.
+    QTimer::singleShot(0, this, [this] {
+        setMinimumSize(minimumSizeHint());
+        if (layout()) layout()->setSizeConstraint(QLayout::SetNoConstraint);
+    });
 }
 
 namespace {
