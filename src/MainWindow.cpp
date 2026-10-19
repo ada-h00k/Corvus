@@ -23,6 +23,7 @@
 #include <QApplication>
 #include <QAudioOutput>
 #include <QClipboard>
+#include <QCursor>
 #include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -166,7 +167,8 @@ MainWindow::MainWindow()
     m_input = new MessageInput;
     m_input->setPlaceholderText(tr("Write a message …"));
     // Floating "popout" handle: it hovers centered above the message field,
-    // overlapping the chat view, and is only shown while the field has focus.
+    // overlapping the chat view, and is only shown while the mouse is over the field or over
+    // the spot where the handle sits (see positionExpandButton()).
     // It is a child of the right-hand panel (not part of any layout) and is
     // positioned in positionExpandButton().
     m_expandInputBtn = new QToolButton(right);
@@ -440,6 +442,13 @@ MainWindow::MainWindow()
     connect(&m_expirationTimer, &QTimer::timeout, this, &MainWindow::expireMessages);
     m_expirationTimer.start();
 
+    // The handle is invisible (and so cannot receive hover events itself, nor steal clicks from the
+    // chat view), so the mouse position is polled to show it when the pointer gets near. The timer
+    // only runs while the pointer is inside the right-hand panel (see eventFilter()), so nothing
+    // wakes up while the window is idle, minimized or in the tray.
+    m_expandHoverTimer.setInterval(80);
+    connect(&m_expandHoverTimer, &QTimer::timeout, this, &MainWindow::positionExpandButton);
+
     setConnected(false);
     QSettings s;
     restoreGeometry(s.value(QStringLiteral("geometry")).toByteArray());
@@ -543,6 +552,19 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (m_expandInputBtn && m_input
         && (watched == m_input.data() || watched == m_expandInputBtn->parentWidget())) {
         switch (event->type()) {
+        case QEvent::Enter:
+            // Pointer entered the panel. Moving on to a child (field, handle) does not leave it.
+            if (watched == m_expandInputBtn->parentWidget()) {
+                m_expandHoverTimer.start();
+                positionExpandButton();
+            }
+            break;
+        case QEvent::Leave:
+            if (watched == m_expandInputBtn->parentWidget()) {
+                m_expandHoverTimer.stop();
+                m_expandInputBtn->hide();
+            }
+            break;
         case QEvent::FocusIn:
         case QEvent::FocusOut:
         case QEvent::Show:
@@ -565,17 +587,34 @@ void MainWindow::positionExpandButton()
 {
     if (!m_expandInputBtn || !m_input) return;
     QWidget *panel = m_expandInputBtn->parentWidget();
-    const bool show = m_input->isEnabled() && m_input->isVisible() && m_input->hasFocus();
-    if (!show) {
+    if (!m_input->isEnabled() || !m_input->isVisible() || !isVisible() || isMinimized()) {
         m_expandInputBtn->hide();
+        m_expandHoverTimer.stop();
         return;
     }
     const QPoint topLeft = m_input->mapTo(panel, QPoint(0, 0));
     const int x = topLeft.x() + (m_input->width() - m_expandInputBtn->width()) / 2;
     // Hover half over the chat view, half over the field's top edge.
-    const int y = topLeft.y() - m_expandInputBtn->height() / 2;
-    m_expandInputBtn->move(x, qMax(0, y));
-    m_expandInputBtn->show();
+    const int y = qMax(0, topLeft.y() - m_expandInputBtn->height() / 2);
+    const QRect spot(QPoint(x, y), m_expandInputBtn->size());
+    const QRect field(topLeft, m_input->size());
+
+    // Shown only while the mouse is over the message field or over the spot of the handle.
+    // A window or menu covering the panel at the pointer does not count.
+    const QPoint globalPos = QCursor::pos();
+    const QPoint pos = panel->mapFromGlobal(globalPos);
+    QWidget *under = QApplication::widgetAt(globalPos);
+    const bool hover = (spot.contains(pos) || field.contains(pos))
+                       && under && (under == panel || panel->isAncestorOf(under));
+
+    if (!hover) {
+        m_expandInputBtn->hide();
+        // Pointer outside the panel (e.g. Leave got lost): stop polling until the next Enter.
+        if (!panel->rect().contains(pos)) m_expandHoverTimer.stop();
+        return;
+    }
+    m_expandInputBtn->move(x, y);
+    if (m_expandInputBtn->isHidden()) m_expandInputBtn->show();
     m_expandInputBtn->raise();
 }
 

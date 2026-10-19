@@ -260,6 +260,7 @@ private:
     std::function<void(const QString &)> m_pickAction;
     QTemporaryDir m_tmp;
     QTimer m_expirationTimer;
+    QTimer m_expandHoverTimer;                  // polls the mouse for the expand handle, only while it is in the right panel
 
     QListWidget *m_list;
     QLabel *m_title;
