@@ -381,8 +381,8 @@ static QString html(ChatView *v) { return v->plainText(); }
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
-    QApplication::setOrganizationName(QStringLiteral("wren"));
-    QApplication::setApplicationName(QStringLiteral("wren"));
+    QApplication::setOrganizationName(QStringLiteral("corvus"));
+    QApplication::setApplicationName(QStringLiteral("corvus"));
 
     const QString firstHistorySecret = HistoryKeychain::generateSecret();
     const QString secondHistorySecret = HistoryKeychain::generateSecret();
@@ -1063,7 +1063,7 @@ int main(int argc, char **argv)
 
     // The history file must not contain any message text.
     {
-        QFile f(tmp.path() + "/data/wren/wren/history.wren");
+        QFile f(tmp.path() + "/data/corvus/corvus/history.corvus");
         CHECK(f.open(QIODevice::ReadOnly));
         const QByteArray raw = f.readAll();
         CHECK(raw.size() > 1000);

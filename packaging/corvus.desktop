@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Wren
+Name=Corvus
 GenericName=Messenger
 Comment=Qt GUI for signal-cli
-Exec=wren
-Icon=wren
+Exec=corvus
+Icon=corvus
 Terminal=false
 Categories=Network;InstantMessaging;Qt;
 Keywords=signal;messenger;chat;
-StartupWMClass=wren
+StartupWMClass=corvus

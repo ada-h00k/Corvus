@@ -1,14 +1,14 @@
-; Wren - Windows setup (Inno Setup 6.2 or newer)
+; Corvus - Windows setup (Inno Setup 6.2 or newer)
 ;
 ; Build (done by .github/workflows/release.yml):
-;   iscc /DAppVersion=0.2.0 /DStageDir=C:\path\to\staged\files packaging\windows\wren.iss
+;   iscc /DAppVersion=0.2.0 /DStageDir=C:\path\to\staged\files packaging\windows\corvus.iss
 ;
-; The setup is English only. Besides installing Wren it can optionally download
+; The setup is English only. Besides installing Corvus it can optionally download
 ;   * signal-cli  - latest release from https://github.com/AsamK/signal-cli (SHA-256 checked), and
 ;   * a private Java runtime (Eclipse Temurin JRE) if no suitable Java is installed.
 ; Both are downloaded at install time and are NOT part of the setup file.
 ;
-; Silent installs:  wren-windows-x64-setup.exe /VERYSILENT /InstallSignalCli=1 [/InstallJava=1]
+; Silent installs:  corvus-windows-x64-setup.exe /VERYSILENT /InstallSignalCli=1 [/InstallJava=1]
 
 #ifndef AppVersion
   #define AppVersion "0.2.0"
@@ -16,25 +16,25 @@
 #ifndef StageDir
   #define StageDir "..\..\build-windows\stage"
 #endif
-#define AppName "Wren"
-#define AppExe "wren.exe"
+#define AppName "Corvus"
+#define AppExe "corvus.exe"
 
 [Setup]
 AppId={{6F0B7D5E-3C1A-4B6E-9D52-7A1E4C8B2F90}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-AppPublisher=Wren
-AppPublisherURL=https://github.com/ada-h00k/Wren
-AppSupportURL=https://github.com/ada-h00k/Wren/issues
-AppUpdatesURL=https://github.com/ada-h00k/Wren/releases
+AppPublisher=Corvus
+AppPublisherURL=https://github.com/ada-h00k/Corvus
+AppSupportURL=https://github.com/ada-h00k/Corvus/issues
+AppUpdatesURL=https://github.com/ada-h00k/Corvus/releases
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\..\LICENSE
 OutputDir=..\..\dist
-OutputBaseFilename=wren-windows-x64-setup
-SetupIconFile=wren.ico
+OutputBaseFilename=corvus-windows-x64-setup
+SetupIconFile=corvus.ico
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2/max
 SolidCompression=yes
@@ -65,9 +65,16 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
+[InstallDelete]
+; Corvus was called Wren before. The AppId is unchanged, so this setup upgrades an existing
+; installation in place (same folder); remove the files and shortcuts of the old name.
+Type: files; Name: "{app}\wren.exe"
+Type: files; Name: "{autoprograms}\Wren.lnk"
+Type: files; Name: "{autodesktop}\Wren.lnk"
+
 [UninstallDelete]
 ; signal-cli (and the optional Java runtime) are created by the setup at run time.
-; Your Signal account data (~\.local\share\signal-cli) and Wren's chat history are NOT removed.
+; Your Signal account data (~\.local\share\signal-cli) and Corvus's chat history are NOT removed.
 Type: filesandordirs; Name: "{app}\signal-cli"
 
 [Code]
@@ -191,8 +198,8 @@ begin
 
   SignalPage := CreateInputOptionPage(wpSelectTasks,
     'signal-cli',
-    'Wren needs signal-cli to talk to Signal.',
-    'Wren is a graphical front end for signal-cli, which is a separate program. ' +
+    'Corvus needs signal-cli to talk to Signal.',
+    'Corvus is a graphical front end for signal-cli, which is a separate program. ' +
     'Setup can download it for you from the official GitHub releases page.',
     False, False);
 
@@ -230,11 +237,11 @@ begin
   Note.WordWrap := True;
   Note.Height := ScaleY(90);
   Note.Caption :=
-    'signal-cli is free software (GPL-3.0) by AsamK and is not part of Wren. It is downloaded directly from ' +
-    'github.com and its SHA-256 checksum is verified. It is installed into the Wren folder and is removed ' +
-    'again when you uninstall Wren (your Signal account data is kept).' + #13#10#13#10 +
+    'signal-cli is free software (GPL-3.0) by AsamK and is not part of Corvus. It is downloaded directly from ' +
+    'github.com and its SHA-256 checksum is verified. It is installed into the Corvus folder and is removed ' +
+    'again when you uninstall Corvus (your Signal account data is kept).' + #13#10#13#10 +
     'signal-cli requires Java ' + IntToStr(MinJavaMajor) + ' or newer. If you skip these downloads you can ' +
-    'install both yourself later and select signal-cli in Wren under Settings.';
+    'install both yourself later and select signal-cli in Corvus under Settings.';
 end;
 
 { ---------- download (runs before the files are copied; also in silent mode) ---------- }
@@ -315,7 +322,7 @@ begin
         Result := 'The download was cancelled.'
       else if SuppressibleMsgBox(
           'The download failed:' + #13#10#13#10 + GetExceptionMessage + #13#10#13#10 +
-          'Do you want to continue and install Wren without signal-cli' +
+          'Do you want to continue and install Corvus without signal-cli' +
           ' (you can install it later from https://github.com/AsamK/signal-cli/releases)?',
           mbError, MB_YESNO, IDYES) = IDNO then
         Result := 'Setup was stopped because the download failed.';
@@ -325,7 +332,7 @@ begin
   end;
 end;
 
-{ ---------- unpack + check (after Wren's files were copied) ---------- }
+{ ---------- unpack + check (after Corvus's files were copied) ---------- }
 
 procedure CheckSignalCli(const SignalDir: String);
 var
@@ -358,7 +365,7 @@ begin
     SuppressibleMsgBox(
       'signal-cli was installed but could not be started.' + #13#10#13#10 +
       'It needs Java ' + IntToStr(MinJavaMajor) + ' or newer. You can get one from https://adoptium.net/ ' +
-      'and then restart Wren.' + #13#10#13#10 + Msg,
+      'and then restart Corvus.' + #13#10#13#10 + Msg,
       mbInformation, MB_OK, IDOK);
 end;
 

@@ -91,7 +91,7 @@ enum Media {
     static func quarantine(_ url: URL) {
         var u = url
         var values = URLResourceValues()
-        values.quarantineProperties = [kLSQuarantineAgentNameKey as String: "Wren",
+        values.quarantineProperties = [kLSQuarantineAgentNameKey as String: "Corvus",
                                        kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String]
         try? u.setResourceValues(values)
     }

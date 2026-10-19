@@ -1,7 +1,7 @@
 import AppKit
 import AVFoundation
 import Observation
-import WrenCore
+import CorvusCore
 import SwiftUI
 
 /// Unsent composer state of one conversation.
@@ -19,7 +19,7 @@ struct UpdateHint: Equatable {
 }
 
 /// Everything the main window shows, plus the logic of src/MainWindow.cpp that is not pure model
-/// (that part lives in WrenCore.ChatState).
+/// (that part lives in CorvusCore.ChatState).
 @MainActor
 @Observable
 final class AppModel {
@@ -944,7 +944,7 @@ final class AppModel {
             var title = c.title, body: String
             switch notify.content {
             case .hidden:
-                title = "Wren"
+                title = "Corvus"
                 body = "New message"
             case .nameOnly:
                 body = "New message"
@@ -1423,7 +1423,7 @@ final class AppModel {
         }
         if policy == .risky {
             let r = await Dialogs.ask("“\(name)” can run programs on your Mac",
-                                      "For your safety, Wren never opens files of this type. You can save it and check it first.",
+                                      "For your safety, Corvus never opens files of this type. You can save it and check it first.",
                                       buttons: ["Save …"], style: .warning, cancel: true)
             if r == 0 { save() }
             return
@@ -1725,7 +1725,7 @@ final class AppModel {
         showFlash("Downloading GIF …", seconds: 60)
         Task {
             var req = URLRequest(url: url)
-            req.setValue("wren", forHTTPHeaderField: "User-Agent")
+            req.setValue("corvus", forHTTPHeaderField: "User-Agent")
             do {
                 let (data, resp) = try await URLSession.shared.data(for: req)
                 guard (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty, Int64(data.count) <= Media.maxAttachment else {
@@ -1749,7 +1749,7 @@ final class AppModel {
     private func registerGiphyAnalytics(_ url: URL?) {
         guard let url, url.scheme == "https" else { return }
         var req = URLRequest(url: url)
-        req.setValue("wren", forHTTPHeaderField: "User-Agent")
+        req.setValue("corvus", forHTTPHeaderField: "User-Agent")
         URLSession.shared.dataTask(with: req).resume()
     }
 
@@ -1768,7 +1768,7 @@ final class AppModel {
     func checkForUpdates(silent: Bool) {
         Task {
             var req = URLRequest(url: URL(string: "https://api.github.com/repos/AsamK/signal-cli/releases/latest")!)
-            req.setValue("wren", forHTTPHeaderField: "User-Agent")
+            req.setValue("corvus", forHTTPHeaderField: "User-Agent")
             req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             let o: JSON
             do {
@@ -1803,7 +1803,7 @@ final class AppModel {
             string: "Graphical front end for signal-cli.\nsignal-cli is used as a standalone program and is not part of this app.\n\n"
                 + "Path: \(cli.executable)\nVersion: \(version)\n\nChat history (encrypted): \(AppPaths.historyPath)",
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor])
-        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .applicationName: "Wren"])
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .applicationName: "Corvus"])
         NSApp.activate(ignoringOtherApps: true)
     }
 }

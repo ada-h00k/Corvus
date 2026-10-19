@@ -73,7 +73,7 @@ public final class SignalCli {
     /// Points `p` at signal-cli; inside the app bundle through the helper app (src/SignalCliHelper.cpp).
     nonisolated public static func configure(_ p: Process, executable: String, arguments: [String]) {
         let helper = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Helpers/wren-signal-cli.app/Contents/MacOS/wren-signal-cli")
+            .appendingPathComponent("Contents/Helpers/corvus-signal-cli.app/Contents/MacOS/corvus-signal-cli")
         // A missing signal-cli is started directly, so run() throws right away.
         if FileManager.default.isExecutableFile(atPath: helper.path), FileManager.default.isExecutableFile(atPath: executable) {
             p.executableURL = helper
@@ -96,9 +96,9 @@ public final class SignalCli {
         return env
     }
 
-    /// Phone numbers are masked in diagnostics unless WREN_DEBUG is set.
+    /// Phone numbers are masked in diagnostics unless CORVUS_DEBUG is set.
     nonisolated public static func maskNumbers(_ text: String) -> String {
-        if ProcessInfo.processInfo.environment["WREN_DEBUG"] != nil { return text }
+        if ProcessInfo.processInfo.environment["CORVUS_DEBUG"] != nil { return text }
         let re = try! NSRegularExpression(pattern: #"\+?(\d{2})\d{5,}(\d{2})"#)
         return re.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "+$1…$2")
     }

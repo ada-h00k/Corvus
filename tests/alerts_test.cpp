@@ -260,8 +260,8 @@ int main(int argc, char **argv)
     // implements the StatusNotifier (D-Bus) tray that the fake watcher below answers.
     qputenv("QT_QPA_PLATFORMTHEME", "generic");
     QApplication app(argc, argv);
-    QApplication::setOrganizationName("wren");
-    QApplication::setApplicationName("wren");
+    QApplication::setOrganizationName("corvus");
+    QApplication::setApplicationName("corvus");
     g_origPath = qEnvironmentVariable("PATH");
     QTimer dialogs;
     QObject::connect(&dialogs, &QTimer::timeout, autoDialogs);
@@ -367,11 +367,11 @@ int main(int argc, char **argv)
         CHECK(calls.size() == 1);
         if (calls.size() == 1) {
             const auto &c = calls[0];
-            CHECK(c.app == "Wren" && c.replaces == 0 && c.summary == "Alice");
+            CHECK(c.app == "Corvus" && c.replaces == 0 && c.summary == "Alice");
             CHECK(c.body == "hello &lt;b&gt;world&lt;/b&gt; &amp; co"); // server supports markup -> escaped
             CHECK(c.actions.size() == 2 && c.actions[0] == "default");
             CHECK(c.hints.value("category").toString() == "im.received");
-            CHECK(c.hints.value("desktop-entry").toString() == "wren");
+            CHECK(c.hints.value("desktop-entry").toString() == "corvus");
         }
         n.notify("conv1", "Alice", "second");   // same chat: replaces the first one
         n.notify("conv2", "Bob", "other chat"); // different chat: new notification
@@ -440,7 +440,7 @@ int main(int argc, char **argv)
         s.inject(incoming("+49111", "Alice", 1700000000000LL, "secret text"));
         CHECK(waitFor([&] { return !bus.notif->snapshot().isEmpty(); }));
         auto calls = bus.notif->snapshot();
-        CHECK(calls.size() == 1 && calls[0].summary == "Wren" && calls[0].body == "New message");
+        CHECK(calls.size() == 1 && calls[0].summary == "Corvus" && calls[0].body == "New message");
     }
     {
         NotificationSettings ns;
@@ -539,7 +539,7 @@ int main(int argc, char **argv)
         s.w->hide();
         s.inject(incoming("+49111", "Alice", 1700000000000LL, "unread one"));
         CHECK(waitFor([&] { return tray->toolTip().contains("1 unread"); }));
-        CHECK(s.w->windowTitle() == "(1) Wren");
+        CHECK(s.w->windowTitle() == "(1) Corvus");
 
         // closing hides to the tray (and keeps the app alive), tray click brings it back
         s.w->show();

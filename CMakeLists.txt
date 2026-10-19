@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(wren VERSION 0.2.0 LANGUAGES CXX)
+project(corvus VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -133,12 +133,12 @@ endif()
 # ---- Application executable -----------------------------------------------
 if(WIN32)
     # GUI subsystem (no console window) with application icon and version info.
-    configure_file(packaging/windows/wren.rc.in ${CMAKE_BINARY_DIR}/wren.rc @ONLY)
-    add_executable(wren WIN32 src/main.cpp ${CMAKE_BINARY_DIR}/wren.rc)
+    configure_file(packaging/windows/corvus.rc.in ${CMAKE_BINARY_DIR}/corvus.rc @ONLY)
+    add_executable(corvus WIN32 src/main.cpp ${CMAKE_BINARY_DIR}/corvus.rc)
 else()
-    add_executable(wren src/main.cpp)
+    add_executable(corvus src/main.cpp)
 endif()
-target_link_libraries(wren PRIVATE app_core)
+target_link_libraries(corvus PRIVATE app_core)
 
 # Build only the main Qt application as a macOS .app bundle.
 # Linux and other platforms continue to build a normal executable.
@@ -148,38 +148,38 @@ if(APPLE)
     # Child processes inherit that, hence the signal-cli helper app below.
     configure_file(packaging/macos/Info.plist.in
         ${CMAKE_BINARY_DIR}/Info.plist @ONLY)
-    set_target_properties(wren PROPERTIES
+    set_target_properties(corvus PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/Info.plist
     )
 
-    # signal-cli helper, embedded as Contents/Helpers/wren-signal-cli.app (src/SignalCliHelper.cpp).
+    # signal-cli helper, embedded as Contents/Helpers/corvus-signal-cli.app (src/SignalCliHelper.cpp).
     configure_file(packaging/macos/SignalCliHelper.plist.in
         ${CMAKE_BINARY_DIR}/SignalCliHelper.plist @ONLY)
-    add_executable(wren-signal-cli MACOSX_BUNDLE src/SignalCliHelper.cpp)
-    set_target_properties(wren-signal-cli PROPERTIES
+    add_executable(corvus-signal-cli MACOSX_BUNDLE src/SignalCliHelper.cpp)
+    set_target_properties(corvus-signal-cli PROPERTIES
         AUTOMOC OFF
         AUTORCC OFF
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/SignalCliHelper.plist
     )
     # Whenever either bundle is rebuilt; the outer bundle is signed again around the new helper.
-    set(WREN_HELPER_APP "$<TARGET_BUNDLE_CONTENT_DIR:wren>/Helpers/wren-signal-cli.app")
-    set(WREN_HELPER_STAMP ${CMAKE_BINARY_DIR}/wren-signal-cli-embedded.stamp)
-    add_custom_command(OUTPUT ${WREN_HELPER_STAMP}
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:wren-signal-cli>" "${WREN_HELPER_APP}"
-        COMMAND codesign --force --sign - "${WREN_HELPER_APP}"
-        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:wren>"
-        COMMAND ${CMAKE_COMMAND} -E touch ${WREN_HELPER_STAMP}
-        DEPENDS wren wren-signal-cli
+    set(CORVUS_HELPER_APP "$<TARGET_BUNDLE_CONTENT_DIR:corvus>/Helpers/corvus-signal-cli.app")
+    set(CORVUS_HELPER_STAMP ${CMAKE_BINARY_DIR}/corvus-signal-cli-embedded.stamp)
+    add_custom_command(OUTPUT ${CORVUS_HELPER_STAMP}
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:corvus-signal-cli>" "${CORVUS_HELPER_APP}"
+        COMMAND codesign --force --sign - "${CORVUS_HELPER_APP}"
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:corvus>"
+        COMMAND ${CMAKE_COMMAND} -E touch ${CORVUS_HELPER_STAMP}
+        DEPENDS corvus corvus-signal-cli
         VERBATIM
     )
-    add_custom_target(wren-signal-cli-embed ALL DEPENDS ${WREN_HELPER_STAMP})
+    add_custom_target(corvus-signal-cli-embed ALL DEPENDS ${CORVUS_HELPER_STAMP})
 endif()
 
-# ---- Tests (headless): cmake -DWREN_TESTS=ON, then ctest ------------------
-option(WREN_TESTS "Build the GUI integration test" OFF)
+# ---- Tests (headless): cmake -DCORVUS_TESTS=ON, then ctest ------------------
+option(CORVUS_TESTS "Build the GUI integration test" OFF)
 
-if(WREN_TESTS)
+if(CORVUS_TESTS)
     enable_testing()
     find_package(Qt6 REQUIRED COMPONENTS Test)
 
@@ -258,19 +258,19 @@ endif()
 # ---- Installation ---------------------------------------------------------
 include(GNUInstallDirs)
 
-install(TARGETS wren
-    # Required when wren is built as a MACOSX_BUNDLE.
+install(TARGETS corvus
+    # Required when corvus is built as a MACOSX_BUNDLE.
     BUNDLE DESTINATION .
     # Used for regular executables on Linux and other platforms.
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 if(NOT WIN32)
-    install(FILES packaging/wren.desktop
+    install(FILES packaging/corvus.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
     )
 
-    install(FILES packaging/wren.svg
+    install(FILES packaging/corvus.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
     )
 endif()

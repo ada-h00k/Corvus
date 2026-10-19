@@ -6,16 +6,16 @@
 <string>en</string>
 
 <key>CFBundleExecutable</key>
-<string>wren-signal-cli</string>
+<string>corvus-signal-cli</string>
 
 <key>CFBundleIdentifier</key>
-<string>io.github.wren.signal-cli</string>
+<string>io.github.corvus.signal-cli</string>
 
 <key>CFBundleInfoDictionaryVersion</key>
 <string>6.0</string>
 
 <key>CFBundleName</key>
-<string>Wren signal-cli</string>
+<string>Corvus signal-cli</string>
 
 <key>CFBundlePackageType</key>
 <string>APPL</string>
@@ -30,7 +30,7 @@
 <key>LSBackgroundOnly</key>
 <true/>
 
-<!-- No App Nap: signal-cli has to stay connected while Wren is in the background. -->
+<!-- No App Nap: signal-cli has to stay connected while Corvus is in the background. -->
 <key>NSAppSleepDisabled</key>
 <true/>
 

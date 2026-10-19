@@ -1,5 +1,5 @@
 import AppKit
-import WrenCore
+import CorvusCore
 import SwiftUI
 
 struct ContentView: View {
@@ -34,7 +34,7 @@ struct ContentView: View {
                 }
             }
         }
-        .navigationTitle(model.totalUnread > 0 ? "(\(model.totalUnread)) Wren" : "Wren")
+        .navigationTitle(model.totalUnread > 0 ? "(\(model.totalUnread)) Corvus" : "Corvus")
         .hidingWindowTitle()
         .tint(Theme.signalBlue)
         .background(WindowAccessor())
@@ -95,7 +95,7 @@ private struct Welcome: View {
                     .font(.system(size: 44))
                     .foregroundStyle(Theme.signalBlue)
             }
-            Text("Welcome to Wren").font(.title2.weight(.semibold))
+            Text("Welcome to Corvus").font(.title2.weight(.semibold))
             Text(model.historyReady
                     ? (model.connected ? "Choose a chat on the left, or start a new one." : model.statusText)
                     : "Unlocking your chat history …")

@@ -5,17 +5,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Wren</string>
+    <string>Corvus</string>
     <key>CFBundleExecutable</key>
-    <string>wren</string>
+    <string>corvus</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.wren.mac</string>
+    <string>io.github.corvus.mac</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Wren</string>
+    <string>Corvus</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -25,7 +25,7 @@
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.social-networking</string>
     <!-- Quarantine files created by the app by default.
-         signal-cli runs through Contents/Helpers/wren-signal-cli.app so it does not inherit this. -->
+         signal-cli runs through Contents/Helpers/corvus-signal-cli.app so it does not inherit this. -->
     <key>LSFileQuarantineEnabled</key>
     <true/>
     <key>LSMinimumSystemVersion</key>

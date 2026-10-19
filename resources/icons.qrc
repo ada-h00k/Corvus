@@ -1,5 +1,5 @@
 <RCC>
     <qresource prefix="/icons">
-        <file alias="wren.svg">../packaging/wren.svg</file>
+        <file alias="corvus.svg">../packaging/corvus.svg</file>
     </qresource>
 </RCC>

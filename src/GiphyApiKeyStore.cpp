@@ -8,7 +8,7 @@
 
 namespace
 {
-const QString kService = QStringLiteral("wren");
+const QString kService = QStringLiteral("corvus");
 const QString kKey = QStringLiteral("giphy-api-key");
 const QString kLegacySetting = QStringLiteral("giphyApiKey");
 
@@ -31,29 +31,31 @@ bool removeLegacySetting(QString &error)
     return false;
 }
 
-// Entries written before the rename to Wren live under the old service name.
-QString legacyService()
-{
-    return QString::fromLatin1(LegacyMigration::kLegacyGiphyService);
-}
-
+// Entries written under a former name (wren, signal-cli-qt) are moved over on first read.
 bool readLegacyKeychain(QString &apiKey)
 {
-    QKeychain::ReadPasswordJob job(legacyService());
-    job.setKey(kKey);
-    job.setInsecureFallback(false);
-    waitForJob(job);
-    if (job.error() != QKeychain::NoError) return false;
-    apiKey = job.textData();
-    return true;
+    const QStringList services = LegacyMigration::legacyGiphyServices();
+    for (const QString &service : services) {
+        QKeychain::ReadPasswordJob job(service);
+        job.setKey(kKey);
+        job.setInsecureFallback(false);
+        waitForJob(job);
+        if (job.error() != QKeychain::NoError) continue;
+        apiKey = job.textData();
+        return true;
+    }
+    return false;
 }
 
 void deleteLegacyKeychain()
 {
-    QKeychain::DeletePasswordJob job(legacyService());
-    job.setKey(kKey);
-    job.setInsecureFallback(false);
-    waitForJob(job);
+    const QStringList services = LegacyMigration::legacyGiphyServices();
+    for (const QString &service : services) {
+        QKeychain::DeletePasswordJob job(service);
+        job.setKey(kKey);
+        job.setInsecureFallback(false);
+        waitForJob(job);
+    }
 }
 
 bool writeKeychain(const QString &apiKey, QString &error)

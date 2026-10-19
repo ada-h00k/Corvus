@@ -8,7 +8,7 @@
 
 namespace
 {
-const QString kService = QStringLiteral("wren-history");
+const QString kService = QStringLiteral("corvus-history");
 const QString kKey = QStringLiteral("history-encryption-key");
 
 void waitForJob(QKeychain::Job &job)
@@ -20,38 +20,41 @@ void waitForJob(QKeychain::Job &job)
     loop.exec();
 }
 
-// Entries written before the rename to Wren live under the old service name.
-QString legacyService()
-{
-    return QString::fromLatin1(LegacyMigration::kLegacyHistoryService);
-}
-
+// Entries written under a former name (wren-history, signal-cli-qt-history) are moved over on first read.
 void deleteLegacy()
 {
-    QKeychain::DeletePasswordJob job(legacyService());
-    job.setKey(kKey);
-    job.setInsecureFallback(false);
-    waitForJob(job);
+    const QStringList services = LegacyMigration::legacyHistoryServices();
+    for (const QString &service : services) {
+        QKeychain::DeletePasswordJob job(service);
+        job.setKey(kKey);
+        job.setInsecureFallback(false);
+        waitForJob(job);
+    }
 }
 
-// Copies the secret from the old service name to the new one and removes the old entry.
-// If the new entry cannot be written, the old one is kept and tried again on the next start.
+// Copies the secret from the newest old service name that has one to the new one and removes the
+// old entries. If the new entry cannot be written, the old ones are kept and tried again on the
+// next start.
 bool migrateLegacy(QString &secret)
 {
-    QKeychain::ReadPasswordJob legacy(legacyService());
-    legacy.setKey(kKey);
-    legacy.setInsecureFallback(false);
-    waitForJob(legacy);
-    if (legacy.error() != QKeychain::NoError) return false;
-    secret = legacy.textData();
+    const QStringList services = LegacyMigration::legacyHistoryServices();
+    for (const QString &service : services) {
+        QKeychain::ReadPasswordJob legacy(service);
+        legacy.setKey(kKey);
+        legacy.setInsecureFallback(false);
+        waitForJob(legacy);
+        if (legacy.error() != QKeychain::NoError) continue;
+        secret = legacy.textData();
 
-    QKeychain::WritePasswordJob write(kService);
-    write.setKey(kKey);
-    write.setTextData(secret);
-    write.setInsecureFallback(false);
-    waitForJob(write);
-    if (write.error() == QKeychain::NoError) deleteLegacy();
-    return true;
+        QKeychain::WritePasswordJob write(kService);
+        write.setKey(kKey);
+        write.setTextData(secret);
+        write.setInsecureFallback(false);
+        waitForJob(write);
+        if (write.error() == QKeychain::NoError) deleteLegacy();
+        return true;
+    }
+    return false;
 }
 }
 
