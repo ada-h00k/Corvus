@@ -32,6 +32,7 @@
 #include <QDropEvent>
 #include <QEvent>
 #include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -2424,6 +2425,9 @@ void MainWindow::sendMessage()
 
     QList<Attachment> atts;
     QStringList paths;
+    const QString stageDir = m_tmp.path() + QStringLiteral("/send-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QDateTime sendTime = QDateTime::currentDateTime();
+    int fileIndex = 0;
     for (const QString &f : files) {
         const QFileInfo fi(f);
         Attachment a;
@@ -2431,6 +2435,20 @@ void MainWindow::sendMessage()
         a.filename = fi.fileName();
         a.size = fi.size();
         a.contentType = AttachmentUtil::mimeTypeForFile(f);
+        QString sendPath = a.path;
+        if (a.isImage()) {
+            // Like the official Signal clients: images go out under a generic, time-based
+            // name instead of the local file name. One folder per file keeps the name intact.
+            const QString generic = AttachmentUtil::genericFileName(a.contentType, a.filename,
+                                                                    sendTime.addMSecs(fileIndex));
+            const QString renamed = stageDir + QStringLiteral("/named-") + QString::number(fileIndex) +
+                                    QLatin1Char('/') + generic;
+            if (QDir().mkpath(QFileInfo(renamed).path()) && QFile::copy(a.path, renamed)) {
+                sendPath = renamed;
+                a.filename = generic;
+            }
+        }
+        ++fileIndex;
         if (a.isImage()) {
             const QImage img = AttachmentUtil::loadImage(f);
             if (!img.isNull()) {
@@ -2440,9 +2458,8 @@ void MainWindow::sendMessage()
             }
         }
         atts << a;
-        paths.append(a.path);
+        paths.append(sendPath);
     }
-    const QString stageDir = m_tmp.path() + QStringLiteral("/send-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
     if (!paths.isEmpty())
         p[QStringLiteral("attachments")] = QJsonArray::fromStringList(SignalCli::stageFiles(paths, stageDir));
 
@@ -2817,6 +2834,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
     const Conversation &c = m_convs[m_current];
     if (msgIdx < 0 || msgIdx >= c.msgs.size() || attIdx < 0 || attIdx >= c.msgs[msgIdx].attachments.size()) return;
     const Attachment att = c.msgs[msgIdx].attachments[attIdx];
+    const QString viewerName = AttachmentUtil::displayFileName(att, c.msgs[msgIdx].time);
     const QString key = m_current;
 
     if (att.isAudio()) {
@@ -2873,11 +2891,11 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
     }
 
     statusBar()->showMessage(tr("Loading attachment …"));
-    fetchAttachmentData(key, att, [this, att](const QByteArray &data, const QString &err) {
+    fetchAttachmentData(key, att, [this, att, viewerName](const QByteArray &data, const QString &err) {
         statusBar()->clearMessage();
         if (!err.isEmpty()) {
             if (att.isImage() && !att.thumb.isEmpty()) { // fall back to the stored preview
-                auto *viewer = new ImageViewer(att.thumb, att.filename, this);
+                auto *viewer = new ImageViewer(att.thumb, viewerName, this);
                 viewer->setAttribute(Qt::WA_DeleteOnClose);
                 viewer->show();
                 viewer->raise();
@@ -2888,7 +2906,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
             return;
         }
         if (att.isImage()) {
-            auto *viewer = new ImageViewer(data, att.filename, this);
+            auto *viewer = new ImageViewer(data, viewerName, this);
             if (viewer->isValid()) {
                 viewer->setAttribute(Qt::WA_DeleteOnClose);
                 viewer->show();
@@ -3010,15 +3028,16 @@ void MainWindow::saveAttachment(int msgIdx, int attIdx)
     const Conversation &c = m_convs[m_current];
     if (msgIdx < 0 || msgIdx >= c.msgs.size() || attIdx < 0 || attIdx >= c.msgs[msgIdx].attachments.size()) return;
     const Attachment att = c.msgs[msgIdx].attachments[attIdx];
+    const QString suggestedName = AttachmentUtil::displayFileName(att, c.msgs[msgIdx].time);
 
     statusBar()->showMessage(tr("Loading attachment …"));
-    fetchAttachmentData(m_current, att, [this, att](const QByteArray &data, const QString &err) {
+    fetchAttachmentData(m_current, att, [this, att, suggestedName](const QByteArray &data, const QString &err) {
         statusBar()->clearMessage();
         if (!err.isEmpty()) {
             QMessageBox::warning(this, tr("Attachment"), err);
             return;
         }
-        const QString path = QFileDialog::getSaveFileName(this, tr("Save attachment"), QFileInfo(att.filename).fileName());
+        const QString path = QFileDialog::getSaveFileName(this, tr("Save attachment"), suggestedName);
         if (path.isEmpty()) return;
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly) || f.write(data) != data.size())

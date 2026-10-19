@@ -1290,7 +1290,7 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
         menu.addAction(tr("Copy message text"), this, [m] { QApplication::clipboard()->setText(m.text); });
     for (int a = 0; a < m.attachments.size(); ++a) {
         const Attachment &att = m.attachments[a];
-        const QString name = att.filename.isEmpty() ? att.contentType : att.filename;
+        const QString name = AttachmentUtil::displayFileName(att, m.time);
         menu.addAction(tr("Save “%1” …").arg(name), this, [this, idx, a] { emit attachmentSaveRequested(idx, a); });
     }
     menu.exec(gp);
