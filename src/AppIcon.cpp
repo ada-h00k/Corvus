@@ -2,6 +2,7 @@
 
 #include <QFont>
 #include <QGuiApplication>
+#include <QHash>
 #include <QPainter>
 #include <QPalette>
 #include <QStyleHints>
@@ -22,9 +23,8 @@ void setMode(Mode mode)
     s_mode = mode;
 }
 
-bool prefersDark()
+bool themeIsDark()
 {
-    if (s_mode != Mode::FollowTheme) return s_mode == Mode::Dark;
     switch (QGuiApplication::styleHints()->colorScheme()) {
     case Qt::ColorScheme::Dark: return true;
     case Qt::ColorScheme::Light: return false;
@@ -32,23 +32,30 @@ bool prefersDark()
     }
 }
 
-QPixmap render(int size, int unread)
+bool prefersDark()
 {
-    return render(size, unread, prefersDark());
+    if (s_mode != Mode::FollowTheme) return s_mode == Mode::Dark;
+    return themeIsDark();
 }
 
-QPixmap render(int size, int unread, bool dark)
+// The artwork in packaging/, embedded via resources/icons.qrc.
+static QSvgRenderer &artwork(const char *alias)
+{
+    initIconsResource();
+    static QHash<QByteArray, QSvgRenderer *> renderers;
+    QSvgRenderer *&r = renderers[alias];
+    if (!r) r = new QSvgRenderer(QStringLiteral(":/icons/") + QLatin1String(alias));
+    return *r;
+}
+
+static QPixmap paint(QSvgRenderer &svg, int size, int unread)
 {
     QPixmap pm(size, size);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
     const qreal s = size;
-
-    // packaging/corvus.svg and corvus-light.svg, embedded via resources/icons.qrc
-    static QSvgRenderer darkRenderer((initIconsResource(), QStringLiteral(":/icons/corvus.svg")));
-    static QSvgRenderer lightRenderer(QStringLiteral(":/icons/corvus-light.svg"));
-    (dark ? darkRenderer : lightRenderer).render(&p, QRectF(0, 0, s, s));
+    svg.render(&p, QRectF(0, 0, s, s));
 
     if (unread > 0) {
         // Keep the badge legible in small system-tray icons.
@@ -76,6 +83,21 @@ QPixmap render(int size, int unread, bool dark)
     return pm;
 }
 
+QPixmap render(int size, int unread)
+{
+    return render(size, unread, prefersDark());
+}
+
+QPixmap render(int size, int unread, bool dark)
+{
+    return paint(artwork(dark ? "app-dark.svg" : "app-light.svg"), size, unread);
+}
+
+QPixmap renderTray(int size, int unread, bool dark)
+{
+    return paint(artwork(dark ? "tray-dark.svg" : "tray-light.svg"), size, unread);
+}
+
 QIcon app()
 {
     // Qt's Wayland plugin (xdg-toplevel-icon, seen with Qt 6.12) paints the window icon into a
@@ -100,7 +122,10 @@ QIcon app()
 QIcon tray(int unread)
 {
     QIcon icon;
-    for (int sz : {16, 22, 24, 32, 48, 64, 128}) icon.addPixmap(render(sz, unread));
+    // The tray sits on the panel, so it always contrasts with the theme (light raven on a dark
+    // theme, dark raven on a light one); the App icon setting only picks the tile.
+    const bool dark = themeIsDark();
+    for (int sz : {16, 22, 24, 32, 48, 64, 128}) icon.addPixmap(renderTray(sz, unread, dark));
     return icon;
 }
 

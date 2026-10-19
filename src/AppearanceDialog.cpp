@@ -70,10 +70,11 @@ AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) :
     form->addRow(tr("Corner radius"), radiusRow);
     m_appIcon = new QComboBox;
     m_appIcon->setObjectName(QStringLiteral("appIcon"));
-    // Item index == Appearance::IconChoice
+    // Item index == Appearance::IconChoice; the labels name the raven's colour
+    // (IconLight is the dark raven on a white tile and the other way round)
     m_appIcon->addItem(tr("Follow theme"));
-    m_appIcon->addItem(QIcon(AppIcon::render(32, 0, false)), tr("Light"));
-    m_appIcon->addItem(QIcon(AppIcon::render(32, 0, true)), tr("Dark"));
+    m_appIcon->addItem(QIcon(AppIcon::render(32, 0, false)), tr("Dark"));
+    m_appIcon->addItem(QIcon(AppIcon::render(32, 0, true)), tr("Light"));
     form->addRow(tr("App icon"), m_appIcon);
     m_showAvatars = new QCheckBox(tr("Show avatars in the contact list"));
     m_showAvatars->setObjectName(QStringLiteral("showAvatars"));

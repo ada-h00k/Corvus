@@ -1,6 +1,8 @@
 <RCC>
     <qresource prefix="/icons">
-        <file alias="corvus.svg">../packaging/corvus.svg</file>
-        <file alias="corvus-light.svg">../packaging/corvus-light.svg</file>
+        <file alias="app-dark.svg">../packaging/corvus.svg</file>
+        <file alias="app-light.svg">../packaging/corvus-light.svg</file>
+        <file alias="tray-light.svg">../packaging/tray-light.svg</file>
+        <file alias="tray-dark.svg">../packaging/tray-dark.svg</file>
     </qresource>
 </RCC>
