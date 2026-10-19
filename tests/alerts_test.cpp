@@ -300,10 +300,15 @@ int main(int argc, char **argv)
                     if (isRed(im.pixel(x, y))) return true;
             return false;
         };
-        const QImage plain = AppIcon::render(64, 0).toImage();
-        const QImage badge = AppIcon::render(64, 3).toImage();
+        const QImage plain = AppIcon::render(64, 0, true).toImage();
+        const QImage badge = AppIcon::render(64, 3, true).toImage();
+        const QImage light = AppIcon::render(64, 0, false).toImage();
         CHECK(qAlpha(plain.pixel(0, 0)) == 0);                        // rounded corners are transparent
-        CHECK(qBlue(plain.pixel(8, 32)) > 80 && qRed(plain.pixel(8, 32)) < 30); // navy background
+        CHECK(qBlue(plain.pixel(8, 32)) > 80 && qRed(plain.pixel(8, 32)) < 30); // navy background (dark theme)
+        CHECK(qAlpha(light.pixel(0, 0)) == 0);
+        CHECK(qRed(light.pixel(8, 32)) > 230 && qGreen(light.pixel(8, 32)) > 220
+              && qBlue(light.pixel(8, 32)) > 200);                    // creme background (light theme)
+        CHECK(!hasRed(light, QRect(0, 0, 64, 64)));
         CHECK(!hasRed(plain, QRect(0, 0, 64, 64)));
         CHECK(hasRed(badge, QRect(32, 0, 32, 32)));                   // badge top right
         CHECK(!hasRed(badge, QRect(0, 32, 32, 32)));

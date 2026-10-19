@@ -516,6 +516,21 @@ int main(int argc, char **argv)
         auto *view = w.findChild<ChatView *>();
         auto *input = w.findChild<QLineEdit *>();
         CHECK(list && view && input);
+
+        // A light / dark switch while running re-colours the chat without a restart.
+        if (view) {
+            const QPalette before = QApplication::palette();
+            QPalette flipped = before;
+            const bool wasDark = before.color(QPalette::Window).lightness() < 128;
+            flipped.setColor(QPalette::Window, wasDark ? QColor(0xef, 0xf0, 0xf1) : QColor(0x20, 0x23, 0x26));
+            flipped.setColor(QPalette::Base, wasDark ? QColor(0xff, 0xff, 0xff) : QColor(0x14, 0x16, 0x18));
+            QApplication::setPalette(flipped);
+            CHECK(waitFor([&] { return view->appearance().background == flipped.color(QPalette::Base); }));
+            CHECK(view->appearance().inBg == Appearance::defaults(flipped).inBg);
+            QApplication::setPalette(before);
+            CHECK(waitFor([&] { return view->appearance().background == before.color(QPalette::Base); }));
+        }
+
         QToolButton *attachBtn = nullptr;
         QToolButton *emojiBtn = nullptr;
         QToolButton *gifBtn = nullptr;

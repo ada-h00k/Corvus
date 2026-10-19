@@ -1,7 +1,10 @@
 #include "AppIcon.h"
 
 #include <QFont>
+#include <QGuiApplication>
 #include <QPainter>
+#include <QPalette>
+#include <QStyleHints>
 #include <QSvgRenderer>
 
 // Ensure the embedded icon resource is linked into the application.
@@ -12,7 +15,21 @@ static void initIconsResource()
 
 namespace AppIcon {
 
+bool prefersDark()
+{
+    switch (QGuiApplication::styleHints()->colorScheme()) {
+    case Qt::ColorScheme::Dark: return true;
+    case Qt::ColorScheme::Light: return false;
+    default: return QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    }
+}
+
 QPixmap render(int size, int unread)
+{
+    return render(size, unread, prefersDark());
+}
+
+QPixmap render(int size, int unread, bool dark)
 {
     QPixmap pm(size, size);
     pm.fill(Qt::transparent);
@@ -20,9 +37,10 @@ QPixmap render(int size, int unread)
     p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
     const qreal s = size;
 
-    // packaging/corvus.svg, embedded via resources/icons.qrc
-    static QSvgRenderer renderer((initIconsResource(), QStringLiteral(":/icons/corvus.svg")));
-    renderer.render(&p, QRectF(0, 0, s, s));
+    // packaging/corvus.svg and corvus-light.svg, embedded via resources/icons.qrc
+    static QSvgRenderer darkRenderer((initIconsResource(), QStringLiteral(":/icons/corvus.svg")));
+    static QSvgRenderer lightRenderer(QStringLiteral(":/icons/corvus-light.svg"));
+    (dark ? darkRenderer : lightRenderer).render(&p, QRectF(0, 0, s, s));
 
     if (unread > 0) {
         // Keep the badge legible in small system-tray icons.
@@ -52,8 +70,22 @@ QPixmap render(int size, int unread)
 
 QIcon app()
 {
+    // Qt's Wayland plugin (xdg-toplevel-icon, seen with Qt 6.12) paints the window icon into a
+    // straight-alpha buffer but announces it as ARGB8888, which Wayland defines as premultiplied.
+    // Half-transparent edge pixels then come out as garbage (black / cyan specks in the title bar).
+    // Handing it premultiplied values disguised as straight alpha makes the buffer hold what the
+    // compositor expects.
+    const bool wayland = QGuiApplication::platformName().startsWith(QLatin1String("wayland"));
     QIcon icon;
-    for (int sz : {16, 22, 24, 32, 48, 64, 128, 256}) icon.addPixmap(render(sz));
+    for (int sz : {16, 22, 24, 32, 48, 64, 128, 256}) {
+        if (!wayland) {
+            icon.addPixmap(render(sz));
+            continue;
+        }
+        QImage img = render(sz).toImage().convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        img.reinterpretAsFormat(QImage::Format_ARGB32);
+        icon.addPixmap(QPixmap::fromImage(img));
+    }
     return icon;
 }
 

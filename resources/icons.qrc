@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/icons">
         <file alias="corvus.svg">../packaging/corvus.svg</file>
+        <file alias="corvus-light.svg">../packaging/corvus-light.svg</file>
     </qresource>
 </RCC>

@@ -56,6 +56,7 @@
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QStyleHints>
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QToolButton>
@@ -412,6 +413,7 @@ MainWindow::MainWindow()
     });
     m_notifier = new Notifier(this);
     m_tray = new QSystemTrayIcon(AppIcon::tray(0), this);
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &MainWindow::applyTheme);
     m_trayMenu = new QMenu(this);
     m_trayMenu->addAction(tr("Show / hide window"), this, &MainWindow::toggleWindow);
     m_trayMenu->addSeparator();
@@ -507,6 +509,8 @@ bool MainWindow::userIsLooking() const
 bool MainWindow::event(QEvent *event)
 {
     const bool result = QMainWindow::event(event);
+    // The chat colours follow the palette (and so does the icon with an unknown colour scheme).
+    if (event->type() == QEvent::ApplicationPaletteChange) applyTheme();
     if (event->type() == QEvent::WindowActivate) {
         m_lastInputMs = QDateTime::currentMSecsSinceEpoch();
         // Messages that arrived in the open chat while the window was covered are read now.
@@ -3087,6 +3091,23 @@ void MainWindow::applyNotificationSettings()
     m_tray->setVisible(m_notify.trayIcon && QSystemTrayIcon::isSystemTrayAvailable());
     m_trayUnread = -1; // force an icon refresh
     updateTray();
+}
+
+void MainWindow::applyTheme()
+{
+    QApplication::setWindowIcon(AppIcon::app());
+    setWindowIcon(AppIcon::app());
+    if (m_tray) m_tray->setIcon(AppIcon::tray(qMax(m_trayUnread, 0)));
+
+    // Default chat colours derive from the palette; colours the user picked stay as they are.
+    // A theme switch arrives both as colorSchemeChanged and as a palette change, so only
+    // re-layout the chat when something actually differs.
+    if (!m_view) return;
+    const Appearance ap = Appearance::load(palette());
+    if (ap != m_appearance) {
+        m_appearance = ap;
+        m_view->setAppearance(m_appearance);
+    }
 }
 
 void MainWindow::updateTray()

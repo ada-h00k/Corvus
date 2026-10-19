@@ -138,6 +138,7 @@ private:
     // --- notifications, sound, tray
     void applyNotificationSettings();
     void updateTray();
+    void applyTheme(); // icons and chat colours follow a light / dark theme switch while running
     void alertIncoming(const QString &key, const Message &m);
     void installInputWatcher();
     qint64 m_lastInputMs = 0; // last keyboard/mouse input inside this window
@@ -264,7 +265,7 @@ private:
 
     QListWidget *m_list;
     QLabel *m_title;
-    ChatView *m_view;
+    ChatView *m_view = nullptr;
     QWidget *m_searchBar;
     QLineEdit *m_searchEdit;
     QLabel *m_searchCount;
