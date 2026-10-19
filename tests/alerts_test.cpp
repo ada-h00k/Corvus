@@ -303,7 +303,7 @@ int main(int argc, char **argv)
         const QImage plain = AppIcon::render(64, 0).toImage();
         const QImage badge = AppIcon::render(64, 3).toImage();
         CHECK(qAlpha(plain.pixel(0, 0)) == 0);                        // rounded corners are transparent
-        CHECK(qBlue(plain.pixel(8, 32)) > 200 && qRed(plain.pixel(8, 32)) < 90); // blue background
+        CHECK(qBlue(plain.pixel(8, 32)) > 80 && qRed(plain.pixel(8, 32)) < 30); // navy background
         CHECK(!hasRed(plain, QRect(0, 0, 64, 64)));
         CHECK(hasRed(badge, QRect(32, 0, 32, 32)));                   // badge top right
         CHECK(!hasRed(badge, QRect(0, 32, 32, 32)));
