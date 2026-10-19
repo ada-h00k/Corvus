@@ -11,6 +11,9 @@ public:
     ImageViewer(const QByteArray &data, const QString &filename, QWidget *parent = nullptr);
     bool isValid() const { return m_valid; }
 
+signals:
+    void saved(const QString &path); // the image was written to `path`
+
 private:
     QByteArray m_data;
     QString m_filename;

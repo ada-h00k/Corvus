@@ -84,8 +84,12 @@ ImageViewer::ImageViewer(const QByteArray &data, const QString &filename, QWidge
         const QString path = QFileDialog::getSaveFileName(this, tr("Save image"), m_filename);
         if (path.isEmpty()) return;
         QFile f(path);
-        if (!f.open(QIODevice::WriteOnly) || f.write(m_data) != m_data.size())
+        if (!f.open(QIODevice::WriteOnly) || f.write(m_data) != m_data.size()) {
             QMessageBox::warning(this, tr("Save image"), tr("The file could not be written."));
+            return;
+        }
+        f.close();
+        emit saved(path);
     };
     connect(save, &QPushButton::clicked, this, saveAs);
 

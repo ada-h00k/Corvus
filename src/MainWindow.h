@@ -69,6 +69,8 @@ protected:
     void dropEvent(QDropEvent *e) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
     void positionExpandButton();
+    void showSavedToast(const QString &path); // "Attachment saved · Show in folder"
+    void positionSavedToast();
 
 private slots:
     void initialise();
@@ -262,6 +264,9 @@ private:
     std::function<void(const QString &)> m_pickAction;
     QTemporaryDir m_tmp;
     QTimer m_expirationTimer;
+    QPointer<QWidget> m_savedToast;
+    QString m_savedToastPath;
+    QTimer m_savedToastTimer;
     QTimer m_expandHoverTimer;                  // polls the mouse for the expand handle, only while it is in the right panel
 
     QListWidget *m_list;

@@ -27,6 +27,12 @@
 #include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QFrame>
+#include <QProcess>
+#ifdef HAVE_QT_DBUS
+#include <QDBusConnection>
+#include <QDBusInterface>
+#endif
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -563,6 +569,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
     }
+    if (m_savedToast && watched == m_savedToast->parentWidget() && event->type() == QEvent::Resize)
+        positionSavedToast();
     // m_input / m_expandInputBtn are QPointers (null until built, null again once
     // destroyed), because this filter is already active on m_view while the
     // constructor is still running.
@@ -598,6 +606,80 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
     }
     return QMainWindow::eventFilter(watched, event);
+}
+
+// Opens the file manager with the saved file selected (or at least its folder).
+static void revealInFolder(const QString &path)
+{
+    const QFileInfo fi(path);
+#if defined(Q_OS_WIN)
+    QProcess::startDetached(QStringLiteral("explorer.exe"),
+                            {QStringLiteral("/select,") + QDir::toNativeSeparators(fi.absoluteFilePath())});
+#elif defined(Q_OS_MACOS)
+    QProcess::startDetached(QStringLiteral("open"), {QStringLiteral("-R"), fi.absoluteFilePath()});
+#else
+#ifdef HAVE_QT_DBUS
+    QDBusInterface fm(QStringLiteral("org.freedesktop.FileManager1"), QStringLiteral("/org/freedesktop/FileManager1"),
+                      QStringLiteral("org.freedesktop.FileManager1"), QDBusConnection::sessionBus());
+    if (fm.isValid()) {
+        fm.asyncCall(QStringLiteral("ShowItems"), QStringList{QUrl::fromLocalFile(fi.absoluteFilePath()).toString()},
+                     QString());
+        return;
+    }
+#endif
+    QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
+#endif
+}
+
+void MainWindow::showSavedToast(const QString &path)
+{
+    if (!m_expandInputBtn) return;
+    QWidget *panel = m_expandInputBtn->parentWidget(); // the right-hand chat panel
+    m_savedToastPath = path;
+    if (!m_savedToast) {
+        auto *toast = new QFrame(panel);
+        toast->setObjectName(QStringLiteral("savedToast"));
+        toast->setStyleSheet(QStringLiteral(
+            "#savedToast { background: palette(window); border: 1px solid palette(mid); border-radius: 8px; }"
+            "#savedToast QLabel { color: palette(window-text); }"
+            "#savedToast QPushButton { border: none; background: transparent; color: palette(link);"
+            " padding: 2px 4px; }"
+            "#savedToast QPushButton:hover { text-decoration: underline; }"));
+        auto *lay = new QHBoxLayout(toast);
+        lay->setContentsMargins(14, 8, 10, 8);
+        lay->setSpacing(10);
+        lay->addWidget(new QLabel(tr("Attachment saved"), toast));
+        auto *show = new QPushButton(tr("Show in folder"), toast);
+        show->setCursor(Qt::PointingHandCursor);
+        show->setFocusPolicy(Qt::NoFocus); // must not take focus from the message field
+        lay->addWidget(show);
+        connect(show, &QPushButton::clicked, this, [this] {
+            revealInFolder(m_savedToastPath);
+            if (m_savedToast) m_savedToast->hide();
+        });
+        m_savedToast = toast;
+        m_savedToastTimer.setSingleShot(true);
+        m_savedToastTimer.setInterval(5000);
+        connect(&m_savedToastTimer, &QTimer::timeout, this, [this] {
+            if (m_savedToast) m_savedToast->hide();
+        });
+    }
+    m_savedToast->adjustSize();
+    positionSavedToast();
+    m_savedToast->show();
+    m_savedToast->raise();
+    m_savedToastTimer.start(); // a new save restarts the countdown
+}
+
+void MainWindow::positionSavedToast()
+{
+    if (!m_savedToast || !m_input) return;
+    QWidget *panel = m_savedToast->parentWidget();
+    m_savedToast->adjustSize();
+    const int inputTop = m_input->mapTo(panel, QPoint(0, 0)).y();
+    const int x = (panel->width() - m_savedToast->width()) / 2;
+    const int y = qMax(0, inputTop - m_savedToast->height() - 12);
+    m_savedToast->move(qMax(0, x), y);
 }
 
 void MainWindow::positionExpandButton()
@@ -2896,6 +2978,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
         if (!err.isEmpty()) {
             if (att.isImage() && !att.thumb.isEmpty()) { // fall back to the stored preview
                 auto *viewer = new ImageViewer(att.thumb, viewerName, this);
+                connect(viewer, &ImageViewer::saved, this, &MainWindow::showSavedToast);
                 viewer->setAttribute(Qt::WA_DeleteOnClose);
                 viewer->show();
                 viewer->raise();
@@ -2907,6 +2990,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
         }
         if (att.isImage()) {
             auto *viewer = new ImageViewer(data, viewerName, this);
+            connect(viewer, &ImageViewer::saved, this, &MainWindow::showSavedToast);
             if (viewer->isValid()) {
                 viewer->setAttribute(Qt::WA_DeleteOnClose);
                 viewer->show();
@@ -3040,8 +3124,12 @@ void MainWindow::saveAttachment(int msgIdx, int attIdx)
         const QString path = QFileDialog::getSaveFileName(this, tr("Save attachment"), suggestedName);
         if (path.isEmpty()) return;
         QFile f(path);
-        if (!f.open(QIODevice::WriteOnly) || f.write(data) != data.size())
+        if (!f.open(QIODevice::WriteOnly) || f.write(data) != data.size()) {
             QMessageBox::warning(this, tr("Attachment"), tr("The file could not be written."));
+            return;
+        }
+        f.close();
+        showSavedToast(path);
     });
 }
 
