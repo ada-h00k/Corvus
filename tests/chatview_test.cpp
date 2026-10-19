@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QComboBox>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QImage>
@@ -384,6 +385,19 @@ int main(int argc, char **argv)
         s2.beginGroup("appearance");
         CHECK(!s2.contains("showAvatars"));
         CHECK(Appearance::load(pal).showAvatars);
+
+        // app icon: follows the theme by default, stored only when a variant is chosen
+        CHECK(Appearance::defaults(pal).appIcon == Appearance::IconFollowTheme);
+        Appearance dark = Appearance::defaults(pal);
+        dark.appIcon = Appearance::IconDark;
+        CHECK(!(dark == Appearance::defaults(pal)));
+        dark.save(pal);
+        CHECK(Appearance::load(pal).appIcon == Appearance::IconDark);
+        dark.appIcon = Appearance::IconFollowTheme;
+        dark.save(pal);
+        QSettings s3;
+        s3.beginGroup("appearance");
+        CHECK(!s3.contains("appIcon"));
         Appearance::reset();
     }
 
@@ -409,6 +423,14 @@ int main(int argc, char **argv)
             CHECK(!dlg.appearance().showAvatars);
             avatarBox->click();
             CHECK(dlg.appearance().showAvatars);
+        }
+        auto *iconBox = dlg.findChild<QComboBox *>("appIcon");
+        CHECK(iconBox && iconBox->count() == 3 && iconBox->currentIndex() == Appearance::IconFollowTheme);
+        if (iconBox) {
+            iconBox->setCurrentIndex(Appearance::IconDark);
+            CHECK(dlg.appearance().appIcon == Appearance::IconDark);
+            dlg.setAppearance(Appearance::defaults(dlg.palette())); // "Reset to defaults"
+            CHECK(iconBox->currentIndex() == Appearance::IconFollowTheme);
         }
         dlg.setAppearance(Appearance::defaults(dlg.palette()));
         CHECK(dlg.appearance() == Appearance::defaults(dlg.palette()));

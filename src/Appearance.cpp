@@ -50,6 +50,8 @@ Appearance Appearance::load(const QPalette &pal)
     const int r = s.value(QStringLiteral("radius")).toInt(&ok);
     if (ok) a.radius = qBound(0, r, 28);
     if (s.contains(QStringLiteral("showAvatars"))) a.showAvatars = s.value(QStringLiteral("showAvatars")).toBool();
+    const int icon = s.value(QStringLiteral("appIcon")).toInt(&ok);
+    if (ok) a.appIcon = qBound(int(IconFollowTheme), icon, int(IconDark));
     return a;
 }
 
@@ -72,6 +74,10 @@ void Appearance::save(const QPalette &pal) const
         s.remove(QStringLiteral("showAvatars"));
     else
         s.setValue(QStringLiteral("showAvatars"), showAvatars);
+    if (appIcon == def.appIcon)
+        s.remove(QStringLiteral("appIcon"));
+    else
+        s.setValue(QStringLiteral("appIcon"), appIcon);
 }
 
 void Appearance::reset()
@@ -82,5 +88,5 @@ void Appearance::reset()
 bool Appearance::operator==(const Appearance &o) const
 {
     return background == o.background && outBg == o.outBg && outText == o.outText && inBg == o.inBg &&
-           inText == o.inText && radius == o.radius && showAvatars == o.showAvatars;
+           inText == o.inText && radius == o.radius && showAvatars == o.showAvatars && appIcon == o.appIcon;
 }

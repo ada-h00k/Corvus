@@ -2,6 +2,7 @@
 
 #include <QCheckBox>
 #include <QColorDialog>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -10,6 +11,7 @@
 #include <QSlider>
 #include <QVBoxLayout>
 
+#include "AppIcon.h"
 #include "ChatView.h"
 
 static QList<Message> sampleMessages()
@@ -66,12 +68,24 @@ AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) :
     radiusRow->addWidget(m_radius, 1);
     radiusRow->addWidget(m_radiusLabel);
     form->addRow(tr("Corner radius"), radiusRow);
+    m_appIcon = new QComboBox;
+    m_appIcon->setObjectName(QStringLiteral("appIcon"));
+    // Item index == Appearance::IconChoice; the labels name the raven's colour
+    // (IconLight is the dark raven on a white tile and the other way round)
+    m_appIcon->addItem(tr("Follow theme"));
+    m_appIcon->addItem(QIcon(AppIcon::render(32, 0, false)), tr("Dark"));
+    m_appIcon->addItem(QIcon(AppIcon::render(32, 0, true)), tr("Light"));
+    form->addRow(tr("App icon"), m_appIcon);
     m_showAvatars = new QCheckBox(tr("Show avatars in the contact list"));
     m_showAvatars->setObjectName(QStringLiteral("showAvatars"));
     form->addRow(m_showAvatars);
     lay->addLayout(form);
     connect(m_showAvatars, &QCheckBox::toggled, this, [this](bool on) {
         m_ap.showAvatars = on;
+        refresh();
+    });
+    connect(m_appIcon, &QComboBox::currentIndexChanged, this, [this](int index) {
+        m_ap.appIcon = index;
         refresh();
     });
     connect(m_radius, &QSlider::valueChanged, this, [this](int v) {
@@ -121,6 +135,8 @@ void AppearanceDialog::refresh()
     }
     QSignalBlocker blockAvatars(m_showAvatars);
     m_showAvatars->setChecked(m_ap.showAvatars);
+    QSignalBlocker blockIcon(m_appIcon);
+    m_appIcon->setCurrentIndex(m_ap.appIcon);
     QSignalBlocker block(m_radius);
     m_radius->setValue(m_ap.radius);
     m_radiusLabel->setText(tr("%1 px").arg(m_ap.radius));

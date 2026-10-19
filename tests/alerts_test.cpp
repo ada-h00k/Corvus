@@ -300,10 +300,36 @@ int main(int argc, char **argv)
                     if (isRed(im.pixel(x, y))) return true;
             return false;
         };
-        const QImage plain = AppIcon::render(64, 0).toImage();
-        const QImage badge = AppIcon::render(64, 3).toImage();
-        CHECK(qAlpha(plain.pixel(0, 0)) == 0);                        // rounded corners are transparent
-        CHECK(qBlue(plain.pixel(8, 32)) > 200 && qRed(plain.pixel(8, 32)) < 90); // blue background
+        // App icon: the raven on a rounded tile, black on white (light) / white on black (dark)
+        const QImage appDark = AppIcon::render(64, 0, true).toImage();
+        const QImage appLight = AppIcon::render(64, 0, false).toImage();
+        CHECK(qAlpha(appDark.pixel(0, 0)) == 0 && qAlpha(appLight.pixel(0, 0)) == 0); // rounded corners
+        CHECK(qGray(appLight.pixel(8, 32)) > 240 && qGray(appLight.pixel(34, 32)) < 40);
+        CHECK(qGray(appDark.pixel(8, 32)) < 15 && qGray(appDark.pixel(34, 32)) > 220);
+        CHECK(!hasRed(appLight, QRect(0, 0, 64, 64)) && !hasRed(appDark, QRect(0, 0, 64, 64)));
+
+        // Tray: the raven alone on a transparent background, dark raven for light themes
+        const QImage plain = AppIcon::renderTray(64, 0, true).toImage();
+        const QImage badge = AppIcon::renderTray(64, 3, true).toImage();
+        const QImage light = AppIcon::renderTray(64, 0, false).toImage();
+        CHECK(qAlpha(plain.pixel(0, 0)) == 0 && qAlpha(plain.pixel(8, 32)) == 0);
+        CHECK(qAlpha(light.pixel(0, 0)) == 0 && qAlpha(light.pixel(8, 32)) == 0);
+        CHECK(qAlpha(plain.pixel(34, 32)) == 255 && qGray(plain.pixel(34, 32)) > 220);
+        CHECK(qAlpha(light.pixel(34, 32)) == 255 && qGray(light.pixel(34, 32)) < 40);
+        CHECK(!hasRed(light, QRect(0, 0, 64, 64)));
+        // Settings → Appearance can pin a variant regardless of the theme
+        AppIcon::setMode(AppIcon::Mode::Dark);
+        CHECK(AppIcon::prefersDark());
+        // ... and the tray follows that choice too
+        for (const bool dark : {false, true}) {
+            AppIcon::setMode(dark ? AppIcon::Mode::Dark : AppIcon::Mode::Light);
+            const QImage t = AppIcon::tray(0).pixmap(64).toImage();
+            CHECK(t.width() == 64 && qAlpha(t.pixel(34, 32)) == 255);
+            CHECK(dark ? qGray(t.pixel(34, 32)) > 220 : qGray(t.pixel(34, 32)) < 40); // light raven when dark
+        }
+        AppIcon::setMode(AppIcon::Mode::Light);
+        CHECK(!AppIcon::prefersDark());
+        AppIcon::setMode(AppIcon::Mode::FollowTheme);
         CHECK(!hasRed(plain, QRect(0, 0, 64, 64)));
         CHECK(hasRed(badge, QRect(32, 0, 32, 32)));                   // badge top right
         CHECK(!hasRed(badge, QRect(0, 32, 32, 32)));
