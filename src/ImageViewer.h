@@ -3,7 +3,7 @@
 #include <QByteArray>
 #include <QDialog>
 
-// Shows a full-size image with a "Save as …" button.
+// Shows a full-size image with a "Save as …" button and a right-click menu (Copy image, Save as …).
 class ImageViewer : public QDialog
 {
     Q_OBJECT
