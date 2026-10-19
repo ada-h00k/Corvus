@@ -6,13 +6,13 @@ Corvus is a desktop interface for [signal-cli](https://github.com/AsamK/signal-c
 
 | Breeze Light | Breeze Dark |
 |---|---|
-| ![Corvus Qt in light theme](docs/screenshots/corvus_BreezeLight.png) | ![Corvus Qt in dark theme](docs/screenshots/corvus_BreezeDark.png) |
+| ![Corvus Qt in light theme](docs/screenshots/Corvus_BreezeLight.png) | ![Corvus Qt in dark theme](docs/screenshots/Corvus_BreezeDark.png) |
 
 ### macOS (Swift / SwiftUI)
 
 | Light theme | Dark theme |
 |---|---|
-| ![Corvus for macOS in light theme](docs/screenshots/corvus_macOS_Light.png) | ![Corvus for macOS in dark theme](docs/screenshots/corvus_macOS_Dark.png) |
+| ![Corvus for macOS in light theme](docs/screenshots/Corvus_macOS_Light.png) | ![Corvus for macOS in dark theme](docs/screenshots/Corvus_macOS_Dark.png) |
 
 ## Features
 
