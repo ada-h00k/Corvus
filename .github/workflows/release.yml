@@ -429,10 +429,12 @@ jobs:
 
           cat flatpak-build/metadata
 
-          # The app must not get any file system access or broad device/bus access.
-          # (If one of these is ever needed on purpose, adjust the pattern below.)
-          forbidden='^filesystems=|^devices=.*all|^sockets=.*(ssh-auth|pcsc|cups|gpg-agent|system-bus)|^org\.freedesktop\.Flatpak=|=own$|^\[System Bus Policy\]'
-          if grep -E "$forbidden" flatpak-build/metadata; then
+          # Only the KDE runtime default "xdg-config/kdeglobals:ro" (Plasma colour scheme) is
+          # accepted as file system access. Everything else, broad devices, sockets or bus
+          # access fails the build. (If one is ever needed on purpose, adjust the patterns.)
+          forbidden='^filesystems=|^devices=.*all|^sockets=(.*;)?x11;|^sockets=.*(ssh-auth|pcsc|cups|gpg-agent|system-bus)|^org\.freedesktop\.Flatpak=|=own$|^\[System Bus Policy\]'
+          checked="$(grep -v -x 'filesystems=xdg-config/kdeglobals:ro;' flatpak-build/metadata || true)"
+          if grep -E "$forbidden" <<< "$checked"; then
             echo "::error::The Flatpak requests more permissions than intended. See the metadata above."
             exit 1
           fi

@@ -8,7 +8,9 @@
 # The release workflow does exactly that (job "flatpak").
 #
 # Permissions are kept to the minimum the app really needs; every entry in
-# finish-args below has a reason. There is deliberately NO --filesystem access:
+# finish-args below has a reason. The KDE runtime adds a few defaults on top
+# (read-only xdg-config/kdeglobals and the KDE settings bus names) so that Qt
+# follows the Plasma colour scheme; nothing else. There is deliberately NO --filesystem access:
 # files are chosen through the portal file chooser and the app's data lives in
 # ~/.var/app/io.github.ada_h00k.Corvus.
 app-id: io.github.ada_h00k.Corvus
@@ -27,6 +29,8 @@ finish-args:
   # Wayland first, X11 only when there is no Wayland session
   - --socket=wayland
   - --socket=fallback-x11
+  # the KDE SDK adds plain x11 by default, which would make fallback-x11 pointless
+  - --nosocket=x11
   # notification sounds (pw-play / paplay) and audio/video attachments
   - --socket=pulseaudio
   # GPU rendering of the video player (QtMultimedia); drop it to force software rendering
