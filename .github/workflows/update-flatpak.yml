@@ -19,6 +19,15 @@ name: Update Flatpak dependencies
 # Note: PRs opened here are NOT build-tested (release.yml has no pull_request
 # trigger). Merging is safe in principle, but check that the next push build's
 # flatpak job stays green before cutting a release.
+#
+# Signed-commit rulesets: pushes made as github-actions[bot] (the built-in
+# GITHUB_TOKEN identity) can never satisfy a "commits must have verified
+# signatures" ruleset, and that bot cannot be added to a ruleset bypass list
+# (only apps explicitly installed on the repository appear there). To make
+# pushes work, set the repo secret FEDC_TOKEN to a token belonging to a
+# bypass actor - e.g. a fine-grained PAT of the repo admin, or a custom
+# GitHub App installation token that is on the bypass list. Falls back to
+# the default GITHUB_TOKEN when the secret is not set.
 
 on:
   workflow_dispatch:
@@ -58,6 +67,8 @@ jobs:
           GIT_COMMITTER_NAME: Flatpak External Data Checker
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # see header comment: token of a bypass actor (PAT / GitHub App),
+          # because github-actions[bot] itself cannot be bypass-listed
+          GITHUB_TOKEN: ${{ secrets.FEDC_TOKEN || github.token }}
         with:
           args: --update --never-fork packaging/flatpak/io.github.ada_h00k.Corvus.yml
