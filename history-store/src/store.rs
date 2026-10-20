@@ -170,16 +170,16 @@ impl Header {
         if params.m_kib > 1 << 20 || params.t == 0 || params.t > 64 || params.p == 0 || params.p > 16 {
             return Err(StoreError::Corrupt("implausible KDF parameters".into()));
         }
-        let mut h = Header {
-            params,
-            salt: [0; SALT_LEN],
-            nonce: [0; NONCE_LEN],
-            wrapped: [0; KEY_LEN + TAG_LEN],
-        };
-        h.salt.copy_from_slice(&buf[17..17 + SALT_LEN]);
-        h.nonce.copy_from_slice(&buf[AAD_LEN..AAD_LEN + NONCE_LEN]);
-        h.wrapped.copy_from_slice(&buf[AAD_LEN + NONCE_LEN..HEADER_LEN]);
-        Ok(h)
+        // Slice the fixed-width fields straight out of `buf`. The HEADER_LEN
+        // check above guarantees every slice has exactly the right length, so
+        // these conversions cannot fail. No zero-initialized placeholder is
+        // created (CodeQL rust/hard-coded-cryptographic-value).
+        let salt: [u8; SALT_LEN] = buf[17..17 + SALT_LEN].try_into().expect("length checked above");
+        let nonce: [u8; NONCE_LEN] =
+            buf[AAD_LEN..AAD_LEN + NONCE_LEN].try_into().expect("length checked above");
+        let wrapped: [u8; KEY_LEN + TAG_LEN] =
+            buf[AAD_LEN + NONCE_LEN..HEADER_LEN].try_into().expect("length checked above");
+        Ok(Header { params, salt, nonce, wrapped })
     }
 
     /// Create a fresh header that wraps `dek` under a key derived from `pass`.
