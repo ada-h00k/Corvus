@@ -1009,7 +1009,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Download OSTree repository
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: flatpak-repo-${{ github.sha }}
           path: .
@@ -1158,7 +1158,7 @@ jobs:
 
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: corvus-*-${{ github.sha }}
           path: dist
