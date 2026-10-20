@@ -380,7 +380,7 @@ jobs:
           test -s packaging/flatpak/cargo-sources.json
 
       - name: Cache Flatpak sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .flatpak-builder/downloads
           key: flatpak-sources-${{ hashFiles('packaging/flatpak/*.yml', 'history-store/Cargo.lock') }}
