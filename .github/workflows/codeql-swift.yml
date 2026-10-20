@@ -20,18 +20,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Rust-Universal-Lib (arm64 + x86_64) – VOR init, damit der Cargo-Build
+      # nicht unter dem CodeQL-Tracer läuft. --release ist Pflicht, weil
+      # Package.swift hart auf history-store/target/release zeigt.
+      - name: Build history-store (universal staticlib)
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo build --release --locked --manifest-path history-store/Cargo.toml
+          cargo build --release --locked --manifest-path history-store/Cargo.toml --target x86_64-apple-darwin
+          lipo -create \
+            history-store/target/release/libhistory_store.a \
+            history-store/target/x86_64-apple-darwin/release/libhistory_store.a \
+            -output history-store/target/release/libhistory_store_universal.a
+          mv history-store/target/release/libhistory_store_universal.a \
+             history-store/target/release/libhistory_store.a
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: swift
           build-mode: manual
 
-      # 1. Rust-Staticlib bauen – MUSS --release sein, weil Package.swift
-      #    hart auf history-store/target/release zeigt!
-      - name: Build history-store (Rust staticlib)
-        run: cargo build --release --locked --manifest-path history-store/Cargo.toml
-
-      # 2. Swift-Package bauen (läuft unter dem CodeQL-Tracer)
+      # Dieser Build läuft unter Rosetta als x86_64 – die Universal-Lib deckt das ab.
       - name: Build Swift package
         run: swift build --package-path macos
 
