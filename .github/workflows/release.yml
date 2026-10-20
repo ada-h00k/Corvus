@@ -966,11 +966,12 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
-  # Signed Flatpak repository on GitHub Pages (automatic updates via `flatpak update`)
+  # Project website + signed Flatpak repository on GitHub Pages
+  # (automatic updates via `flatpak update`)
   # Enabled with the repository variable FLATPAK_REPO_PUBLISH=true
   # ------------------------------------------------------
   flatpak-repo:
-    name: Publish Flatpak repository (GitHub Pages)
+    name: Publish website and Flatpak repository (GitHub Pages)
     if: vars.FLATPAK_REPO_PUBLISH == 'true'
     runs-on: ubuntu-24.04
     needs:
@@ -990,6 +991,9 @@ jobs:
       FLATPAK_BRANCH: stable
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Set up Pages
         id: pages
         uses: actions/configure-pages@v6
@@ -1059,7 +1063,7 @@ jobs:
           test -s site/repo/summary.sig
           ostree refs --repo=site/repo
 
-      - name: Create remote description files and start page
+      - name: Create remote description files and website
         shell: bash
         env:
           BASE_URL: ${{ steps.pages.outputs.base_url }}
@@ -1092,30 +1096,13 @@ jobs:
           GPGKey=$gpgkey
           EOF
 
-          cat > site/index.html <<EOF
-          <!doctype html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Corvus Flatpak repository</title>
-            <style>
-              body { font: 16px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 3rem auto; padding: 0 1rem; }
-              pre { background: #8881; padding: .8rem 1rem; overflow-x: auto; border-radius: 6px; }
-            </style>
-          </head>
-          <body>
-            <h1>Corvus Flatpak repository</h1>
-            <p>Signed Flatpak repository for <a href="$REPO_URL">Corvus</a>. Updates arrive with <code>flatpak update</code>.</p>
-            <h2>Install</h2>
-            <pre>flatpak remote-add --user --if-not-exists corvus $base/corvus.flatpakrepo
-          flatpak install --user corvus $FLATPAK_APP_ID</pre>
-            <p>Or download <a href="$FLATPAK_APP_ID.flatpakref">$FLATPAK_APP_ID.flatpakref</a> and open it with your software center.</p>
-            <h2>Run</h2>
-            <pre>flatpak run $FLATPAK_APP_ID</pre>
-          </body>
-          </html>
-          EOF
+          # Project website (docs/website/index.html); the placeholders become the real URL/app ID
+          mkdir -p site/screenshots
+          cp docs/screenshots/*.png site/screenshots/
+          cp packaging/corvus.svg site/corvus.svg
+          sed -e "s|__BASE_URL__|$base|g" -e "s|__APP_ID__|$FLATPAK_APP_ID|g" \
+            docs/website/index.html > site/index.html
+          ! grep -q '__BASE_URL__\|__APP_ID__' site/index.html
 
           ls -lh site
 

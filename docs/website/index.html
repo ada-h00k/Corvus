@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corvus – a desktop client for Signal</title>
+<meta name="description" content="Corvus is a native desktop interface for signal-cli with an encrypted local chat history. Linux, Windows and macOS.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/svg+xml" href="corvus.svg">
+<style>
+  :root {
+    --bg: #f7f8fa; --surface: #ffffff; --text: #14171c; --muted: #5b6472;
+    --line: #dfe3ea; --accent: #2f6fed; --accent-text: #ffffff; --code: #eef1f6;
+    --radius: 14px; color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --surface: #161a21; --text: #e9edf3; --muted: #9aa4b2;
+      --line: #262c36; --accent: #6b9bff; --accent-text: #0e1116; --code: #1d222b;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent); }
+  .wrap { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem; }
+  header.top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 0; }
+  .brand { display: flex; align-items: center; gap: .6rem; font-weight: 700; color: var(--text); text-decoration: none; }
+  .brand img { width: 32px; height: 32px; border-radius: 8px; }
+  nav a { color: var(--muted); text-decoration: none; margin-left: 1.1rem; font-size: .95rem; }
+  nav a:hover { color: var(--text); }
+  .hero { text-align: center; padding: 3.5rem 0 2rem; }
+  .hero img.logo { width: 96px; height: 96px; border-radius: 22px; box-shadow: 0 8px 30px #0003; }
+  h1 { font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.15; margin: 1.2rem 0 .6rem; letter-spacing: -.02em; }
+  .lead { color: var(--muted); font-size: 1.15rem; max-width: 38rem; margin: 0 auto 1.6rem; }
+  .btns { display: flex; flex-wrap: wrap; gap: .7rem; justify-content: center; }
+  .btn { display: inline-block; padding: .7rem 1.2rem; border-radius: 10px; font-weight: 600; text-decoration: none;
+    border: 1px solid var(--line); color: var(--text); background: var(--surface); }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .badges { margin-top: 1.1rem; color: var(--muted); font-size: .9rem; }
+  section { padding: 2.5rem 0; }
+  h2 { font-size: 1.6rem; margin: 0 0 1.2rem; letter-spacing: -.01em; }
+  .shots { display: grid; gap: 1.5rem; }
+  figure { margin: 0; }
+  figure img { width: 100%; height: auto; display: block; border-radius: var(--radius); border: 1px solid var(--line); }
+  figcaption { color: var(--muted); font-size: .9rem; margin-top: .5rem; text-align: center; }
+  .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.2rem; }
+  .card h3 { margin: 0 0 .35rem; font-size: 1.05rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .96rem; }
+  .card.rec { border-color: var(--accent); }
+  .tag { display: inline-block; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    background: var(--accent); color: var(--accent-text); border-radius: 99px; padding: .1rem .55rem; margin-left: .4rem; vertical-align: middle; }
+  pre { background: var(--code); border-radius: 10px; padding: .8rem 1rem; overflow-x: auto; margin: .7rem 0 0;
+    font: .88rem/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .note { color: var(--muted); font-size: .92rem; margin-top: 1rem; }
+  footer { border-top: 1px solid var(--line); margin-top: 2rem; padding: 1.8rem 0 2.5rem; color: var(--muted); font-size: .9rem; }
+  footer a { color: var(--muted); }
+  @media (min-width: 52rem) { .shots { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <a class="brand" href="#"><img src="corvus.svg" alt="" width="32" height="32">Corvus</a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/ada-h00k/Corvus">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="hero">
+      <img class="logo" src="corvus.svg" alt="Corvus logo" width="96" height="96">
+      <h1>Signal on your desktop,<br>your way.</h1>
+      <p class="lead">Corvus is a native desktop interface for <a href="https://github.com/AsamK/signal-cli">signal-cli</a>
+        with an encrypted local chat history. Qt for Linux, Windows and macOS, plus a native SwiftUI app for the Mac.</p>
+      <div class="btns">
+        <a class="btn primary" href="#install">Install Corvus</a>
+        <a class="btn" href="https://github.com/ada-h00k/Corvus/releases/latest">Latest release</a>
+      </div>
+      <p class="badges">Open source · AGPL-3.0 · Linux · Windows · macOS</p>
+    </div>
+
+    <section id="screenshots">
+      <div class="shots">
+        <figure>
+          <picture>
+            <source srcset="screenshots/Corvus_BreezeDark.png" media="(prefers-color-scheme: dark)">
+            <img src="screenshots/Corvus_BreezeLight.png" alt="Corvus on Linux and Windows" loading="lazy">
+          </picture>
+          <figcaption>Linux and Windows (Qt)</figcaption>
+        </figure>
+        <figure>
+          <picture>
+            <source srcset="screenshots/Corvus_macOS_Dark.png" media="(prefers-color-scheme: dark)">
+            <img src="screenshots/Corvus_macOS_Light.png" alt="Corvus on macOS" loading="lazy">
+          </picture>
+          <figcaption>macOS (SwiftUI)</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="features">
+      <h2>Features</h2>
+      <div class="grid">
+        <div class="card"><h3>Chats and groups</h3><p>Read and send messages, including group chats, replies and reactions.</p></div>
+        <div class="card"><h3>Files and media</h3><p>Send and receive files, images, video and audio, with playback built in.</p></div>
+        <div class="card"><h3>Full control</h3><p>Edit or delete messages, archive chats and manage disappearing messages.</p></div>
+        <div class="card"><h3>Stay notified</h3><p>Desktop notifications, notification sounds and a tray or menu-bar icon.</p></div>
+        <div class="card"><h3>Encrypted history</h3><p>Your local chat history is encrypted and protected by the system keychain or a passphrase.</p></div>
+        <div class="card"><h3>Make it yours</h3><p>Customisable chat colours and appearance, with light and dark themes.</p></div>
+      </div>
+    </section>
+
+    <section id="install">
+      <h2>Install</h2>
+      <div class="grid">
+
+        <div class="card rec">
+          <h3>Flatpak <span class="tag">Linux · recommended</span></h3>
+          <p>Sandboxed, includes signal-cli, updates with <code>flatpak update</code>.</p>
+          <pre>flatpak remote-add --user --if-not-exists corvus __BASE_URL__/corvus.flatpakrepo
+flatpak install --user corvus __APP_ID__</pre>
+          <p class="note">Or open <a href="__APP_ID__.flatpakref">the .flatpakref file</a> with your software center.</p>
+        </div>
+
+        <div class="card">
+          <h3>Arch Linux</h3>
+          <p>Download the package from the latest release.</p>
+          <pre>sudo pacman -U ./corvus-*.pkg.tar.zst</pre>
+          <p class="note">Install signal-cli separately, for example from the AUR.</p>
+        </div>
+
+        <div class="card">
+          <h3>Other Linux</h3>
+          <p>Per-user installer, no <code>sudo</code> needed.</p>
+          <pre>tar -xzf corvus-linux-x86_64-installer.tar.gz
+./install.sh</pre>
+          <p class="note">Needs Qt 6, QtKeychain and signal-cli on your <code>PATH</code>.</p>
+        </div>
+
+        <div class="card">
+          <h3>Windows</h3>
+          <p>Use <code>corvus-windows-x64-setup.exe</code>. It can download signal-cli for you. A portable ZIP is available too.</p>
+        </div>
+
+        <div class="card">
+          <h3>macOS</h3>
+          <p>Native SwiftUI app (<code>corvus-macos-arm64.zip</code>, macOS 14 or newer) or the Qt app (<code>corvus-qt-macos-arm64.zip</code>), both for Apple silicon.</p>
+        </div>
+
+      </div>
+      <p class="note">All downloads are on the <a href="https://github.com/ada-h00k/Corvus/releases/latest">latest release page</a>.
+        The Flatpak keeps its own data, so link it to your Signal account as a new device on first start.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>Corvus is an unofficial, independent project and is not affiliated with or endorsed by Signal.
+      signal-cli is a separate project under its own license.</p>
+    <p><a href="https://github.com/ada-h00k/Corvus">Source code</a> ·
+      <a href="https://github.com/ada-h00k/Corvus/issues">Report an issue</a> ·
+      Licensed under the <a href="https://github.com/ada-h00k/Corvus/blob/main/LICENSE">GNU AGPL v3.0</a></p>
+  </footer>
+
+</div>
+</body>
+</html>
