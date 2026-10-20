@@ -222,7 +222,7 @@ jobs:
       # --------------------------------------------------
       - name: Upload build artifacts
         if: always() && hashFiles('dist/*') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corvus-linux-${{ github.sha }}
           path: dist/*
@@ -315,7 +315,7 @@ jobs:
 
       - name: Upload Arch package artifact
         if: always() && hashFiles('dist/*') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corvus-arch-${{ github.sha }}
           path: dist/*.pkg.tar.zst
@@ -497,7 +497,7 @@ jobs:
 
       - name: Upload OSTree repository
         if: vars.FLATPAK_REPO_PUBLISH == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flatpak-repo-${{ github.sha }}
           path: flatpak-repo.tar
@@ -507,7 +507,7 @@ jobs:
 
       - name: Upload Flatpak artifact
         if: always() && hashFiles('dist/*.flatpak') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corvus-flatpak-${{ github.sha }}
           path: dist/*.flatpak
@@ -566,7 +566,7 @@ jobs:
 
       - name: Upload build artifacts
         if: always() && hashFiles('dist/*') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corvus-macos-${{ github.sha }}
           path: dist/*
@@ -720,7 +720,7 @@ jobs:
 
       - name: Upload Qt macOS artifact
         if: always() && hashFiles('dist/*') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corvus-qt-macos-${{ github.sha }}
           path: dist/*
@@ -972,7 +972,7 @@ jobs:
 
       - name: Upload build artifacts
         if: always() && hashFiles('dist/*') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corvus-windows-${{ github.sha }}
           path: dist/*
