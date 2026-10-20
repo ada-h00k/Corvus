@@ -43,8 +43,12 @@ int main(int argc, char *argv[])
     // Registering an application ID with the desktop portal only works when a matching
     // .desktop file is installed. Without one (e.g. running from the build directory) it
     // just produces "Could not register app ID" warnings, so only announce it if it exists.
-    if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, QStringLiteral("corvus.desktop")).isEmpty())
-        QGuiApplication::setDesktopFileName(QStringLiteral("corvus"));
+    // In a Flatpak the desktop file (and the Wayland app ID) is named after the Flatpak app ID.
+    const QString desktopId = qEnvironmentVariableIsEmpty("FLATPAK_ID")
+        ? QStringLiteral("corvus")
+        : qEnvironmentVariable("FLATPAK_ID");
+    if (!QStandardPaths::locate(QStandardPaths::ApplicationsLocation, desktopId + QStringLiteral(".desktop")).isEmpty())
+        QGuiApplication::setDesktopFileName(desktopId);
 
     QApplication::setWindowIcon(AppIcon::app());
 

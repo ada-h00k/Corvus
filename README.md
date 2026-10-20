@@ -52,6 +52,15 @@ sudo pacman -U ./corvus-*.pkg.tar.zst
 
 Install `signal-cli` separately, for example from the AUR.
 
+**Flatpak (x86_64):** download `corvus-linux-x86_64.flatpak` from the release and install it with:
+
+```sh
+flatpak install --user ./corvus-linux-x86_64.flatpak
+flatpak run io.github.ada_h00k.Corvus
+```
+
+The Flatpak includes `signal-cli` (the native build, no Java needed) and `qrencode`, so nothing else has to be installed. It runs in a sandbox with these permissions only: network, Wayland/X11, audio, GPU (video player), notifications, tray icon and the Secret Service (history key). It has **no** file system access; attachments are chosen and saved through the file chooser portal. Because of the sandbox, the Flatpak keeps its own data in `~/.var/app/io.github.ada_h00k.Corvus/` and does not see an existing `signal-cli` installation or chat history: link it to your Signal account as a new device on first start.
+
 ### Windows (Qt, x86_64)
 
 1. Download and run `corvus-windows-x64-setup.exe` from the release.

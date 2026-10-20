@@ -323,6 +323,176 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
+  # Flatpak (KDE runtime, sandboxed, ships signal-cli and qrencode)
+  # ------------------------------------------------------
+  flatpak:
+    name: Build Flatpak (x86_64)
+    runs-on: ubuntu-24.04
+    env:
+      FLATPAK_APP_ID: io.github.ada_h00k.Corvus
+      FLATPAK_MANIFEST: packaging/flatpak/io.github.ada_h00k.Corvus.yml
+      # https://github.com/flatpak/flatpak-builder-tools (cargo/flatpak-cargo-generator.py)
+      CARGO_GENERATOR_REF: 74697c75b630d7330e77250fc13cb5ea688d9479
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flatpak tooling
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            flatpak \
+            flatpak-builder \
+            appstream \
+            desktop-file-utils \
+            python3-venv
+
+          # Ubuntu 24.04 restricts unprivileged user namespaces, which bubblewrap needs
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+          flatpak --version
+          flatpak-builder --version
+
+          flatpak remote-add --user --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      # The Flatpak build has no network access: all crates of the Rust history store are
+      # vendored from Cargo.lock into cargo-sources.json (kept out of git, always in sync).
+      - name: Generate Cargo sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python3 -m venv "$RUNNER_TEMP/cargo-gen"
+          "$RUNNER_TEMP/cargo-gen/bin/pip" install --quiet aiohttp tomlkit PyYAML
+
+          curl -fsSL -o "$RUNNER_TEMP/flatpak-cargo-generator.py" \
+            "https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/${CARGO_GENERATOR_REF}/cargo/flatpak-cargo-generator.py"
+
+          "$RUNNER_TEMP/cargo-gen/bin/python" "$RUNNER_TEMP/flatpak-cargo-generator.py" \
+            history-store/Cargo.lock \
+            -o packaging/flatpak/cargo-sources.json
+
+          test -s packaging/flatpak/cargo-sources.json
+
+      - name: Cache Flatpak sources
+        uses: actions/cache@v4
+        with:
+          path: .flatpak-builder/downloads
+          key: flatpak-sources-${{ hashFiles('packaging/flatpak/*.yml', 'history-store/Cargo.lock') }}
+          restore-keys: |
+            flatpak-sources-
+
+      - name: Build Flatpak
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          flatpak-builder \
+            --user \
+            --force-clean \
+            --install-deps-from=flathub \
+            --default-branch=stable \
+            --repo=flatpak-repo \
+            flatpak-build \
+            "$FLATPAK_MANIFEST"
+
+      # --------------------------------------------------
+      # Validate metadata and the sandbox permissions
+      # --------------------------------------------------
+      - name: Validate desktop file and AppStream metadata
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          files=flatpak-build/files/share
+          desktop="$files/applications/$FLATPAK_APP_ID.desktop"
+          metainfo="$files/metainfo/$FLATPAK_APP_ID.metainfo.xml"
+          icon="$files/icons/hicolor/scalable/apps/$FLATPAK_APP_ID.svg"
+
+          test -s "$desktop"
+          test -s "$metainfo"
+          test -s "$icon"
+
+          desktop-file-validate "$desktop"
+          grep -qx "Icon=$FLATPAK_APP_ID" "$desktop"
+          appstreamcli validate --no-net "$metainfo"
+
+      - name: Check sandbox permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat flatpak-build/metadata
+
+          # The app must not get any file system access or broad device/bus access.
+          # (If one of these is ever needed on purpose, adjust the pattern below.)
+          forbidden='^filesystems=|^devices=.*all|^sockets=.*(ssh-auth|pcsc|cups|gpg-agent|system-bus)|^org\.freedesktop\.Flatpak=|=own$|^\[System Bus Policy\]'
+          if grep -E "$forbidden" flatpak-build/metadata; then
+            echo "::error::The Flatpak requests more permissions than intended. See the metadata above."
+            exit 1
+          fi
+
+      # --------------------------------------------------
+      # Bundle
+      # --------------------------------------------------
+      - name: Create Flatpak bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p dist
+
+          flatpak build-bundle \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+            flatpak-repo \
+            dist/corvus-linux-x86_64.flatpak \
+            "$FLATPAK_APP_ID" \
+            stable
+
+          test -s dist/corvus-linux-x86_64.flatpak
+          ls -lh dist
+
+      # Install the bundle like a user would and check that everything it ships actually runs
+      - name: Smoke test installed Flatpak
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          flatpak install --user --noninteractive --bundle dist/corvus-linux-x86_64.flatpak
+
+          # effective permissions of the installed app
+          flatpak info --user --show-permissions "$FLATPAK_APP_ID"
+
+          flatpak run --command=signal-cli "$FLATPAK_APP_ID" --version
+          flatpak run --command=qrencode "$FLATPAK_APP_ID" -V
+
+          # every shared library of the executable must be found inside the sandbox
+          flatpak run --command=sh "$FLATPAK_APP_ID" -c '
+            missing="$(ldd /app/bin/corvus | grep "not found" || true)"
+            if [ -n "$missing" ]; then
+              echo "$missing"
+              exit 1
+            fi
+          '
+
+          # signal-cli has to be found by Corvus through PATH
+          flatpak run --command=sh "$FLATPAK_APP_ID" -c 'command -v signal-cli'
+
+      - name: Upload Flatpak artifact
+        if: always() && hashFiles('dist/*.flatpak') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: corvus-flatpak-${{ github.sha }}
+          path: dist/*.flatpak
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------
   # macOS app (Swift / SwiftUI, Apple silicon)
   # ------------------------------------------------------
   macos-app:
@@ -796,6 +966,7 @@ jobs:
     needs:
       - build
       - arch-package
+      - flatpak
       - macos-app
       - macos-qt-app
       - windows-app
@@ -827,7 +998,7 @@ jobs:
           name: Build ${{ github.sha }}
           target_commitish: ${{ github.sha }}
           body: |
-            Automatic Linux x86_64, Windows x86_64 and macOS (Apple silicon) builds.
+            Automatic Linux x86_64 (including Flatpak), Windows x86_64 and macOS (Apple silicon) builds.
             macOS includes both the native SwiftUI app and the Qt app.
 
             Commit: `${{ github.sha }}`
@@ -836,13 +1007,14 @@ jobs:
             - `corvus-linux-x86_64` — plain executable
             - `corvus-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
             - `corvus-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
+            - `corvus-linux-x86_64.flatpak` — sandboxed Flatpak bundle incl. signal-cli (`flatpak install --user ./corvus-linux-x86_64.flatpak`)
             - `corvus-macos-arm64.zip` — native SwiftUI app for Apple silicon, macOS 14 or newer
             - `corvus-qt-macos-arm64.zip` — Qt app for Apple silicon, including deployed Qt dependencies
             - `corvus-windows-x64-setup.exe` — Windows setup (English); can download signal-cli from its official GitHub releases
             - `corvus-windows-x64-portable.zip` — Windows, no installation (unzip and run `corvus.exe`)
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `signal-cli` must be installed separately (on Arch e.g. from the AUR, on macOS `brew install signal-cli`; the Windows setup offers to download it).
+            `signal-cli` must be installed separately (not for the Flatpak, which includes it; on Arch e.g. from the AUR, on macOS `brew install signal-cli`; the Windows setup offers to download it).
           draft: false
           prerelease: false
           make_latest: true
@@ -851,6 +1023,7 @@ jobs:
             dist/corvus-linux-x86_64
             dist/corvus-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
+            dist/corvus-linux-x86_64.flatpak
             dist/corvus-macos-arm64.zip
             dist/corvus-qt-macos-arm64.zip
             dist/corvus-windows-x64-setup.exe

@@ -1,0 +1,152 @@
+# Flatpak manifest for Corvus.
+#
+# Build (from the repository root):
+#   python3 flatpak-cargo-generator.py history-store/Cargo.lock \
+#       -o packaging/flatpak/cargo-sources.json   # flatpak-builder-tools/cargo
+#   flatpak-builder --user --install-deps-from=flathub --force-clean \
+#       flatpak-build packaging/flatpak/io.github.ada_h00k.Corvus.yml
+# The release workflow does exactly that (job "flatpak").
+#
+# Permissions are kept to the minimum the app really needs; every entry in
+# finish-args below has a reason. There is deliberately NO --filesystem access:
+# files are chosen through the portal file chooser and the app's data lives in
+# ~/.var/app/io.github.ada_h00k.Corvus.
+app-id: io.github.ada_h00k.Corvus
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: corvus
+
+finish-args:
+  # signal-cli talks to the Signal servers; GIPHY and the signal-cli update check use HTTPS too
+  - --share=network
+  # X11 shared memory (needed for the fallback X11 session)
+  - --share=ipc
+  # Wayland first, X11 only when there is no Wayland session
+  - --socket=wayland
+  - --socket=fallback-x11
+  # notification sounds (pw-play / paplay) and audio/video attachments
+  - --socket=pulseaudio
+  # GPU rendering of the video player (QtMultimedia); drop it to force software rendering
+  - --device=dri
+  # desktop notifications (freedesktop.org Notifications; also used for the tray fallback)
+  - --talk-name=org.freedesktop.Notifications
+  # tray icon (StatusNotifierItem)
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # History key: libsecret uses the Secret portal inside the sandbox; this is only the
+  # fallback for desktops without that portal (KWallet, KeePassXC, ...)
+  - --talk-name=org.freedesktop.secrets
+
+# Video/audio codecs for QtMultimedia (attachment playback)
+add-extensions:
+  org.freedesktop.Platform.ffmpeg-full:
+    directory: lib/ffmpeg
+    version: '25.08'
+    add-ld-path: .
+cleanup-commands:
+  - mkdir -p ${FLATPAK_DEST}/lib/ffmpeg
+
+modules:
+  # Secret Service / Secret portal client library used by QtKeychain
+  - name: libsecret
+    buildsystem: meson
+    config-opts:
+      - -Dmanpage=false
+      - -Dvapi=false
+      - -Dgtk_doc=false
+      - -Dintrospection=false
+      - -Dbash_completion=disabled
+    cleanup:
+      - /bin
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: git
+        url: https://github.com/GNOME/libsecret.git
+        tag: 0.21.8
+        commit: 9e52f6ae1c74dba683fb4793d349c26d4c1115b8
+
+  - name: qtkeychain
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_WITH_QT6=ON
+      - -DBUILD_TRANSLATIONS=OFF
+      - -DBUILD_TEST_APPLICATION=OFF
+    cleanup:
+      - /include
+      - /lib/cmake
+      - /lib/pkgconfig
+      - /lib/*.so
+    sources:
+      - type: git
+        url: https://github.com/frankosterfeld/qtkeychain.git
+        tag: 0.15.0
+        commit: ad7344c45a86a4f66cbafc4b081b5f7b876cb0b7
+
+  # Only the qrencode command line tool (shows the QR code when linking a device)
+  - name: libqrencode
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_SHARED_LIBS=OFF
+      - -DWITH_TOOLS=ON
+      - -DWITH_TESTS=OFF
+    cleanup:
+      - /include
+      - /lib
+      - /share/man
+    sources:
+      - type: git
+        url: https://github.com/fukuchi/libqrencode.git
+        tag: v4.1.1
+        commit: 715e29fd4cd71b6e452ae0f4e36d917b43122ce8
+
+  # signal-cli as the self-contained GraalVM native build: no Java runtime needed.
+  # Corvus finds it on PATH (/app/bin).
+  - name: signal-cli
+    buildsystem: simple
+    only-arches: [x86_64]
+    build-commands:
+      - install -Dm755 signal-cli /app/bin/signal-cli
+    sources:
+      - type: archive
+        url: https://github.com/AsamK/signal-cli/releases/download/v0.14.9/signal-cli-0.14.9-Linux-native.tar.gz
+        sha256: a8fab78b5e8053abf3db5725272957ad11d1745b9a16848ddb2ace4743dfa5d5
+        # the archive contains the single file "signal-cli" at its top level
+        strip-components: 0
+
+  - name: corvus
+    buildsystem: cmake-ninja
+    builddir: true
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        # crates vendored by cargo-sources.json (the build has no network access)
+        CARGO_HOME: /run/build/corvus/cargo
+        CARGO_NET_OFFLINE: 'true'
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+    post-install:
+      # Flatpak requires the desktop file and the icon to be named after the app ID
+      - mv /app/share/applications/corvus.desktop /app/share/applications/io.github.ada_h00k.Corvus.desktop
+      - sed -i 's|^Icon=.*|Icon=io.github.ada_h00k.Corvus|' /app/share/applications/io.github.ada_h00k.Corvus.desktop
+      - mv /app/share/icons/hicolor/scalable/apps/corvus.svg /app/share/icons/hicolor/scalable/apps/io.github.ada_h00k.Corvus.svg
+      - install -Dm644 ${FLATPAK_BUILDER_BUILDDIR}/packaging/flatpak/io.github.ada_h00k.Corvus.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 ${FLATPAK_BUILDER_BUILDDIR}/LICENSE -t /app/share/licenses/io.github.ada_h00k.Corvus
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .flatpak-builder
+          - flatpak-build
+          - flatpak-repo
+          - build
+          - dist
+      # generated from history-store/Cargo.lock by flatpak-cargo-generator.py
+      - cargo-sources.json

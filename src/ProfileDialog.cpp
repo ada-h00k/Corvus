@@ -123,7 +123,9 @@ void ProfileDialog::chooseAvatar()
     picker.setWindowTitle(tr("Choose avatar"));
     picker.setFileMode(QFileDialog::ExistingFile);
     picker.setNameFilter(tr("Image files (*.png *.jpg *.jpeg *.webp *.gif);;All files (*)"));
-    picker.setOption(QFileDialog::DontUseNativeDialog);
+    // In a Flatpak only the portal's file chooser can see the user's files.
+    if (qEnvironmentVariableIsEmpty("FLATPAK_ID"))
+        picker.setOption(QFileDialog::DontUseNativeDialog);
     if (picker.exec() != QDialog::Accepted || picker.selectedFiles().isEmpty()) return;
     setStatus(tr("Saving …"));
     emit avatarChosen(picker.selectedFiles().first());

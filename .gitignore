@@ -9,3 +9,9 @@ CMakeUserPresets.json
 .vscode/
 .idea/
 .patch
+
+# generated for the Flatpak build (flatpak-cargo-generator.py)
+/packaging/flatpak/cargo-sources.json
+/.flatpak-builder/
+/flatpak-build/
+/flatpak-repo/

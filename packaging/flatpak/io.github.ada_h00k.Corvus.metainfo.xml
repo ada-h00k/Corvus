@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ada_h00k.Corvus</id>
+
+  <name>Corvus</name>
+  <summary>Desktop client for Signal with an encrypted local chat history</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+
+  <developer id="io.github.ada_h00k">
+    <name>ada-h00k</name>
+  </developer>
+
+  <description>
+    <p>
+      Corvus is a native Qt 6 interface for signal-cli. Link it to your Signal account as an
+      additional device and chat from your desktop.
+    </p>
+    <ul>
+      <li>Read and send messages, including group chats, replies and reactions</li>
+      <li>Send and receive files, images, video and audio</li>
+      <li>Edit or delete messages, manage archived chats and disappearing messages</li>
+      <li>Desktop notifications, notification sounds and a tray icon</li>
+      <li>Encrypted local chat history, protected by the system keyring or a passphrase</li>
+    </ul>
+    <p>
+      This package includes signal-cli. Corvus is an unofficial client and is not affiliated with
+      Signal.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.ada_h00k.Corvus.desktop</launchable>
+
+  <url type="homepage">https://github.com/ada-h00k/Corvus</url>
+  <url type="bugtracker">https://github.com/ada-h00k/Corvus/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/main/docs/screenshots/Corvus_BreezeLight.png</image>
+      <caption>Corvus with a light theme</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/main/docs/screenshots/Corvus_BreezeDark.png</image>
+      <caption>Corvus with a dark theme</caption>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+  </content_rating>
+
+  <provides>
+    <binary>corvus</binary>
+  </provides>
+
+  <releases>
+    <release version="0.2.0" date="2026-10-19"/>
+  </releases>
+</component>
