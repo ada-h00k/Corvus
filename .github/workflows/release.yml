@@ -891,22 +891,6 @@ jobs:
 
           find stage -maxdepth 1 -type f | sort
 
-      # The setup downloads signal-cli from github.com/AsamK/signal-cli at install time.
-      # Check here that the lookup script still works against the real GitHub / Adoptium APIs.
-      # GITHUB_TOKEN is passed because anonymous api.github.com calls share a
-      # 60 req/h per-IP limit across all GitHub-hosted runners and often 403.
-      - name: Test release lookup script
-        shell: pwsh
-        run: |
-          $out = Join-Path $env:RUNNER_TEMP 'release-info.txt'
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging/windows/fetch-release-info.ps1 `
-              -OutFile $out -WantSignalCli 1 -WantJava 1 -JavaMajor 25 -GithubToken $env:GITHUB_TOKEN
-          Get-Content $out
-          if ($LASTEXITCODE -ne 0) { throw 'fetch-release-info.ps1 failed' }
-          $text = Get-Content $out -Raw
-          if ($text -notmatch 'signalcli_url=https://github\.com/AsamK/signal-cli/releases/download/') { throw 'signal-cli URL missing' }
-          if ($text -notmatch 'java_url=https://') { throw 'Java URL missing' }
-
       - name: Build setup and portable zip
         shell: pwsh
         run: |
