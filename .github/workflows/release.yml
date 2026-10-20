@@ -485,6 +485,26 @@ jobs:
           # signal-cli has to be found by Corvus through PATH
           flatpak run --command=sh "$FLATPAK_APP_ID" -c 'command -v signal-cli'
 
+      # The unsigned OSTree repository for the Pages job (only if publishing is enabled).
+      # It is signed there, so the signing key never reaches the job that builds the code.
+      - name: Pack OSTree repository
+        if: vars.FLATPAK_REPO_PUBLISH == 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -C flatpak-repo -cf flatpak-repo.tar .
+          ls -lh flatpak-repo.tar
+
+      - name: Upload OSTree repository
+        if: vars.FLATPAK_REPO_PUBLISH == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-repo-${{ github.sha }}
+          path: flatpak-repo.tar
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Upload Flatpak artifact
         if: always() && hashFiles('dist/*.flatpak') != ''
         uses: actions/upload-artifact@v4
@@ -958,6 +978,169 @@ jobs:
           path: dist/*
           if-no-files-found: warn
           retention-days: 14
+
+  # ------------------------------------------------------
+  # Signed Flatpak repository on GitHub Pages (automatic updates via `flatpak update`)
+  # Enabled with the repository variable FLATPAK_REPO_PUBLISH=true
+  # ------------------------------------------------------
+  flatpak-repo:
+    name: Publish Flatpak repository (GitHub Pages)
+    if: vars.FLATPAK_REPO_PUBLISH == 'true'
+    runs-on: ubuntu-24.04
+    needs:
+      - flatpak
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      FLATPAK_APP_ID: io.github.ada_h00k.Corvus
+      FLATPAK_BRANCH: stable
+
+    steps:
+      - name: Set up Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Download OSTree repository
+        uses: actions/download-artifact@v4
+        with:
+          name: flatpak-repo-${{ github.sha }}
+          path: .
+
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree gnupg
+
+      - name: Import signing key
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::error::The secret FLATPAK_GPG_PRIVATE_KEY is not set (see the setup guide)."
+            exit 1
+          fi
+
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --quiet --import <<< "$GPG_PRIVATE_KEY"
+
+          fpr="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')"
+          if [ -z "$fpr" ]; then
+            echo "::error::No secret key found in FLATPAK_GPG_PRIVATE_KEY."
+            exit 1
+          fi
+
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "GPG_FPR=$fpr" >> "$GITHUB_ENV"
+          echo "Signing with key $fpr"
+
+      # Every commit of the repository (app, locale and debug refs) gets signed, then the
+      # summary. Flatpak refuses unsigned commits from a remote that has a GPG key.
+      - name: Sign repository
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p site/repo
+          tar -xf flatpak-repo.tar -C site/repo
+
+          for ref in $(ostree refs --repo=site/repo); do
+            commit="$(ostree rev-parse --repo=site/repo "$ref")"
+            ostree gpg-sign --repo=site/repo --gpg-homedir="$GNUPGHOME" "$commit" "$GPG_FPR"
+            ostree show --repo=site/repo --list-detached-metadata-keys "$commit" | grep -q ostree.gpgsigs
+          done
+
+          flatpak build-update-repo \
+            --gpg-sign="$GPG_FPR" \
+            --gpg-homedir="$GNUPGHOME" \
+            --prune --prune-depth=1 \
+            site/repo
+
+          test -s site/repo/summary
+          test -s site/repo/summary.sig
+          ostree refs --repo=site/repo
+
+      - name: Create remote description files and start page
+        shell: bash
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          base="${BASE_URL%/}"
+          gpgkey="$(gpg --export "$GPG_FPR" | base64 -w0)"
+
+          cat > site/corvus.flatpakrepo <<EOF
+          [Flatpak Repo]
+          Title=Corvus
+          Url=$base/repo/
+          Homepage=$REPO_URL
+          Comment=Desktop client for Signal
+          Description=Corvus, a Qt 6 desktop client for Signal (includes signal-cli)
+          GPGKey=$gpgkey
+          EOF
+
+          cat > site/$FLATPAK_APP_ID.flatpakref <<EOF
+          [Flatpak Ref]
+          Title=Corvus
+          Name=$FLATPAK_APP_ID
+          Branch=$FLATPAK_BRANCH
+          Url=$base/repo/
+          SuggestRemoteName=corvus
+          IsRuntime=false
+          RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
+          GPGKey=$gpgkey
+          EOF
+
+          cat > site/index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Corvus Flatpak repository</title>
+            <style>
+              body { font: 16px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 3rem auto; padding: 0 1rem; }
+              pre { background: #8881; padding: .8rem 1rem; overflow-x: auto; border-radius: 6px; }
+            </style>
+          </head>
+          <body>
+            <h1>Corvus Flatpak repository</h1>
+            <p>Signed Flatpak repository for <a href="$REPO_URL">Corvus</a>. Updates arrive with <code>flatpak update</code>.</p>
+            <h2>Install</h2>
+            <pre>flatpak remote-add --user --if-not-exists corvus $base/corvus.flatpakrepo
+          flatpak install --user corvus $FLATPAK_APP_ID</pre>
+            <p>Or download <a href="$FLATPAK_APP_ID.flatpakref">$FLATPAK_APP_ID.flatpakref</a> and open it with your software center.</p>
+            <h2>Run</h2>
+            <pre>flatpak run $FLATPAK_APP_ID</pre>
+          </body>
+          </html>
+          EOF
+
+          ls -lh site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 
   # ------------------------------------------------------
   # Create a release for every commit (all artifacts together)
