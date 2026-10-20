@@ -73,6 +73,7 @@ modules:
     builddir: true
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_LIBDIR=lib
       - -DBUILD_WITH_QT6=ON
       - -DBUILD_TRANSLATIONS=OFF
       - -DBUILD_TEST_APPLICATION=OFF
@@ -93,6 +94,9 @@ modules:
     builddir: true
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_LIBDIR=lib
+      # libqrencode 4.1.1 still declares cmake_minimum_required < 3.5, which CMake 4 rejects
+      - -DCMAKE_POLICY_VERSION_MINIMUM=3.5
       - -DBUILD_SHARED_LIBS=OFF
       - -DWITH_TOOLS=ON
       - -DWITH_TESTS=OFF
