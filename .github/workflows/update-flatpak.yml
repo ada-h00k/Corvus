@@ -1,0 +1,50 @@
+name: Update Flatpak dependencies
+
+# Dependabot has no "flatpak" package ecosystem, so this workflow runs the
+# same tool Flathub itself uses (flatpak-external-data-checker). It scans the
+# x-checker-data annotations in the Flatpak manifest (git tags of libsecret,
+# qtkeychain, libqrencode; signal-cli GitHub releases incl. sha256) and opens
+# one pull request per detected update batch.
+#
+# Not covered, on purpose:
+#   - runtime/sdk (org.kde.Platform '6.11') and org.freedesktop.Platform.ffmpeg-full
+#     '25.08': runtime bumps are major version upgrades and belong to a reviewed
+#     manual change. Keep them in sync manually.
+#   - cargo crates: covered by the "cargo" ecosystem in .github/dependabot.yml;
+#     release.yml regenerates cargo-sources.json from Cargo.lock at build time.
+#
+# Note: PRs opened here are NOT build-tested (release.yml has no pull_request
+# trigger). Merging is safe in principle, but check that the next push build's
+# flatpak job stays green before cutting a release.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 04:00 UTC
+    - cron: "0 4 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-flatpak
+  cancel-in-progress: false
+
+jobs:
+  flatpak-external-data-checker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Check for external data updates
+        uses: docker://ghcr.io/flathub/flatpak-external-data-checker:latest
+        env:
+          GIT_AUTHOR_NAME: Flatpak External Data Checker
+          GIT_COMMITTER_NAME: Flatpak External Data Checker
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --update --never-fork packaging/flatpak/io.github.ada_h00k.Corvus.yml

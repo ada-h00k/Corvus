@@ -71,6 +71,9 @@ modules:
         url: https://github.com/GNOME/libsecret.git
         tag: 0.21.8
         commit: 9e52f6ae1c74dba683fb4793d349c26d4c1115b8
+        x-checker-data:
+          type: git
+          tag-pattern: '^(\d+\.\d+\.\d+)$'
 
   - name: qtkeychain
     buildsystem: cmake-ninja
@@ -90,7 +93,10 @@ modules:
       - type: git
         url: https://github.com/frankosterfeld/qtkeychain.git
         tag: 0.15.0
-        commit: ad7344c45a86a4f66cbafc4b081b5f7b876cb0b7
+        commit: ad7344c45a86a4f66cbafc4b081b5f7b876cb0b
+        x-checker-data:
+          type: git
+          tag-pattern: '^(\d+\.\d+\.\d+)$'
 
   # Only the qrencode command line tool (shows the QR code when linking a device)
   - name: libqrencode
@@ -113,6 +119,9 @@ modules:
         url: https://github.com/fukuchi/libqrencode.git
         tag: v4.1.1
         commit: 715e29fd4cd71b6e452ae0f4e36d917b43122ce8
+        x-checker-data:
+          type: git
+          tag-pattern: '^v(\d+\.\d+\.\d+)$'
 
   # signal-cli as the self-contained GraalVM native build: no Java runtime needed.
   # Corvus finds it on PATH (/app/bin).
@@ -127,6 +136,11 @@ modules:
         sha256: a8fab78b5e8053abf3db5725272957ad11d1745b9a16848ddb2ace4743dfa5d5
         # the archive contains the single file "signal-cli" at its top level
         strip-components: 0
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/AsamK/signal-cli/releases/latest
+          version-query: '.tag_name | sub("^v"; "")'
+          url-query: '.assets[] | select(.name == "signal-cli-" + $version + "-Linux-native.tar.gz") | .browser_download_url'
 
   - name: corvus
     buildsystem: cmake-ninja
