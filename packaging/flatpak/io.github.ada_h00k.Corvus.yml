@@ -70,10 +70,10 @@ modules:
       - type: git
         url: https://github.com/GNOME/libsecret.git
         tag: 0.21.8
-        commit: 9e52f6ae1c74dba683fb4793d349c26d4c1115b8
+        commit: 257547ed7a541fc63400f91578216d3b53721c57
         x-checker-data:
           type: git
-          tag-pattern: '^(\d+\.\d+\.\d+)$'
+          tag-pattern: ^(\d+\.\d+\.\d+)$
 
   - name: qtkeychain
     buildsystem: cmake-ninja
@@ -92,11 +92,11 @@ modules:
     sources:
       - type: git
         url: https://github.com/frankosterfeld/qtkeychain.git
-        tag: 0.15.0
-        commit: ad7344c45a86a4f66cbafc4b081b5f7b876cb0b
+        tag: 0.17.0
+        commit: 875f77d9f61bd97fd84cca47ce3bc71186dfbd09
         x-checker-data:
           type: git
-          tag-pattern: '^(\d+\.\d+\.\d+)$'
+          tag-pattern: ^(\d+\.\d+\.\d+)$
 
   # Only the qrencode command line tool (shows the QR code when linking a device)
   - name: libqrencode
@@ -121,7 +121,7 @@ modules:
         commit: 715e29fd4cd71b6e452ae0f4e36d917b43122ce8
         x-checker-data:
           type: git
-          tag-pattern: '^v(\d+\.\d+\.\d+)$'
+          tag-pattern: ^v(\d+\.\d+\.\d+)$
 
   # signal-cli as the self-contained GraalVM native build: no Java runtime needed.
   # Corvus finds it on PATH (/app/bin).
@@ -139,8 +139,9 @@ modules:
         x-checker-data:
           type: json
           url: https://api.github.com/repos/AsamK/signal-cli/releases/latest
-          version-query: '.tag_name | sub("^v"; "")'
-          url-query: '.assets[] | select(.name == "signal-cli-" + $version + "-Linux-native.tar.gz") | .browser_download_url'
+          version-query: .tag_name | sub("^v"; "")
+          url-query: .assets[] | select(.name == "signal-cli-" + $version + "-Linux-native.tar.gz")
+            | .browser_download_url
 
   - name: corvus
     buildsystem: cmake-ninja
@@ -158,7 +159,8 @@ modules:
       - mv /app/share/applications/corvus.desktop /app/share/applications/io.github.ada_h00k.Corvus.desktop
       - sed -i 's|^Icon=.*|Icon=io.github.ada_h00k.Corvus|' /app/share/applications/io.github.ada_h00k.Corvus.desktop
       - mv /app/share/icons/hicolor/scalable/apps/corvus.svg /app/share/icons/hicolor/scalable/apps/io.github.ada_h00k.Corvus.svg
-      - install -Dm644 ${FLATPAK_BUILDER_BUILDDIR}/packaging/flatpak/io.github.ada_h00k.Corvus.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 ${FLATPAK_BUILDER_BUILDDIR}/packaging/flatpak/io.github.ada_h00k.Corvus.metainfo.xml
+        -t /app/share/metainfo
       - install -Dm644 ${FLATPAK_BUILDER_BUILDDIR}/LICENSE -t /app/share/licenses/io.github.ada_h00k.Corvus
     sources:
       - type: dir
