@@ -1,0 +1,41 @@
+name: CodeQL (Swift)
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: "23 4 * * 2"
+
+jobs:
+  analyze-swift:
+    name: Analyze (swift)
+    runs-on: macos-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+
+      # 1. Rust-Staticlib bauen – MUSS --release sein, weil Package.swift
+      #    hart auf history-store/target/release zeigt!
+      - name: Build history-store (Rust staticlib)
+        run: cargo build --release --locked --manifest-path history-store/Cargo.toml
+
+      # 2. Swift-Package bauen (läuft unter dem CodeQL-Tracer)
+      - name: Build Swift package
+        run: swift build --package-path macos
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:swift"
