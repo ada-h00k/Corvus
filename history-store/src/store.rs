@@ -23,8 +23,7 @@ use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use argon2::{Algorithm, Argon2, Params, Version};
-use chacha20poly1305::aead::rand_core::RngCore;
-use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload};
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -186,9 +185,9 @@ impl Header {
     /// Create a fresh header that wraps `dek` under a key derived from `pass`.
     fn wrap_new(pass: &str, dek: &[u8; KEY_LEN], params: KdfParams) -> Result<Header, StoreError> {
         let mut salt = [0u8; SALT_LEN];
-        OsRng.fill_bytes(&mut salt);
+        getrandom::fill(&mut salt).map_err(|e| StoreError::Crypto(e.to_string()))?;
         let mut nonce = [0u8; NONCE_LEN];
-        OsRng.fill_bytes(&mut nonce);
+        getrandom::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
         let mut h = Header { params, salt, nonce, wrapped: [0; KEY_LEN + TAG_LEN] };
         let kek = derive_kek(pass, &h.salt, params)?;
         let cipher = XChaCha20Poly1305::new(Key::from_slice(&kek[..]));
@@ -237,7 +236,7 @@ fn record_aad(seq: u64) -> [u8; 16] {
 fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
     let json = Zeroizing::new(serde_json::to_vec(rec).map_err(|e| StoreError::Crypto(e.to_string()))?);
     let mut nonce = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce);
+    getrandom::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
     let cipher = XChaCha20Poly1305::new(Key::from_slice(dek));
     let aad = record_aad(seq);
     let ct = cipher
@@ -298,7 +297,7 @@ impl Store {
             fs::create_dir_all(dir)?;
         }
         let mut dek = Zeroizing::new([0u8; KEY_LEN]);
-        OsRng.fill_bytes(&mut dek[..]);
+        getrandom::fill(&mut dek[..]).map_err(|e| StoreError::Crypto(e.to_string()))?;
         let header = Header::wrap_new(pass, &dek, params)?;
         let bytes = header.to_bytes();
         write_atomic(path, &bytes)?;
