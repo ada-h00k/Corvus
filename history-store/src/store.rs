@@ -22,12 +22,15 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
-use argon2::{Algorithm, Argon2, Params, Version};
+use std::collections::BTreeMap;
+
+use argon2::{Algorithm, Argon2, Block, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use zeroize::Zeroizing;
+
+use crate::json::{self, Value};
+use crate::rng;
+use crate::secret::{self, Zeroizing};
 
 const MAGIC: &[u8; 4] = b"SCQH";
 const VERSION: u8 = 1;
@@ -87,46 +90,176 @@ impl From<io::Error> for StoreError {
 ///
 /// Messages are identified by `(ts, au)`: timestamp in ms and author key.
 /// Records written by older versions (without `au`/`d`) stay readable.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "t")]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Record {
     /// A chat message. `d` carries optional extras: `q` (quote) and `at` (attachments).
-    #[serde(rename = "m")]
     Msg {
         c: String,
         ts: i64,
         s: String,
         x: String,
         o: bool,
-        #[serde(default)]
         au: String,
-        #[serde(default, skip_serializing_if = "Value::is_null")]
         d: Value,
     },
     /// Display name learnt from an incoming message.
-    #[serde(rename = "n")]
     Name { c: String, n: String },
     /// Locally assigned contact nickname.
-    #[serde(rename = "p")]
     Nickname { c: String, n: String },
     /// Conversation deleted (only used if a log is not compacted).
-    #[serde(rename = "d")]
     Del { c: String },
     /// Merge `d` into the extras of message `(ts, au)` (e.g. a late thumbnail).
-    #[serde(rename = "u")]
     Upd { c: String, ts: i64, au: String, d: Value },
     /// Reaction `e` by `by` to message `(ts, au)`; empty `e` removes it.
-    #[serde(rename = "r")]
     React { c: String, ts: i64, au: String, by: String, e: String },
     /// Archive state: `v` = archived here, `s` = last state seen from signal-cli.
-    #[serde(rename = "a")]
     Archive { c: String, v: bool, s: bool },
     /// Local "mute notifications" flag of a conversation.
-    #[serde(rename = "k")]
     Mute { c: String, v: bool },
     /// Signal disappearing-message timer in seconds (0 = disabled).
-    #[serde(rename = "e")]
     Expiration { c: String, v: i64 },
+}
+
+/// Incremental writer for one flat JSON object with a fixed key order.
+struct ObjWriter(String);
+
+impl ObjWriter {
+    fn new(tag: &str) -> Self {
+        let mut s = String::from("{\"t\":");
+        json::write_str(&mut s, tag);
+        ObjWriter(s)
+    }
+    fn key(&mut self, k: &str) {
+        self.0.push(',');
+        json::write_str(&mut self.0, k);
+        self.0.push(':');
+    }
+    fn str(mut self, k: &str, v: &str) -> Self {
+        self.key(k);
+        json::write_str(&mut self.0, v);
+        self
+    }
+    fn int(mut self, k: &str, v: i64) -> Self {
+        self.key(k);
+        self.0.push_str(&v.to_string());
+        self
+    }
+    fn bool(mut self, k: &str, v: bool) -> Self {
+        self.key(k);
+        self.0.push_str(if v { "true" } else { "false" });
+        self
+    }
+    fn val(mut self, k: &str, v: &Value) -> Self {
+        self.key(k);
+        v.write_to(&mut self.0);
+        self
+    }
+    fn end(mut self) -> String {
+        self.0.push('}');
+        self.0
+    }
+}
+
+type Fields = BTreeMap<String, Value>;
+
+fn field<'a>(o: &'a Fields, k: &str) -> Result<&'a Value, json::Error> {
+    o.get(k).ok_or_else(|| json::Error(format!("missing field `{k}`")))
+}
+fn f_str(o: &Fields, k: &str) -> Result<String, json::Error> {
+    field(o, k)?.as_str().map(str::to_owned).ok_or_else(|| json::Error(format!("field `{k}` must be a string")))
+}
+fn f_i64(o: &Fields, k: &str) -> Result<i64, json::Error> {
+    field(o, k)?.as_i64().ok_or_else(|| json::Error(format!("field `{k}` must be an integer")))
+}
+fn f_bool(o: &Fields, k: &str) -> Result<bool, json::Error> {
+    field(o, k)?.as_bool().ok_or_else(|| json::Error(format!("field `{k}` must be a boolean")))
+}
+
+impl Record {
+    /// Compact JSON object; the tag `t` comes first.
+    pub fn to_json(&self) -> String {
+        match self {
+            Record::Msg { c, ts, s, x, o, au, d } => {
+                let w = ObjWriter::new("m").str("c", c).int("ts", *ts).str("s", s).str("x", x).bool("o", *o).str("au", au);
+                let w = if d.is_null() { w } else { w.val("d", d) };
+                w.end()
+            }
+            Record::Name { c, n } => ObjWriter::new("n").str("c", c).str("n", n).end(),
+            Record::Nickname { c, n } => ObjWriter::new("p").str("c", c).str("n", n).end(),
+            Record::Del { c } => ObjWriter::new("d").str("c", c).end(),
+            Record::Upd { c, ts, au, d } => ObjWriter::new("u").str("c", c).int("ts", *ts).str("au", au).val("d", d).end(),
+            Record::React { c, ts, au, by, e } => {
+                ObjWriter::new("r").str("c", c).int("ts", *ts).str("au", au).str("by", by).str("e", e).end()
+            }
+            Record::Archive { c, v, s } => ObjWriter::new("a").str("c", c).bool("v", *v).bool("s", *s).end(),
+            Record::Mute { c, v } => ObjWriter::new("k").str("c", c).bool("v", *v).end(),
+            Record::Expiration { c, v } => ObjWriter::new("e").str("c", c).int("v", *v).end(),
+        }
+    }
+
+    /// Build a record from a parsed JSON object. Unknown extra keys are ignored;
+    /// `au` and `d` of a message are optional (records of older versions).
+    pub fn from_value(v: &Value) -> Result<Record, json::Error> {
+        let Value::Obj(o) = v else {
+            return Err(json::Error("record must be a JSON object".into()));
+        };
+        let tag = f_str(o, "t")?;
+        Ok(match tag.as_str() {
+            "m" => Record::Msg {
+                c: f_str(o, "c")?,
+                ts: f_i64(o, "ts")?,
+                s: f_str(o, "s")?,
+                x: f_str(o, "x")?,
+                o: f_bool(o, "o")?,
+                au: if o.contains_key("au") { f_str(o, "au")? } else { String::new() },
+                d: o.get("d").cloned().unwrap_or(Value::Null),
+            },
+            "n" => Record::Name { c: f_str(o, "c")?, n: f_str(o, "n")? },
+            "p" => Record::Nickname { c: f_str(o, "c")?, n: f_str(o, "n")? },
+            "d" => Record::Del { c: f_str(o, "c")? },
+            "u" => Record::Upd { c: f_str(o, "c")?, ts: f_i64(o, "ts")?, au: f_str(o, "au")?, d: field(o, "d")?.clone() },
+            "r" => Record::React {
+                c: f_str(o, "c")?,
+                ts: f_i64(o, "ts")?,
+                au: f_str(o, "au")?,
+                by: f_str(o, "by")?,
+                e: f_str(o, "e")?,
+            },
+            "a" => Record::Archive { c: f_str(o, "c")?, v: f_bool(o, "v")?, s: f_bool(o, "s")? },
+            "k" => Record::Mute { c: f_str(o, "c")?, v: f_bool(o, "v")? },
+            "e" => Record::Expiration { c: f_str(o, "c")?, v: f_i64(o, "v")? },
+            other => return Err(json::Error(format!("unknown record type `{other}`"))),
+        })
+    }
+
+    pub fn from_json(text: &str) -> Result<Record, json::Error> {
+        Record::from_value(&Value::parse(text)?)
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> Result<Record, json::Error> {
+        Record::from_value(&Value::parse_slice(bytes)?)
+    }
+
+    /// Parse a JSON array of records.
+    pub fn vec_from_json(text: &str) -> Result<Vec<Record>, json::Error> {
+        match Value::parse(text)? {
+            Value::Arr(items) => items.iter().map(Record::from_value).collect(),
+            _ => Err(json::Error("expected a JSON array of records".into())),
+        }
+    }
+
+    /// Serialize records as a JSON array.
+    pub fn vec_to_json(records: &[Record]) -> String {
+        let mut out = String::from("[");
+        for (i, r) in records.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&r.to_json());
+        }
+        out.push(']');
+        out
+    }
 }
 
 #[derive(Clone)]
@@ -185,15 +318,15 @@ impl Header {
     /// Create a fresh header that wraps `dek` under a key derived from `pass`.
     fn wrap_new(pass: &str, dek: &[u8; KEY_LEN], params: KdfParams) -> Result<Header, StoreError> {
         let mut salt = [0u8; SALT_LEN];
-        getrandom::fill(&mut salt).map_err(|e| StoreError::Crypto(e.to_string()))?;
+        rng::fill(&mut salt).map_err(|e| StoreError::Crypto(e.to_string()))?;
         let mut nonce = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
+        rng::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
         let mut h = Header { params, salt, nonce, wrapped: [0; KEY_LEN + TAG_LEN] };
         let kek = derive_kek(pass, &h.salt, params)?;
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&kek[..]));
+        let cipher = XChaCha20Poly1305::new(key_ref(&kek[..])?);
         let aad = h.aad();
         let ct = cipher
-            .encrypt(XNonce::from_slice(&h.nonce), Payload { msg: dek, aad: &aad })
+            .encrypt(nonce_ref(&h.nonce)?, Payload { msg: dek, aad: &aad })
             .map_err(|_| StoreError::Crypto("key wrapping failed".into()))?;
         h.wrapped.copy_from_slice(&ct);
         Ok(h)
@@ -201,10 +334,10 @@ impl Header {
 
     fn unwrap_dek(&self, pass: &str) -> Result<Zeroizing<[u8; KEY_LEN]>, StoreError> {
         let kek = derive_kek(pass, &self.salt, self.params)?;
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&kek[..]));
+        let cipher = XChaCha20Poly1305::new(key_ref(&kek[..])?);
         let aad = self.aad();
         let pt = cipher
-            .decrypt(XNonce::from_slice(&self.nonce), Payload { msg: &self.wrapped, aad: &aad })
+            .decrypt(nonce_ref(&self.nonce)?, Payload { msg: &self.wrapped, aad: &aad })
             .map_err(|_| StoreError::WrongPassphrase)?;
         let pt = Zeroizing::new(pt);
         if pt.len() != KEY_LEN {
@@ -216,12 +349,29 @@ impl Header {
     }
 }
 
+/// Checked slice -> cipher key/nonce reference (replaces the deprecated `from_slice`).
+fn key_ref(b: &[u8]) -> Result<&Key, StoreError> {
+    <&Key>::try_from(b).map_err(|_| StoreError::Crypto("bad key length".into()))
+}
+
+fn nonce_ref(b: &[u8]) -> Result<&XNonce, StoreError> {
+    <&XNonce>::try_from(b).map_err(|_| StoreError::Crypto("bad nonce length".into()))
+}
+
 fn derive_kek(pass: &str, salt: &[u8], p: KdfParams) -> Result<Zeroizing<[u8; KEY_LEN]>, StoreError> {
     let params = Params::new(p.m_kib, p.t, p.p, Some(KEY_LEN)).map_err(|e| StoreError::Crypto(e.to_string()))?;
-    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params.clone());
+    // The working memory is provided here instead of by argon2's `alloc` feature:
+    // that feature drags the `password-hash`/`phc` crates into the dependency
+    // graph. Allocation failure is reported instead of aborting, and the memory
+    // (derived from the passphrase) is wiped afterwards.
+    let n = params.block_count();
+    let mut mem = Zeroizing::new(secret::BlockMem::default());
+    mem.0.try_reserve_exact(n).map_err(|_| StoreError::Crypto("out of memory".into()))?;
+    mem.0.resize(n, Block::default());
     let mut out = Zeroizing::new([0u8; KEY_LEN]);
     argon
-        .hash_password_into(pass.as_bytes(), salt, &mut out[..])
+        .hash_password_into_with_memory(pass.as_bytes(), salt, &mut out[..], &mut mem.0[..])
         .map_err(|e| StoreError::Crypto(e.to_string()))?;
     Ok(out)
 }
@@ -234,13 +384,13 @@ fn record_aad(seq: u64) -> [u8; 16] {
 }
 
 fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
-    let json = Zeroizing::new(serde_json::to_vec(rec).map_err(|e| StoreError::Crypto(e.to_string()))?);
+    let json = Zeroizing::new(rec.to_json().into_bytes());
     let mut nonce = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(dek));
+    rng::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
+    let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
     let aad = record_aad(seq);
     let ct = cipher
-        .encrypt(XNonce::from_slice(&nonce), Payload { msg: &json, aad: &aad })
+        .encrypt(nonce_ref(&nonce)?, Payload { msg: &json, aad: &aad })
         .map_err(|_| StoreError::Crypto("encryption failed".into()))?;
     let mut buf = Vec::with_capacity(4 + NONCE_LEN + ct.len());
     buf.extend_from_slice(&((NONCE_LEN + ct.len()) as u32).to_le_bytes());
@@ -297,7 +447,7 @@ impl Store {
             fs::create_dir_all(dir)?;
         }
         let mut dek = Zeroizing::new([0u8; KEY_LEN]);
-        getrandom::fill(&mut dek[..]).map_err(|e| StoreError::Crypto(e.to_string()))?;
+        rng::fill(&mut dek[..]).map_err(|e| StoreError::Crypto(e.to_string()))?;
         let header = Header::wrap_new(pass, &dek, params)?;
         let bytes = header.to_bytes();
         write_atomic(path, &bytes)?;
@@ -318,7 +468,7 @@ impl Store {
         reader.read_exact(&mut header_bytes)?;
         let header = Header::parse(&header_bytes)?;
         let dek = header.unwrap_dek(pass)?;
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&dek[..]));
+        let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
 
         let mut records = Vec::new();
         let mut pos = HEADER_LEN as u64;
@@ -343,11 +493,10 @@ impl Store {
             let ct = &frame[NONCE_LEN..];
             let aad = record_aad(seq);
             let pt = cipher
-                .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
+                .decrypt(nonce_ref(nonce)?, Payload { msg: ct, aad: &aad })
                 .map_err(|_| StoreError::Corrupt(format!("record {seq} failed authentication")))?;
             let pt = Zeroizing::new(pt);
-            let rec: Record = serde_json::from_slice(&pt)
-                .map_err(|e| StoreError::Corrupt(format!("record {seq}: {e}")))?;
+            let rec = Record::from_slice(&pt).map_err(|e| StoreError::Corrupt(format!("record {seq}: {e}")))?;
             records.push(rec);
             pos += 4 + len as u64;
             seq += 1;
@@ -536,13 +685,13 @@ mod tests {
     #[test]
     fn old_records_without_new_fields_still_parse() {
         let old = r#"{"t":"m","c":"+49","ts":5,"s":"A","x":"hi","o":true}"#;
-        let r: Record = serde_json::from_str(old).unwrap();
+        let r = Record::from_json(old).unwrap();
         assert_eq!(
             r,
             Record::Msg { c: "+49".into(), ts: 5, s: "A".into(), x: "hi".into(), o: true, au: String::new(), d: Value::Null }
         );
         // and null extras are not written back
-        assert!(!serde_json::to_string(&r).unwrap().contains("\"d\""));
+        assert!(!r.to_json().contains("\"d\""));
     }
 
     #[test]
@@ -556,10 +705,10 @@ mod tests {
                 x: "look".into(),
                 o: false,
                 au: "+49".into(),
-                d: serde_json::json!({"q": {"id": 3, "a": "+1", "t": "quoted"}, "at": [{"id": "abc", "ct": "image/png"}]}),
+                d: Value::parse(r#"{"q": {"id": 3, "a": "+1", "t": "quoted"}, "at": [{"id": "abc", "ct": "image/png"}]}"#).unwrap(),
             },
             Record::Nickname { c: "+49".into(), n: "Bobby".into() },
-            Record::Upd { c: "+49".into(), ts: 10, au: "+49".into(), d: serde_json::json!({"at": [{"id": "abc", "th": "AAAA"}]}) },
+            Record::Upd { c: "+49".into(), ts: 10, au: "+49".into(), d: Value::parse(r#"{"at": [{"id": "abc", "th": "AAAA"}]}"#).unwrap() },
             Record::React { c: "+49".into(), ts: 10, au: "+49".into(), by: "+1".into(), e: "👍".into() },
             Record::Archive { c: "+49".into(), v: true, s: false },
             Record::Mute { c: "+49".into(), v: true },

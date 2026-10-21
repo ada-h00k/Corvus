@@ -4,6 +4,9 @@
 //! The handle is single-threaded from the caller's point of view: use it from
 //! one thread at a time.
 
+pub mod json;
+pub mod rng;
+pub mod secret;
 pub mod store;
 
 use std::ffi::{c_char, c_int, CStr, CString};
@@ -100,7 +103,7 @@ pub unsafe extern "C" fn sc_store_open(
         match Store::open(Path::new(path), pass) {
             Ok((s, recs)) => {
                 if !records_json.is_null() {
-                    let json = serde_json::to_string(&recs).unwrap_or_else(|_| "[]".into());
+                    let json = Record::vec_to_json(&recs);
                     *records_json = CString::new(json).map(CString::into_raw).unwrap_or(std::ptr::null_mut());
                 }
                 set(err, SC_OK);
@@ -119,7 +122,7 @@ pub unsafe extern "C" fn sc_store_open(
 pub unsafe extern "C" fn sc_store_append(s: *mut ScStore, record_json: *const c_char) -> c_int {
     guard(SC_ERR_PANIC, || {
         let (Some(s), Some(j)) = (s.as_mut(), cstr(record_json)) else { return SC_ERR_ARG };
-        let Ok(rec) = serde_json::from_str::<Record>(j) else { return SC_ERR_ARG };
+        let Ok(rec) = Record::from_json(j) else { return SC_ERR_ARG };
         match s.0.append(&rec) {
             Ok(()) => SC_OK,
             Err(e) => code(&e),
@@ -132,7 +135,7 @@ pub unsafe extern "C" fn sc_store_append(s: *mut ScStore, record_json: *const c_
 pub unsafe extern "C" fn sc_store_rewrite(s: *mut ScStore, records_json: *const c_char) -> c_int {
     guard(SC_ERR_PANIC, || {
         let (Some(s), Some(j)) = (s.as_mut(), cstr(records_json)) else { return SC_ERR_ARG };
-        let Ok(recs) = serde_json::from_str::<Vec<Record>>(j) else { return SC_ERR_ARG };
+        let Ok(recs) = Record::vec_from_json(j) else { return SC_ERR_ARG };
         match s.0.rewrite(&recs) {
             Ok(()) => SC_OK,
             Err(e) => code(&e),

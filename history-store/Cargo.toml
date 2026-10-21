@@ -9,13 +9,15 @@ description = "Encrypted chat-history store for corvus (C ABI)"
 name = "history_store"
 crate-type = ["staticlib", "rlib"]
 
+# Only the audited crypto primitives are external dependencies. JSON, wiping of
+# key material and the OS random source are implemented in-tree
+# (src/json.rs, src/secret.rs, src/rng.rs). Default features are off so that
+# password-hash/phc/rand_core/getrandom are not pulled in (argon2's `alloc`
+# feature would enable the password-hash code path, so Argon2's working memory
+# is allocated in src/store.rs instead).
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-chacha20poly1305 = "0.11"
-argon2 = "0.6"
-getrandom = "0.4"
-zeroize = "1"
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
+argon2 = { version = "0.6", default-features = false }
 
 # Crypto is unusably slow at opt-level 0, also for `cargo test`.
 [profile.dev.package."*"]

@@ -109,7 +109,7 @@ target_link_libraries(app_core PUBLIC
 )
 
 if(WIN32)
-    # System libraries required by the Rust static library (std + getrandom).
+    # System libraries required by the Rust static library (std + OS RNG, see history-store/src/rng.rs).
     target_link_libraries(app_core PUBLIC
         advapi32 bcrypt kernel32 ntdll userenv ws2_32 synchronization)
     # M_PI etc. in <cmath>; keep <windows.h> from defining min/max macros.
