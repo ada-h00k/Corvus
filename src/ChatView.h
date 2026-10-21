@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractScrollArea>
+#include <QImage>
 #include <QPixmap>
 #include <QTextCursor>
 #include <functional>
@@ -13,7 +14,7 @@ class QTextDocument;
 class QMovie;
 class QMediaPlayer;
 class QAudioOutput;
-class QVideoWidget;
+class QVideoSink;
 class QToolButton;
 class QSlider;
 class QLabel;
@@ -132,6 +133,7 @@ private:
     void stopAutoScroll();
     bool atBottom() const;
     void updateVideoGeometry();
+    QRect attachmentRectForVideo() const;
 
     QList<Message> m_msgs;
     QList<Item> m_items;
@@ -152,7 +154,8 @@ private:
     qint64 m_audioDurationMs = 0;
     QMediaPlayer *m_videoPlayer = nullptr;
     QAudioOutput *m_videoAudioOutput = nullptr;
-    QVideoWidget *m_videoWidget = nullptr;
+    QVideoSink *m_videoSink = nullptr;
+    QImage m_videoFrame;
     QToolButton *m_videoToggle = nullptr;
     QSlider *m_videoProgress = nullptr;
     QLabel *m_videoElapsed = nullptr;

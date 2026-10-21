@@ -24,7 +24,8 @@
 #include <QTextDocument>
 #include <QTimer>
 #include <QToolButton>
-#include <QVideoWidget>
+#include <QVideoFrame>
+#include <QVideoSink>
 #include <algorithm>
 
 #include "Attachments.h"
@@ -350,7 +351,8 @@ void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const 
     stopVideoPlayback();
     m_videoPlayer = new QMediaPlayer(this);
     m_videoAudioOutput = new QAudioOutput(this);
-    m_videoWidget = new QVideoWidget(viewport());
+    m_videoSink = new QVideoSink(this);
+    m_videoFrame = QImage();
     m_videoToggle = new QToolButton(viewport());
     m_videoProgress = new SeekSlider(Qt::Horizontal, viewport());
     m_videoElapsed = new QLabel(QStringLiteral("00:00"), viewport());
@@ -379,7 +381,16 @@ void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const 
     m_videoElapsed->setObjectName(QStringLiteral("videoElapsed"));
     m_videoRemaining->setObjectName(QStringLiteral("videoRemaining"));
     m_videoPlayer->setAudioOutput(m_videoAudioOutput);
-    m_videoPlayer->setVideoOutput(m_videoWidget);
+    m_videoPlayer->setVideoOutput(m_videoSink);
+    // Frames are painted by the viewport itself (see paintEvent) instead of a
+    // QVideoWidget child: a native video surface is not clipped to the
+    // viewport and would poke out over the composer when scrolling.
+    connect(m_videoSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
+        if (!m_videoSink) return;
+        m_videoFrame = frame.isValid() ? frame.toImage() : QImage();
+        const QRect rect = attachmentRectForVideo();
+        if (rect.isValid()) viewport()->update(rect);
+    });
     connect(m_videoToggle, &QToolButton::clicked, this, &ChatView::toggleVideoPlayback);
     connect(m_videoProgress, &QSlider::sliderMoved, this, [this](int value) {
         if (m_videoPlayer && m_videoPlayer->duration() > 0)
@@ -412,8 +423,6 @@ void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const 
     m_videoAttachment = attachmentIndex;
     m_videoLoadingTs = 0;
     m_videoLoadingAttachment = -1;
-    m_videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
-    m_videoWidget->show();
     m_videoToggle->show();
     m_videoProgress->show();
     m_videoElapsed->show();
@@ -439,7 +448,7 @@ void ChatView::stopVideoPlayback()
 {
     if (m_videoPlayer) m_videoPlayer->stop();
     if (m_videoPlayer) {
-        m_videoPlayer->setVideoOutput(static_cast<QVideoWidget *>(nullptr));
+        m_videoPlayer->setVideoOutput(static_cast<QVideoSink *>(nullptr));
         m_videoPlayer->setAudioOutput(static_cast<QAudioOutput *>(nullptr));
     }
     delete m_videoToggle;
@@ -448,12 +457,13 @@ void ChatView::stopVideoPlayback()
     delete m_videoRemaining;
     delete m_videoPlayer;
     delete m_videoAudioOutput;
-    delete m_videoWidget;
+    delete m_videoSink;
     m_videoToggle = nullptr;
     m_videoProgress = nullptr;
     m_videoElapsed = nullptr;
     m_videoRemaining = nullptr;
-    m_videoWidget = nullptr;
+    m_videoSink = nullptr;
+    m_videoFrame = QImage();
     m_videoPlayer = nullptr;
     m_videoAudioOutput = nullptr;
     m_videoMessageTs = 0;
@@ -462,9 +472,21 @@ void ChatView::stopVideoPlayback()
     m_videoLoadingAttachment = -1;
 }
 
+QRect ChatView::attachmentRectForVideo() const
+{
+    if (m_videoAttachment < 0) return {};
+    for (int i = 0; i < m_msgs.size() && i < m_items.size(); ++i) {
+        if (m_msgs[i].ts() != m_videoMessageTs) continue;
+        if (m_videoAttachment >= m_items[i].attRects.size()) return {};
+        return m_items[i].attRects[m_videoAttachment]
+            .translated(0, m_items[i].y - verticalScrollBar()->value());
+    }
+    return {};
+}
+
 void ChatView::updateVideoGeometry()
 {
-    if (!m_videoWidget || !m_videoToggle || !m_videoProgress || !m_videoElapsed || !m_videoRemaining) return;
+    if (!m_videoSink || !m_videoToggle || !m_videoProgress || !m_videoElapsed || !m_videoRemaining) return;
     int index = -1;
     for (int i = 0; i < m_msgs.size(); ++i) {
         if (m_msgs[i].ts() == m_videoMessageTs) { index = i; break; }
@@ -473,33 +495,24 @@ void ChatView::updateVideoGeometry()
         stopVideoPlayback();
         return;
     }
-    const QRect rect = m_items[index].attRects[m_videoAttachment]
-                           .translated(0, m_items[index].y - verticalScrollBar()->value());
-    const QRect visible = rect.intersected(viewport()->rect());
-    if (visible.isEmpty()) {
-        m_videoWidget->hide();
-        m_videoToggle->hide();
-        m_videoProgress->hide();
-        m_videoElapsed->hide();
-        m_videoRemaining->hide();
-        return;
-    }
-    m_videoWidget->setGeometry(rect);
+    const QRect rect = attachmentRectForVideo();
+    viewport()->update();
+
+    // The video itself is painted in paintEvent and clipped by the viewport.
+    // The small overlay controls are shown only while fully inside it.
+    const QRect viewRect = viewport()->rect();
+    const auto place = [&viewRect](QWidget *w, const QRect &geometry) {
+        w->setGeometry(geometry);
+        const bool inside = viewRect.contains(geometry);
+        w->setVisible(inside);
+        if (inside) w->raise();
+    };
     const int controlsY = rect.bottom() - 46;
-    m_videoToggle->move(rect.left() + 6, controlsY);
-    m_videoProgress->setGeometry(rect.left() + 42, controlsY + 2,
-                                 qMax(40, rect.width() - 50), 24);
-    m_videoElapsed->move(rect.left() + 6, controlsY + 27);
-    m_videoRemaining->move(rect.right() - m_videoRemaining->width() - 6, controlsY + 27);
-    m_videoWidget->show();
-    m_videoToggle->show();
-    m_videoProgress->show();
-    m_videoElapsed->show();
-    m_videoRemaining->show();
-    m_videoToggle->raise();
-    m_videoProgress->raise();
-    m_videoElapsed->raise();
-    m_videoRemaining->raise();
+    place(m_videoToggle, QRect(QPoint(rect.left() + 6, controlsY), m_videoToggle->size()));
+    place(m_videoProgress, QRect(rect.left() + 42, controlsY + 2, qMax(40, rect.width() - 50), 24));
+    place(m_videoElapsed, QRect(QPoint(rect.left() + 6, controlsY + 27), m_videoElapsed->size()));
+    place(m_videoRemaining, QRect(QPoint(rect.right() - m_videoRemaining->width() - 6, controlsY + 27),
+                                  m_videoRemaining->size()));
 }
 
 void ChatView::setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data)
@@ -942,6 +955,24 @@ void ChatView::paintItem(QPainter &p, int i)
     for (int a = 0; a < m.attachments.size() && a < it.attRects.size(); ++a) {
         const QRect rc = it.attRects[a];
         const Attachment &att = m.attachments[a];
+        if (att.isVideo() && m_videoSink && m_videoMessageTs == m.ts() && m_videoAttachment == a) {
+            QPainterPath vp;
+            const qreal vr = qMin<qreal>(qMin(m_ap.radius, 14), qMin(rc.width(), rc.height()) / 2.0);
+            vp.addRoundedRect(QRectF(rc), vr, vr);
+            p.save();
+            p.setClipPath(vp);
+            p.fillRect(rc, Qt::black);
+            if (!m_videoFrame.isNull()) {
+                QSize target = m_videoFrame.size();
+                target.scale(rc.size(), Qt::KeepAspectRatio);
+                QRect dst(QPoint(0, 0), target);
+                dst.moveCenter(rc.center());
+                p.setRenderHint(QPainter::SmoothPixmapTransform);
+                p.drawImage(dst, m_videoFrame);
+            }
+            p.restore();
+            continue;
+        }
         if (att.isGif() && !it.movies[a] && !it.animationRequested[a]) {
             it.animationRequested[a] = true;
             emit animatedAttachmentRequested(i, a);
