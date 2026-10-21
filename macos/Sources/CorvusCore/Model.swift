@@ -79,6 +79,7 @@ public struct Message: Equatable, Identifiable {
     public var editCount = 0
     public var expiresInSeconds = 0
     public var expirationStartMs: Int64 = 0
+    public var deleted = false        // deleted for everyone: only a placeholder is left
 
     public init() {}
 
@@ -91,8 +92,19 @@ public struct Message: Equatable, Identifiable {
     public static let editWindowMs: Int64 = 3 * 60 * 60 * 1000
     public static let maxEdits = 10
 
+    /// Turns the message into the "This message was deleted." placeholder, dropping all content.
+    public mutating func markDeleted() {
+        deleted = true
+        text = ""
+        attachments = []
+        quote = Quote()
+        reactions = [:]
+        editTs = 0
+        editCount = 0
+    }
+
     public func canEdit(nowMs: Int64) -> Bool {
-        outgoing && !text.isEmpty && editCount < Message.maxEdits && nowMs - ts <= Message.editWindowMs
+        outgoing && !deleted && !text.isEmpty && editCount < Message.maxEdits && nowMs - ts <= Message.editWindowMs
     }
 }
 

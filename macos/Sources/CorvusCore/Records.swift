@@ -37,16 +37,18 @@ public enum Records {
 
     public static func message(_ conv: String, _ m: Message) -> JSON {
         var d: JSON = [:]
+        if m.deleted { d["dl"] = true } // placeholder only: no quote, attachments or edit state
         if m.expiresInSeconds > 0 {
             d["ex"] = m.expiresInSeconds
             d["es"] = m.expirationStartMs
         }
-        if m.quote.valid {
+        if m.quote.valid && !m.deleted {
             d["q"] = ["id": m.quote.id, "a": m.quote.authorKey, "t": m.quote.text, "n": m.quote.attachmentNote] as JSON
         }
-        if !m.attachments.isEmpty { d["at"] = m.attachments.map(attachmentToJson) }
-        var rec: JSON = ["t": "m", "c": conv, "ts": m.ts, "s": m.sender, "x": m.text, "o": m.outgoing, "au": m.authorKey]
-        if m.editCount > 0 { d["ed"] = editToJson(m) }
+        if !m.attachments.isEmpty && !m.deleted { d["at"] = m.attachments.map(attachmentToJson) }
+        var rec: JSON = ["t": "m", "c": conv, "ts": m.ts, "s": m.sender, "x": m.deleted ? "" : m.text,
+                         "o": m.outgoing, "au": m.authorKey]
+        if m.editCount > 0 && !m.deleted { d["ed"] = editToJson(m) }
         if !d.isEmpty { rec["d"] = d }
         return rec
     }
@@ -54,6 +56,11 @@ public enum Records {
     /// Text edit of a message: an "update" record with the extra "ed"; ts = original timestamp.
     public static func edit(_ conv: String, _ m: Message) -> JSON {
         ["t": "u", "c": conv, "ts": m.ts, "au": m.authorKey, "d": ["ed": editToJson(m)] as JSON]
+    }
+
+    /// Delete for everyone: an "update" record with the extra "dl"; ts = original timestamp.
+    public static func deletion(_ conv: String, _ m: Message) -> JSON {
+        ["t": "u", "c": conv, "ts": m.ts, "au": m.authorKey, "d": ["dl": true] as JSON]
     }
 
     public static func expirationUpdate(_ conv: String, _ m: Message) -> JSON {
@@ -65,7 +72,7 @@ public enum Records {
         ["t": "u", "c": conv, "ts": m.ts, "au": m.authorKey, "d": ["at": m.attachments.map(attachmentToJson)] as JSON]
     }
 
-    /// Extras ("d": quote, attachments, edit state, expiry) as stored in message / update records.
+    /// Extras ("d": quote, attachments, edit state, expiry, deletion) as stored in message / update records.
     public static func applyExtras(_ m: inout Message, _ d: JSON) {
         if let q = d["q"] as? JSON {
             m.quote.valid = true
@@ -85,6 +92,9 @@ public enum Records {
         }
         if d["at"] != nil {
             m.attachments = jsonArray(d["at"]).map { attachmentFromJson(jsonObject($0)) }
+        }
+        if jsonBool(d["dl"]) { // last: wins over anything else in the same record
+            m.markDeleted()
         }
     }
 

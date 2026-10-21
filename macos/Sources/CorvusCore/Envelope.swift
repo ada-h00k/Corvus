@@ -2,7 +2,7 @@ import Foundation
 
 /// A signal-cli "receive" envelope reduced to what the GUI needs.
 public struct ParsedEnvelope {
-    public enum Kind { case none, message, reaction, edit, expirationUpdate }
+    public enum Kind { case none, message, reaction, edit, remoteDelete, expirationUpdate }
 
     public var kind: Kind = .none
     public var outgoing = false        // sent by one of our own other devices (sync message)
@@ -18,7 +18,7 @@ public struct ParsedEnvelope {
     public var remove = false
     public var targetNumber = ""
     public var targetUuid = ""
-    public var targetTs: Int64 = 0     // reaction: reacted message; edit: timestamp of the message being edited
+    public var targetTs: Int64 = 0     // reaction: reacted message; edit/remoteDelete: timestamp of the target message
 
     // @mentions in msg.text (message, edit)
     public var mentions: [Mention] = []
@@ -112,6 +112,13 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
         if out.targetNumber.isEmpty { out.targetNumber = jsonString(r["targetAuthor"]) }
         out.targetUuid = jsonString(r["targetAuthorUuid"])
         out.targetTs = jsonInt64(r["targetSentTimestamp"])
+        return
+    }
+    // "Delete for everyone": {"remoteDelete": {"timestamp": <sent timestamp of the deleted message>}}
+    let rd = jsonObject(dm["remoteDelete"])
+    if !rd.isEmpty {
+        out.targetTs = jsonInt64(rd["timestamp"])
+        if out.targetTs > 0 { out.kind = .remoteDelete }
         return
     }
 

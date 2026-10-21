@@ -66,6 +66,22 @@ final class EnvelopeTests: XCTestCase {
         XCTAssertEqual(sync.destination, "+49333")
         XCTAssertEqual(sync.msg.expiresInSeconds, 30)
 
+        let delete = parseEnvelope(["sourceUuid": "u-1", "dataMessage": [
+            "timestamp": 20, "remoteDelete": ["timestamp": 15], "groupInfo": ["groupId": "G1"],
+        ] as JSON])
+        XCTAssertEqual(delete.kind, .remoteDelete)
+        XCTAssertEqual(delete.src, "u-1")
+        XCTAssertEqual(delete.groupId, "G1")
+        XCTAssertEqual(delete.targetTs, 15)
+
+        let syncDelete = parseEnvelope(["sourceNumber": "+49me", "syncMessage": ["sentMessage": [
+            "destinationNumber": "+49333", "timestamp": 21, "remoteDelete": ["timestamp": 11],
+        ] as JSON]])
+        XCTAssertEqual(syncDelete.kind, .remoteDelete)
+        XCTAssertTrue(syncDelete.outgoing)
+        XCTAssertEqual(syncDelete.destination, "+49333")
+        XCTAssertEqual(syncDelete.targetTs, 11)
+
         XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "receiptMessage": ["isRead": true]]).kind, .none)
         XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "dataMessage": ["timestamp": 1]]).kind, .none)
         XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "dataMessage": ["isExpirationUpdate": true, "expiresInSeconds": 60]]).kind,
@@ -168,6 +184,40 @@ final class ChatStateTests: XCTestCase {
         XCTAssertEqual(compacted.convs["+49alice"]!.msgs, reloaded.convs["+49alice"]!.msgs)
     }
 
+    func testDeleteLeavesPlaceholder() {
+        var s = makeState()
+        var m = Message()
+        m.ts = 10
+        m.text = "secret"
+        m.authorKey = "+49alice"
+        m.quote.valid = true
+        m.attachments = [Attachment()]
+        var records = s.addMessage("+49alice", m)!.records
+        records.append(s.applyReaction("+49alice", ts: 10, authors: ["+49alice"], reactor: "+49me", emoji: "❤️")!)
+        // only the author can delete for everyone
+        XCTAssertNil(s.applyDelete("+49alice", targetTs: 10, authors: ["+49bob"]))
+        records.append(s.applyDelete("+49alice", targetTs: 10, authors: ["u-alice"])!)
+        XCTAssertNil(s.applyDelete("+49alice", targetTs: 10, authors: ["+49alice"])) // redelivery
+
+        let placeholder = s.convs["+49alice"]!.msgs[0]
+        XCTAssertTrue(placeholder.deleted)
+        XCTAssertEqual(placeholder.text, "")
+        XCTAssertTrue(placeholder.attachments.isEmpty && placeholder.reactions.isEmpty && !placeholder.quote.valid)
+        // a deleted message takes no more reactions or edits
+        XCTAssertNil(s.applyReaction("+49alice", ts: 10, authors: [], reactor: "+49me", emoji: "👍"))
+        XCTAssertNil(s.applyEdit("+49alice", targetTs: 10, authors: ["+49alice"], text: "back", newTs: 20))
+
+        // appended history and compacted history both reload as the placeholder, without the content
+        var reloaded = makeState()
+        reloaded.loadHistory(records)
+        XCTAssertEqual(reloaded.convs["+49alice"]!.msgs, [placeholder])
+        let compactedRecords = s.allRecords()
+        XCTAssertEqual(jsonString(compactedRecords.first { jsonString($0["t"]) == "m" }?["x"]), "")
+        var compacted = makeState()
+        compacted.loadHistory(compactedRecords)
+        XCTAssertEqual(compacted.convs["+49alice"]!.msgs, [placeholder])
+    }
+
     func testExpiry() {
         var s = makeState()
         var m = Message()
@@ -232,6 +282,9 @@ final class HistoryStoreTests: XCTestCase {
         m.attachments = [a]
         m.expiresInSeconds = 60
         m.expirationStartMs = 2
+        var second = m
+        second.ts += 10
+        second.text = "deleted later"
 
         let records: [JSON] = [
             Records.message("+49alice", m),
@@ -244,6 +297,9 @@ final class HistoryStoreTests: XCTestCase {
             Records.edit("+49alice", { var e = m; e.text = "edited"; e.editTs = m.ts + 1; e.editCount = 1; return e }()),
             Records.attachmentsUpdate("+49alice", m),
             Records.expirationUpdate("+49alice", m),
+            Records.message("+49alice", second),
+            Records.deletion("+49alice", second),
+            Records.message("+49alice", { var d = second; d.ts += 5; d.markDeleted(); return d }()),
         ]
 
         let store = HistoryStore()
@@ -267,6 +323,9 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(c.msgs.first?.text, "edited")
         XCTAssertEqual(c.msgs.first?.attachments.first?.thumb, Data([1, 2, 3]))
         XCTAssertEqual(c.msgs.first?.reactions["+49me"], "👍")
+        XCTAssertEqual(c.msgs.count, 3)
+        XCTAssertTrue(c.msgs[1].deleted && c.msgs[2].deleted)
+        XCTAssertEqual(c.msgs[1].text, "")
 
         try reopened.rewrite(s.allRecords())
         try reopened.changePassphrase(old: "pw", new: "pw2")

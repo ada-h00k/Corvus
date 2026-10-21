@@ -156,6 +156,7 @@ public struct ChatState {
 
     public mutating func applyReaction(_ key: String, ts: Int64, authors: [String], reactor: String, emoji: String) -> JSON? {
         guard let c = convs[key], let i = findMessage(c, ts: ts, authors: authors) else { return nil }
+        if c.msgs[i].deleted { return nil } // nothing to react to any more
         if emoji.isEmpty { convs[key]!.msgs[i].reactions.removeValue(forKey: reactor) }
         else { convs[key]!.msgs[i].reactions[reactor] = emoji }
         let m = convs[key]!.msgs[i]
@@ -164,11 +165,20 @@ public struct ChatState {
 
     public mutating func applyEdit(_ key: String, targetTs: Int64, authors: [String], text: String, newTs: Int64) -> JSON? {
         guard let c = convs[key], let i = findMessage(c, ts: targetTs, authors: authors) else { return nil }
-        if newTs <= c.msgs[i].latestTs { return nil } // already applied / outdated revision
+        if c.msgs[i].deleted || newTs <= c.msgs[i].latestTs { return nil } // deleted / already applied / outdated revision
         convs[key]!.msgs[i].text = text
         convs[key]!.msgs[i].editTs = newTs
         convs[key]!.msgs[i].editCount += 1
         return Records.edit(key, convs[key]!.msgs[i])
+    }
+
+    /// Delete for everyone (ours or the author's): the message turns into a placeholder.
+    /// Authors empty => match by timestamp only. Returns the record for the history, nil if nothing changed.
+    public mutating func applyDelete(_ key: String, targetTs: Int64, authors: [String]) -> JSON? {
+        guard let c = convs[key], let i = findMessage(c, ts: targetTs, authors: authors) else { return nil }
+        if c.msgs[i].deleted { return nil } // redelivery
+        convs[key]!.msgs[i].markDeleted()
+        return Records.deletion(key, convs[key]!.msgs[i])
     }
 
     /// Starts the local timer of incoming disappearing messages (when the chat is looked at).

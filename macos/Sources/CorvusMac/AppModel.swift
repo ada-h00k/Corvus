@@ -881,6 +881,10 @@ final class AppModel {
                 persist(rec)
             }
             return
+        case .remoteDelete:
+            // Like the official clients: only the author can delete a message for everyone.
+            applyDelete(key, ts: pe.targetTs, authors: [pe.outgoing ? account : srcKey])
+            return
         default:
             break
         }
@@ -975,7 +979,7 @@ final class AppModel {
     }
 
     func startReply(_ id: String) {
-        guard let c = currentConversation, let (_, m) = message(withId: id) else { return }
+        guard let c = currentConversation, let (_, m) = message(withId: id), !m.deleted else { return }
         replyQuote = Quote()
         replyQuote.valid = true
         replyQuote.id = m.latestTs // peers know an edited message by its latest timestamp
@@ -1177,7 +1181,7 @@ final class AppModel {
     // MARK: Reactions, deletion
 
     func sendReaction(_ id: String, _ emoji: String) {
-        guard let c = currentConversation, let (_, m) = message(withId: id) else { return }
+        guard let c = currentConversation, let (_, m) = message(withId: id), !m.deleted else { return }
         let author = chats.effectiveAuthor(c, m)
         let remove = m.reactions[account] == emoji // same emoji again = take it back
         var p: JSON = ["emoji": emoji, "targetAuthor": author, "targetTimestamp": m.latestTs, "remove": remove]
@@ -1202,7 +1206,7 @@ final class AppModel {
             return
         }
         let age = nowMs() - m.ts
-        let forEveryone = m.outgoing && age >= 0 && age <= 24 * 60 * 60 * 1000
+        let forEveryone = m.outgoing && !m.deleted && age >= 0 && age <= 24 * 60 * 60 * 1000
         let r = await Dialogs.ask("Delete message",
                                   forEveryone ? "Delete this message from this device or for everyone?" : "Delete this message from this device?",
                                   buttons: forEveryone ? ["Delete for me", "Delete for everyone"] : ["Delete for me"],
@@ -1217,7 +1221,8 @@ final class AppModel {
         if c.isGroup { p["groupIds"] = [String(key.dropFirst(2))] } else { p["recipients"] = [chats.resolveKey(key)] }
         do {
             try await cli.call("remoteDelete", p)
-            if removeMessage(key, ts: ts) { showFlash("Message deleted for everyone.", seconds: 5) }
+            // Like the official clients: a placeholder stays where the message was.
+            if applyDelete(key, ts: ts, authors: []) { showFlash("Message deleted for everyone.", seconds: 5) }
         } catch {
             showFlash("Could not delete message for everyone: \(error.localizedDescription)")
         }
@@ -1234,6 +1239,23 @@ final class AppModel {
             chats.convs[key]!.insertSorted(removed)
             showFlash("Could not remove message from history: \(error.localizedDescription)")
             return false
+        }
+        updateSearch()
+        return true
+    }
+
+    /// Delete for everyone (ours or the author's): the message turns into a placeholder.
+    @discardableResult
+    private func applyDelete(_ key: String, ts: Int64, authors: [String]) -> Bool {
+        guard let c = chats.convs[key], let i = chats.findMessage(c, ts: ts, authors: authors) else { return false }
+        if editKey == key && editTs == c.msgs[i].ts && !c.msgs[i].deleted { cancelEdit() }
+        guard let rec = chats.applyDelete(key, targetTs: ts, authors: authors) else { return false }
+        // Rewrite instead of append: the old ciphertext of the message must not stay in the file.
+        do {
+            try store.rewrite(chats.allRecords())
+        } catch {
+            showFlash("Could not remove message from history: \(error.localizedDescription)")
+            persist(rec) // at least keep the placeholder after a restart
         }
         updateSearch()
         return true

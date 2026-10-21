@@ -261,7 +261,7 @@ private struct MessageRow: View {
         }
         .foregroundStyle(.secondary)
         .padding(.bottom, 6)
-        .opacity(hovering && model.connected ? 1 : 0)
+        .opacity(hovering && model.connected && !message.deleted ? 1 : 0)
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
@@ -285,7 +285,21 @@ private struct Bubble: View {
         let showSender = isGroup && !m.outgoing && !grouping.joinedAbove
 
         Group {
-            if mediaOnly {
+            if m.deleted {
+                // "This message was deleted." / "You deleted this message." in a muted italic style
+                BubbleContentLayout(spacing: 3) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if showSender { senderLabel }
+                        Text(m.deletedText)
+                            .font(.system(size: NSFont.systemFontSize + 1).italic())
+                            .foregroundStyle(fg.opacity(0.7))
+                    }
+                    MetaRow(message: m, pending: pending, color: fg.opacity(0.7))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(shape.fill(bg))
+            } else if mediaOnly {
                 VStack(spacing: 2) {
                     ForEach(Array(m.attachments.enumerated()), id: \.offset) { i, att in
                         AttachmentView(message: m, index: i, attachment: att, foreground: fg, edgeToEdge: true)
@@ -387,6 +401,11 @@ private struct Bubble: View {
     }
 }
 
+extension Message {
+    /// Placeholder shown instead of a message that was deleted for everyone (wording as in Signal Desktop).
+    var deletedText: String { outgoing ? "You deleted this message." : "This message was deleted." }
+}
+
 /// Timer, "edited", time and delivery state.
 private struct MetaRow: View {
     let message: Message
@@ -470,16 +489,18 @@ private struct MessageMenu: View {
 
     var body: some View {
         let m = message
-        Button { model.startReply(m.id) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
-        if m.outgoing && m.authorKey == model.account && m.canEdit(nowMs: nowMs()) {
-            Button { model.startEdit(m.id) } label: { Label("Edit", systemImage: "pencil") }
-        }
-        Menu {
-            ForEach(EmojiCatalog.quickReactions, id: \.self) { e in
-                Button(m.reactions[model.account] == e ? "\(e)  (remove)" : e) { model.sendReaction(m.id, e) }
+        if !m.deleted {
+            Button { model.startReply(m.id) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
+            if m.outgoing && m.authorKey == model.account && m.canEdit(nowMs: nowMs()) {
+                Button { model.startEdit(m.id) } label: { Label("Edit", systemImage: "pencil") }
             }
-        } label: { Label("React", systemImage: "face.smiling") }
-        Divider()
+            Menu {
+                ForEach(EmojiCatalog.quickReactions, id: \.self) { e in
+                    Button(m.reactions[model.account] == e ? "\(e)  (remove)" : e) { model.sendReaction(m.id, e) }
+                }
+            } label: { Label("React", systemImage: "face.smiling") }
+            Divider()
+        }
         if !m.text.isEmpty {
             Button {
                 NSPasteboard.general.clearContents()
