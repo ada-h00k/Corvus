@@ -41,7 +41,6 @@
 #include <QTcpSocket>
 #include <QSignalSpy>
 #include <QSettings>
-#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
@@ -943,30 +942,26 @@ int main(int argc, char **argv)
         EmojiPicker picker;
         QString got;
         QObject::connect(&picker, &EmojiPicker::emojiSelected, [&](const QString &e) { got = e; });
-        auto buttons = picker.findChildren<QToolButton *>();
-        CHECK(buttons.size() > 1500);
-        const auto tabs = picker.findChildren<QTabWidget *>();
-        CHECK(!tabs.isEmpty() && tabs.first()->count() == 8);
-        QToolButton *germanyFlag = nullptr;
-        QToolButton *thumbsUp = nullptr;
-        for (QToolButton *button : buttons) {
-            if (button->text() == QStringLiteral("🇩🇪")) germanyFlag = button;
-            if (button->text() == QStringLiteral("👍")) thumbsUp = button;
-        }
-        CHECK(germanyFlag != nullptr);
-        CHECK(thumbsUp && thumbsUp->menu());
-        buttons.first()->click();
-        CHECK(!got.isEmpty());
-        if (thumbsUp && thumbsUp->menu()) {
-            QAction *darkThumbsUp = nullptr;
-            for (QAction *action : thumbsUp->menu()->actions()) {
-                if (action->text() == QStringLiteral("👍🏿")) darkThumbsUp = action;
-            }
-            CHECK(darkThumbsUp != nullptr);
-            if (darkThumbsUp) {
-                darkThumbsUp->trigger();
-                CHECK(got == QStringLiteral("👍🏿"));
-            }
+        CHECK(picker.emojiCount() > 1500);
+        const QStringList shown = picker.visibleEmojis();
+        CHECK(shown.contains(QStringLiteral("🇩🇪")));
+        CHECK(shown.contains(QStringLiteral("👍")));
+        CHECK(picker.toneVariants(QStringLiteral("🇩🇪")).isEmpty());
+        CHECK(picker.toneVariants(QStringLiteral("👍")).contains(QStringLiteral("👍🏿")));
+        picker.activateEmoji(QStringLiteral("👍"));
+        CHECK(got == QStringLiteral("👍"));
+        picker.activateEmoji(QStringLiteral("👍🏿"));
+        CHECK(got == QStringLiteral("👍🏿"));
+        // Used emojis are listed first as "recent"; searching narrows the list.
+        CHECK(picker.visibleEmojis().first() == QStringLiteral("👍🏿"));
+        if (auto *search = picker.findChild<QLineEdit *>()) {
+            search->setText(QStringLiteral("thumbs up"));
+            const QStringList found = picker.visibleEmojis();
+            CHECK(found.contains(QStringLiteral("👍")) && found.size() < 20);
+            search->clear();
+            CHECK(picker.visibleEmojis().size() > 1500);
+        } else {
+            CHECK(false);
         }
 
         // A message-specific timer begins when the visible chat receives it and removes
