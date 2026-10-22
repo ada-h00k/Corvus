@@ -74,6 +74,8 @@ set(APP_SOURCES
     src/ChatView.cpp
     src/ImageViewer.h
     src/ImageViewer.cpp
+    src/MediaGallery.h
+    src/MediaGallery.cpp
     src/SignalCli.h
     src/SignalCli.cpp
     src/HistoryStore.h
@@ -240,6 +242,14 @@ if(CORVUS_TESTS)
             message(STATUS "dbus-run-session not found: alerts test skipped")
         endif()
     endif()
+
+    add_executable(media_gallery_test tests/media_gallery_test.cpp)
+    target_link_libraries(media_gallery_test PRIVATE app_core Qt6::Test)
+    add_test(NAME media_gallery COMMAND media_gallery_test)
+    set_tests_properties(media_gallery PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
 
     add_executable(chatview_test tests/chatview_test.cpp)
     target_link_libraries(chatview_test PRIVATE app_core Qt6::Test)

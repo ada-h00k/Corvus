@@ -69,4 +69,16 @@ QString displayFileName(const Attachment &att, const QDateTime &time)
     return genericFileName(att.contentType, original, time);
 }
 
+bool isRiskyFileName(const QString &name)
+{
+    static const QStringList ext = {QStringLiteral("exe"),  QStringLiteral("bat"), QStringLiteral("cmd"),
+                                    QStringLiteral("com"),  QStringLiteral("scr"), QStringLiteral("msi"),
+                                    QStringLiteral("ps1"),  QStringLiteral("vbs"), QStringLiteral("js"),
+                                    QStringLiteral("jar"),  QStringLiteral("sh"),  QStringLiteral("desktop"),
+                                    QStringLiteral("appimage"), QStringLiteral("run"), QStringLiteral("lnk"),
+                                    QStringLiteral("reg"),  QStringLiteral("dll"), QStringLiteral("app"),
+                                    QStringLiteral("deb"),  QStringLiteral("rpm"), QStringLiteral("apk")};
+    return ext.contains(QFileInfo(name).suffix().toLower());
+}
+
 } // namespace AttachmentUtil

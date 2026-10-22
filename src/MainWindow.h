@@ -2,6 +2,7 @@
 
 #include "Appearance.h"
 #include "HistoryStore.h"
+#include "MediaGallery.h"
 #include "Model.h"
 #include "NotificationSettings.h"
 #include "SignalCli.h"
@@ -194,6 +195,7 @@ private:
     void downloadAndSendGif(const QString &conversationKey, const QUrl &url, const QUrl &sentAnalyticsUrl);
     void registerGiphyAnalytics(const QUrl &url);
     void saveAttachment(int msgIdx, int attIdx);
+    void openMediaGallery(const QString &key);
     // Files or an image (e.g. a screenshot) from drag & drop / the clipboard -> pending attachments.
     bool attachFromMimeData(const QMimeData *md);
     void sendProfileUpdate(const QJsonObject &params, const QString &successMessage);
@@ -263,6 +265,8 @@ private:
     QTimer m_avatarRefreshTimer;                // re-checks all avatars from time to time
     std::function<void(const QString &)> m_pickAction;
     QTemporaryDir m_tmp;
+    QPointer<MediaGalleryDialog> m_gallery;
+    QString m_galleryKey;
     QTimer m_expirationTimer;
     QPointer<QWidget> m_savedToast;
     QString m_savedToastPath;

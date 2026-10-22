@@ -11,6 +11,7 @@
 #include "HistoryKeychain.h"
 #include "ImageViewer.h"
 #include "LinkDialog.h"
+#include "MediaGallery.h"
 #include "MessageInput.h"
 #include "NotificationDialog.h"
 #include "Notifier.h"
@@ -333,6 +334,8 @@ MainWindow::MainWindow()
         if (!m_convs.contains(key)) return;
         QMenu menu(this);
         Conversation &conversation = m_convs[key];
+        menu.addAction(tr("Media gallery …"), this, [this, key] { openMediaGallery(key); });
+        menu.addSeparator();
         if (!conversation.isGroup) {
             menu.addAction(conversation.localNickname.isEmpty() ? tr("Set nickname…") : tr("Change nickname…"),
                            this, [this, key] {
@@ -2911,17 +2914,7 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
     });
 }
 
-static bool isRiskyFile(const QString &name)
-{
-    static const QStringList ext = {QStringLiteral("exe"),  QStringLiteral("bat"), QStringLiteral("cmd"),
-                                    QStringLiteral("com"),  QStringLiteral("scr"), QStringLiteral("msi"),
-                                    QStringLiteral("ps1"),  QStringLiteral("vbs"), QStringLiteral("js"),
-                                    QStringLiteral("jar"),  QStringLiteral("sh"),  QStringLiteral("desktop"),
-                                    QStringLiteral("appimage"), QStringLiteral("run"), QStringLiteral("lnk"),
-                                    QStringLiteral("reg"),  QStringLiteral("dll"), QStringLiteral("app"),
-                                    QStringLiteral("deb"),  QStringLiteral("rpm"), QStringLiteral("apk")};
-    return ext.contains(QFileInfo(name).suffix().toLower());
-}
+static bool isRiskyFile(const QString &name) { return AttachmentUtil::isRiskyFileName(name); }
 
 void MainWindow::openAttachment(int msgIdx, int attIdx)
 {
@@ -3312,6 +3305,45 @@ void MainWindow::activateConversation(const QString &key)
     activateWindow();
     m_showArchived = m_convs[key].archived;
     openConversation(key);
+}
+
+// "All media" of a conversation (images/videos, audio, links, files), like Signal Desktop.
+void MainWindow::openMediaGallery(const QString &key)
+{
+    if (!m_convs.contains(key)) return;
+    if (m_gallery) {
+        if (m_galleryKey == key) {
+            m_gallery->reload();
+            m_gallery->show();
+            m_gallery->raise();
+            m_gallery->activateWindow();
+            return;
+        }
+        m_gallery->close();
+    }
+
+    MediaGalleryHost host;
+    host.messages = [this, key] { return m_convs.value(key).msgs; };
+    host.fetch = [this, key](const Attachment &att, std::function<void(const QByteArray &, const QString &)> cb) {
+        fetchAttachmentData(key, att, std::move(cb));
+    };
+    host.tempDir = [this] { return m_tmp.isValid() ? m_tmp.path() : QString(); };
+    host.saved = [this](const QString &path) { showSavedToast(path); };
+    host.showInChat = [this, key](qint64 ts) {
+        activateConversation(key);
+        // Let the chat finish loading before scrolling to the message.
+        QTimer::singleShot(0, this, [this, key, ts] {
+            if (m_current != key || !m_convs.contains(key)) return;
+            const int index = findMessage(m_convs[key], ts, {});
+            if (index >= 0) m_view->scrollToMessage(index);
+        });
+    };
+
+    m_galleryKey = key;
+    m_gallery = new MediaGalleryDialog(m_convs[key].title, host, this);
+    m_gallery->show();
+    m_gallery->raise();
+    m_gallery->activateWindow();
 }
 
 void MainWindow::setMuted(const QString &key, bool muted)
