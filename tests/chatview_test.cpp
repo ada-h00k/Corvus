@@ -386,6 +386,20 @@ int main(int argc, char **argv)
         CHECK(!s2.contains("showAvatars"));
         CHECK(Appearance::load(pal).showAvatars);
 
+        // alphabetical contact list: off by default, stored only when switched on
+        CHECK(!Appearance::defaults(pal).sortAlphabetically);
+        Appearance sorted = Appearance::defaults(pal);
+        sorted.sortAlphabetically = true;
+        CHECK(!(sorted == Appearance::defaults(pal)));
+        sorted.save(pal);
+        CHECK(Appearance::load(pal).sortAlphabetically);
+        sorted.sortAlphabetically = false;
+        sorted.save(pal);
+        QSettings sSort;
+        sSort.beginGroup("appearance");
+        CHECK(!sSort.contains("sortAlphabetically"));
+        CHECK(!Appearance::load(pal).sortAlphabetically);
+
         // permanent Send button: off by default, stored only when switched on
         CHECK(!Appearance::defaults(pal).alwaysShowSend);
         Appearance send = Appearance::defaults(pal);
@@ -437,6 +451,14 @@ int main(int argc, char **argv)
             CHECK(!dlg.appearance().showAvatars);
             avatarBox->click();
             CHECK(dlg.appearance().showAvatars);
+        }
+        auto *sortBox = dlg.findChild<QCheckBox *>("sortAlphabetically");
+        CHECK(sortBox && !sortBox->isChecked()); // default: off
+        if (sortBox) {
+            sortBox->click();
+            CHECK(dlg.appearance().sortAlphabetically);
+            sortBox->click();
+            CHECK(!dlg.appearance().sortAlphabetically);
         }
         auto *sendBox = dlg.findChild<QCheckBox *>("alwaysShowSend");
         CHECK(sendBox && !sendBox->isChecked()); // default: off

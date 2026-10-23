@@ -259,6 +259,14 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(conversation_order_test tests/conversation_order_test.cpp)
+    target_link_libraries(conversation_order_test PRIVATE app_core Qt6::Test)
+    add_test(NAME conversation_order COMMAND conversation_order_test)
+    set_tests_properties(conversation_order PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(chatview_test tests/chatview_test.cpp)
     target_link_libraries(chatview_test PRIVATE app_core Qt6::Test)
     add_test(NAME chatview COMMAND chatview_test)

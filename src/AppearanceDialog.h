@@ -35,6 +35,7 @@ private:
     QSlider *m_radius;
     QLabel *m_radiusLabel;
     QCheckBox *m_showAvatars;
+    QCheckBox *m_sortAlphabetically;
     QCheckBox *m_alwaysShowSend;
     QComboBox *m_appIcon;
     ChatView *m_preview;

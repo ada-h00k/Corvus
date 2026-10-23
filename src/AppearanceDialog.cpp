@@ -79,6 +79,10 @@ AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) :
     m_showAvatars = new QCheckBox(tr("Show avatars in the contact list"));
     m_showAvatars->setObjectName(QStringLiteral("showAvatars"));
     form->addRow(m_showAvatars);
+    m_sortAlphabetically = new QCheckBox(tr("Sort contacts alphabetically"));
+    m_sortAlphabetically->setObjectName(QStringLiteral("sortAlphabetically"));
+    m_sortAlphabetically->setToolTip(tr("Keep the contact list in alphabetical order instead of moving chats with new messages to the top"));
+    form->addRow(m_sortAlphabetically);
     m_alwaysShowSend = new QCheckBox(tr("Always show the Send button"));
     m_alwaysShowSend->setObjectName(QStringLiteral("alwaysShowSend"));
     m_alwaysShowSend->setToolTip(tr("Show the Send button next to the message field, not only when the field is expanded"));
@@ -86,6 +90,10 @@ AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) :
     lay->addLayout(form);
     connect(m_showAvatars, &QCheckBox::toggled, this, [this](bool on) {
         m_ap.showAvatars = on;
+        refresh();
+    });
+    connect(m_sortAlphabetically, &QCheckBox::toggled, this, [this](bool on) {
+        m_ap.sortAlphabetically = on;
         refresh();
     });
     connect(m_alwaysShowSend, &QCheckBox::toggled, this, [this](bool on) {
@@ -143,6 +151,8 @@ void AppearanceDialog::refresh()
     }
     QSignalBlocker blockAvatars(m_showAvatars);
     m_showAvatars->setChecked(m_ap.showAvatars);
+    QSignalBlocker blockSort(m_sortAlphabetically);
+    m_sortAlphabetically->setChecked(m_ap.sortAlphabetically);
     QSignalBlocker blockSend(m_alwaysShowSend);
     m_alwaysShowSend->setChecked(m_ap.alwaysShowSend);
     QSignalBlocker blockIcon(m_appIcon);

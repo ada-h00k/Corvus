@@ -4,6 +4,7 @@
 #include "AppIcon.h"
 #include "Attachments.h"
 #include "ChatView.h"
+#include "ConversationOrder.h"
 #include "EmojiPicker.h"
 #include "GiphyPicker.h"
 #include "GiphyApiKeyStore.h"
@@ -309,6 +310,15 @@ MainWindow::MainWindow()
                 }
             }
         });
+    }
+
+    // Ctrl+Up / Ctrl+Down: previous / next conversation in the list
+    for (const int delta : {-1, 1}) {
+        auto *action = new QAction(this);
+        action->setShortcut(QKeySequence(Qt::CTRL | (delta < 0 ? Qt::Key_Up : Qt::Key_Down)));
+        action->setShortcutContext(Qt::WindowShortcut);
+        addAction(action);
+        connect(action, &QAction::triggered, this, [this, delta] { stepConversation(delta); });
     }
 
     // List: selection, folder navigation, context menu
@@ -1920,11 +1930,11 @@ void MainWindow::refreshList()
     for (const Conversation &c : std::as_const(m_convs))
         if (c.archived == m_showArchived) items.append(&c);
 
-    std::sort(items.begin(), items.end(), [](const Conversation *a, const Conversation *b) {
+    const bool alphabetical = m_appearance.sortAlphabetically;
+    std::sort(items.begin(), items.end(), [alphabetical](const Conversation *a, const Conversation *b) {
         const QDateTime ta = a->msgs.isEmpty() ? QDateTime() : a->msgs.last().time;
         const QDateTime tb = b->msgs.isEmpty() ? QDateTime() : b->msgs.last().time;
-        if (ta != tb) return ta > tb;
-        return a->title.localeAwareCompare(b->title) < 0;
+        return ConversationOrder::before(a->title, ta, a->key, b->title, tb, b->key, alphabetical);
     });
 
     QSignalBlocker blocker(m_list);
@@ -2118,6 +2128,23 @@ void MainWindow::fetchAvatar(const QString &key)
                                   done(err2.isEmpty() ? dataOf(res2) : QByteArray());
                               });
                });
+}
+
+// Ctrl+Up / Ctrl+Down. The "Archived chats" and "Back" entries are skipped, and
+// the list does not wrap around.
+void MainWindow::stepConversation(int delta)
+{
+    QList<QListWidgetItem *> rows;
+    int current = -1;
+    for (int row = 0; row < m_list->count(); ++row) {
+        QListWidgetItem *item = m_list->item(row);
+        const QString key = item->data(Qt::UserRole).toString();
+        if (key == kFolderKey || key == kBackKey) continue;
+        if (item == m_list->currentItem()) current = int(rows.size());
+        rows.append(item);
+    }
+    const int target = ConversationOrder::step(current, int(rows.size()), delta);
+    if (target >= 0) m_list->setCurrentItem(rows[target]);
 }
 
 void MainWindow::onSelectionChanged(QListWidgetItem *item)
