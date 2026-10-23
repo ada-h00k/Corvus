@@ -178,15 +178,11 @@ MainWindow::MainWindow()
     m_attachBtn->setFixedSize(40, 40);
     m_emojiBtn = new QToolButton;
     m_emojiBtn->setText(QStringLiteral("😊"));
-    m_emojiBtn->setToolTip(tr("Emoji"));
+    m_emojiBtn->setToolTip(tr("Emoji and GIFs"));
     m_emojiBtn->setFixedSize(40, 40);
-    m_gifBtn = new QToolButton;
-    m_gifBtn->setText(QStringLiteral("GIF"));
-    m_gifBtn->setToolTip(tr("Search GIPHY GIFs"));
-    m_gifBtn->setFixedSize(40, 40);
 #ifdef Q_OS_MACOS
     // Flat, borderless buttons next to the input field, as in Messages.
-    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_gifBtn})
+    for (QToolButton *b : {m_attachBtn, m_emojiBtn})
         b->setAutoRaise(true);
 #endif
     m_input = new MessageInput;
@@ -216,7 +212,6 @@ MainWindow::MainWindow()
     m_sendBtn->hide();
 
     h->addWidget(m_emojiBtn);
-    h->addWidget(m_gifBtn);
     h->addWidget(m_input, 1);
     h->addWidget(m_sendBtn);
     h->addWidget(m_attachBtn);
@@ -365,6 +360,7 @@ MainWindow::MainWindow()
     connect(m_view, &ChatView::reactionChosen, this, &MainWindow::sendReaction);
     connect(m_view, &ChatView::moreReactionsRequested, this, [this](int idx, const QPoint &gp) {
         m_pickAction = [this, idx](const QString &e) { sendReaction(idx, e); };
+        m_picker->setGifsAvailable(false); // a GIF cannot be a reaction
         m_picker->popup(gp);
     });
     connect(m_view, &ChatView::attachmentActivated, this, &MainWindow::openAttachment);
@@ -398,17 +394,29 @@ MainWindow::MainWindow()
     connect(m_attachBtn, &QToolButton::clicked, this, [this] {
         addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
     });
-    connect(m_emojiBtn, &QToolButton::clicked, this, [this] {
-        m_pickAction = [this](const QString &e) {
-            m_input->insertPlainText(e);
-            m_input->setFocus();
-        };
-        m_picker->popup(m_emojiBtn->mapToGlobal(QPoint(0, -m_picker->height() - 4)));
-    });
+    connect(m_emojiBtn, &QToolButton::clicked, this, &MainWindow::showComposerPicker);
     connect(m_picker, &EmojiPicker::emojiSelected, this, [this](const QString &e) {
         if (m_pickAction) m_pickAction(e);
     });
-    connect(m_gifBtn, &QToolButton::clicked, this, &MainWindow::searchGifs);
+    // The GIF tab of the emoji popup: the key is only read from the key store when
+    // the tab is actually opened.
+    connect(m_picker, &EmojiPicker::giphyKeyRequested, this, [this] {
+        QString apiKey;
+        QString error;
+        if (!GiphyApiKeyStore::load(apiKey, error)) apiKey.clear();
+        m_picker->setGiphyApiKey(apiKey, apiKey.isEmpty() ? error : QString());
+    });
+    connect(m_picker, &EmojiPicker::giphyConfigureRequested, this, [this] {
+        configureGiphyApiKey();
+        showComposerPicker(); // back to the GIF tab, now with the new key
+    });
+    connect(m_picker, &EmojiPicker::gifSelected, this, [this](const QUrl &url, const QUrl &analytics) {
+        if (m_current.isEmpty() || !m_convs.contains(m_current)) {
+            statusBar()->showMessage(tr("Open a conversation before sending a GIF."), 5000);
+            return;
+        }
+        downloadAndSendGif(m_current, url, analytics);
+    });
     // Ctrl+V / Shift+Insert / context menu: screenshots and copied files become attachments
     m_input->setPasteHook([this](const QMimeData *md) { return attachFromMimeData(md); });
 
@@ -982,7 +990,6 @@ void MainWindow::setConnected(bool connected, const QString &info)
     m_sendBtn->setEnabled(connected);
     m_attachBtn->setEnabled(connected);
     m_emojiBtn->setEnabled(connected);
-    m_gifBtn->setEnabled(connected);
     if (connected) {
         m_statusLabel->setText(tr("Connected · signal-cli %1").arg(m_version));
     } else {
@@ -3489,46 +3496,15 @@ void MainWindow::configureGiphyApiKey()
     if (!stored) QMessageBox::warning(this, tr("GIPHY API key"), error);
 }
 
-void MainWindow::searchGifs()
+// Emoji / GIF popup above the message field.
+void MainWindow::showComposerPicker()
 {
-    if (m_current.isEmpty() || !m_convs.contains(m_current)) {
-        statusBar()->showMessage(tr("Open a conversation before searching for GIFs."), 5000);
-        return;
-    }
-    QString apiKey;
-    QString error;
-    if (!GiphyApiKeyStore::load(apiKey, error)) {
-        QMessageBox::warning(this, tr("GIPHY API key"), error);
-        return;
-    }
-    if (apiKey.isEmpty()) {
-        QMessageBox box(this);
-        box.setWindowTitle(tr("GIPHY API key required"));
-        box.setText(tr("GIPHY requires an API key to search and send GIFs."));
-        QPushButton *configure = box.addButton(tr("Configure API key …"), QMessageBox::AcceptRole);
-        QPushButton *open = box.addButton(tr("Get an API key"), QMessageBox::ActionRole);
-        box.addButton(QMessageBox::Cancel);
-        box.exec();
-        if (box.clickedButton() == open) {
-            QDesktopServices::openUrl(QUrl(QStringLiteral("https://developers.giphy.com/dashboard/")));
-            return;
-        }
-        if (box.clickedButton() != configure) return;
-        configureGiphyApiKey();
-        if (!GiphyApiKeyStore::load(apiKey, error)) {
-            QMessageBox::warning(this, tr("GIPHY API key"), error);
-            return;
-        }
-        if (apiKey.isEmpty()) return;
-    }
-
-    GiphyPicker picker(apiKey, this);
-    const QString conversationKey = m_current;
-    connect(&picker, &GiphyPicker::gifSelected, this,
-            [this, conversationKey](const QUrl &url, const QUrl &analytics) {
-                downloadAndSendGif(conversationKey, url, analytics);
-            });
-    picker.exec();
+    m_pickAction = [this](const QString &e) {
+        m_input->insertPlainText(e);
+        m_input->setFocus();
+    };
+    m_picker->setGifsAvailable(true);
+    m_picker->popup(m_emojiBtn->mapToGlobal(QPoint(0, -m_picker->height() - 4)));
 }
 
 void MainWindow::downloadAndSendGif(const QString &conversationKey, const QUrl &url, const QUrl &sentAnalyticsUrl)

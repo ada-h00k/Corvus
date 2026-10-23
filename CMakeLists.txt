@@ -251,6 +251,14 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(emoji_gif_test tests/emoji_gif_test.cpp)
+    target_link_libraries(emoji_gif_test PRIVATE app_core Qt6::Test)
+    add_test(NAME emoji_gif COMMAND emoji_gif_test)
+    set_tests_properties(emoji_gif PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(chatview_test tests/chatview_test.cpp)
     target_link_libraries(chatview_test PRIVATE app_core Qt6::Test)
     add_test(NAME chatview COMMAND chatview_test)

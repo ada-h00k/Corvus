@@ -532,16 +532,13 @@ int main(int argc, char **argv)
 
         QToolButton *attachBtn = nullptr;
         QToolButton *emojiBtn = nullptr;
-        QToolButton *gifBtn = nullptr;
         for (QToolButton *button : w.findChildren<QToolButton *>()) {
             if (button->toolTip() == QStringLiteral("Attach files")) attachBtn = button;
-            else if (button->toolTip() == QStringLiteral("Emoji")) emojiBtn = button;
-            else if (button->toolTip() == QStringLiteral("Search GIPHY GIFs")) gifBtn = button;
+            else if (button->toolTip() == QStringLiteral("Emoji and GIFs")) emojiBtn = button;
         }
-        CHECK(attachBtn && emojiBtn && gifBtn);
-        if (attachBtn && emojiBtn && gifBtn && input) {
+        CHECK(attachBtn && emojiBtn);
+        if (attachBtn && emojiBtn && input) {
             CHECK(attachBtn->size() == emojiBtn->size());
-            CHECK(gifBtn->size() == emojiBtn->size());
             CHECK(attachBtn->mapTo(&w, QPoint()).x() >= input->mapTo(&w, QPoint()).x() + input->width());
         }
 

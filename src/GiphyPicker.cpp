@@ -1,13 +1,14 @@
 #include "GiphyPicker.h"
 
+#include <QDesktopServices>
 #include <QGridLayout>
+#include <QHBoxLayout>
 #include <QImage>
 #include <QBuffer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
-#include <QLineEdit>
 #include <QNetworkReply>
 #include <QMovie>
 #include <QPushButton>
@@ -18,8 +19,8 @@
 namespace {
 constexpr int kGifCount = 18;
 constexpr int kColumns = 3;
-constexpr int kCellWidth = 150;
-constexpr int kCellHeight = 132;
+constexpr int kCellWidth = 102;
+constexpr int kCellHeight = 96;
 
 QUrl analyticsUrl(const QJsonObject &gif, const QString &event)
 {
@@ -30,30 +31,43 @@ QUrl analyticsUrl(const QJsonObject &gif, const QString &event)
 } // namespace
 
 GiphyPicker::GiphyPicker(const QString &apiKey, QWidget *parent, const QUrl &apiBase)
-    : QDialog(parent), m_apiKey(apiKey),
+    : QWidget(parent),
       m_apiBase(apiBase.isEmpty() ? QUrl(QStringLiteral("https://api.giphy.com")) : apiBase)
 {
-    setWindowTitle(tr("GIFs"));
-    resize(520, 520);
-
     auto *layout = new QVBoxLayout(this);
-    m_search = new QLineEdit(this);
-    m_search->setPlaceholderText(tr("Search GIFs"));
-    m_search->setAccessibleName(tr("Search GIPHY GIFs"));
-    layout->addWidget(m_search);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
 
     m_status = new QLabel(tr("Trending GIFs from GIPHY"), this);
+    m_status->setWordWrap(true);
+    m_status->setForegroundRole(QPalette::PlaceholderText);
+    m_status->setContentsMargins(2, 0, 2, 0);
     layout->addWidget(m_status);
+
+    // Shown instead of the results while there is no API key.
+    m_keyBox = new QWidget(this);
+    auto *keyLayout = new QHBoxLayout(m_keyBox);
+    keyLayout->setContentsMargins(0, 4, 0, 0);
+    auto *configure = new QPushButton(tr("Configure API key …"), m_keyBox);
+    auto *getKey = new QPushButton(tr("Get an API key"), m_keyBox);
+    keyLayout->addWidget(configure);
+    keyLayout->addWidget(getKey);
+    keyLayout->addStretch(1);
+    layout->addWidget(m_keyBox);
+    connect(configure, &QPushButton::clicked, this, &GiphyPicker::configureRequested);
+    connect(getKey, &QPushButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("https://developers.giphy.com/dashboard/")));
+    });
 
     m_scroll = new QScrollArea(this);
     m_scroll->setWidgetResizable(true);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_results = new QWidget(m_scroll);
-    m_grid = new QGridLayout(m_results);
-    m_grid->setContentsMargins(2, 2, 2, 2);
-    m_grid->setSpacing(6);
     m_resultsLayout = new QVBoxLayout(m_results);
     m_resultsLayout->setContentsMargins(0, 0, 0, 0);
+    m_grid = new QGridLayout;
+    m_grid->setContentsMargins(2, 2, 2, 2);
+    m_grid->setSpacing(6);
     m_resultsLayout->addLayout(m_grid);
     m_resultsLayout->addStretch(1);
     m_scroll->setWidget(m_results);
@@ -66,12 +80,7 @@ GiphyPicker::GiphyPicker(const QString &apiKey, QWidget *parent, const QUrl &api
 
     m_debounce.setSingleShot(true);
     m_debounce.setInterval(350);
-    connect(&m_debounce, &QTimer::timeout, this, [this] { search(m_search->text().trimmed()); });
-    connect(m_search, &QLineEdit::textChanged, this, [this] { m_debounce.start(); });
-    connect(m_search, &QLineEdit::returnPressed, this, [this] {
-        m_debounce.stop();
-        search(m_search->text().trimmed());
-    });
+    connect(&m_debounce, &QTimer::timeout, this, [this] { search(m_query.trimmed()); });
     connect(&m_network, &QNetworkAccessManager::finished, this, [this](QNetworkReply *reply) {
         if (reply == m_searchReply) {
             m_searchReply = nullptr;
@@ -120,18 +129,64 @@ GiphyPicker::GiphyPicker(const QString &apiKey, QWidget *parent, const QUrl &api
         }
         reply->deleteLater();
     });
-    if (m_apiKey.isEmpty()) {
-        setStatus(tr("Set a GIPHY API key in Settings to search GIFs."));
-        m_search->setEnabled(false);
-    } else {
-        m_search->setFocus();
-        search(QString());
-    }
+    setApiKey(apiKey);
 }
 
-void GiphyPicker::search(const QString &query)
+void GiphyPicker::setApiKey(const QString &apiKey, const QString &error)
 {
-    if (m_apiKey.isEmpty()) return;
+    const bool changed = apiKey != m_apiKey;
+    m_apiKey = apiKey;
+    const bool has = !m_apiKey.isEmpty();
+    m_keyBox->setVisible(!has);
+    m_scroll->setVisible(has);
+    if (!has) {
+        abortRequests();
+        clearResults();
+        setStatus(error.isEmpty() ? tr("GIPHY requires an API key to search and send GIFs.") : error);
+        return;
+    }
+    if (changed || (m_gifs.isEmpty() && !m_searchReply)) search(m_query.trimmed());
+}
+
+void GiphyPicker::setApiBase(const QUrl &apiBase)
+{
+    if (!apiBase.isEmpty()) m_apiBase = apiBase;
+}
+
+void GiphyPicker::setQuery(const QString &query)
+{
+    if (query == m_query) return;
+    m_query = query;
+    if (hasApiKey()) m_debounce.start();
+}
+
+void GiphyPicker::searchNow()
+{
+    m_debounce.stop();
+    search(m_query.trimmed());
+}
+
+void GiphyPicker::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    setMoviesPaused(false);
+}
+
+void GiphyPicker::hideEvent(QHideEvent *event)
+{
+    QWidget::hideEvent(event);
+    // No point in decoding animations nobody can see.
+    setMoviesPaused(true);
+}
+
+void GiphyPicker::setMoviesPaused(bool paused)
+{
+    const auto movies = findChildren<QMovie *>();
+    for (QMovie *movie : movies) movie->setPaused(paused);
+}
+
+void GiphyPicker::abortRequests()
+{
     ++m_searchGeneration;
     if (m_searchReply) {
         m_searchReply->abort();
@@ -139,6 +194,12 @@ void GiphyPicker::search(const QString &query)
     }
     for (QNetworkReply *reply : std::as_const(m_previewReplies)) reply->abort();
     m_previewReplies.clear();
+}
+
+void GiphyPicker::search(const QString &query)
+{
+    if (m_apiKey.isEmpty()) return;
+    abortRequests();
     clearResults();
     setStatus(query.isEmpty() ? tr("Loading trending GIFs …") : tr("Searching GIPHY …"));
 
@@ -195,11 +256,12 @@ void GiphyPicker::showResults(const QByteArray &json)
         button->setToolTip(m_gifs[index].title);
         button->setFixedSize(kCellWidth, kCellHeight);
         button->setIconSize(QSize(kCellWidth - 8, kCellHeight - 8));
+        button->setFlat(true);
+        button->setCursor(Qt::PointingHandCursor);
         button->setEnabled(false);
         connect(button, &QPushButton::clicked, this, [this, index] {
             if (index < 0 || index >= m_gifs.size()) return;
             emit gifSelected(m_gifs[index].originalUrl, m_gifs[index].sentAnalyticsUrl);
-            accept();
         });
         m_grid->addWidget(button, index / kColumns, index % kColumns);
         loadPreview(index);

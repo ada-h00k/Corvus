@@ -88,7 +88,7 @@ private slots:
     void editAppearance();
     void editNotifications();
     void editProfile();
-    void searchGifs();
+    void showComposerPicker();
     void configureGiphyApiKey();
     void quitApplication();
     void toggleWindow();
@@ -291,7 +291,6 @@ private:
     QPointer<MessageInput> m_input;
     QToolButton *m_attachBtn;
     QToolButton *m_emojiBtn;
-    QToolButton *m_gifBtn;
     QPointer<QToolButton> m_expandInputBtn;
     QPushButton *m_sendBtn;
     EmojiPicker *m_picker;

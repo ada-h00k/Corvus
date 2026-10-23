@@ -1,5 +1,7 @@
 #include "EmojiPicker.h"
 
+#include "GiphyPicker.h"
+
 #include <QAbstractScrollArea>
 #include <QApplication>
 #include <QCursor>
@@ -18,6 +20,7 @@
 #include <QScreen>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStackedWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
@@ -500,6 +503,96 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Mode bar: "Emoji | GIF" tabs above the search field
+// ---------------------------------------------------------------------------
+class ModeBar : public QWidget
+{
+public:
+    std::function<void(int)> onSelected;
+
+    ModeBar(const QStringList &labels, QWidget *parent = nullptr) : QWidget(parent), m_labels(labels)
+    {
+        setFixedHeight(34);
+        setMouseTracking(true);
+        setFocusPolicy(Qt::NoFocus);
+    }
+
+    int current() const { return m_current; }
+    void setCurrent(int index)
+    {
+        if (index == m_current) return;
+        m_current = index;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        // thin separator under the whole bar
+        p.setPen(withAlpha(palette().color(QPalette::Text), 40));
+        p.drawLine(0, height() - 1, width(), height() - 1);
+
+        for (int i = 0; i < m_labels.size(); ++i) {
+            const QRect r = itemRect(i);
+            const bool current = i == m_current;
+            if (i == m_hover && !current) {
+                p.setPen(Qt::NoPen);
+                p.setBrush(withAlpha(palette().color(QPalette::Text), 24));
+                p.drawRoundedRect(r.adjusted(4, 3, -4, -5), 7, 7);
+            }
+            QFont f = font();
+            f.setBold(current);
+            p.setFont(f);
+            p.setOpacity(current || i == m_hover ? 1.0 : 0.65);
+            p.setPen(palette().color(QPalette::Text));
+            p.drawText(r.adjusted(0, 0, 0, -2), Qt::AlignCenter, m_labels[i]);
+            p.setOpacity(1.0);
+            if (current) {
+                p.setPen(Qt::NoPen);
+                p.setBrush(palette().color(QPalette::Highlight));
+                p.drawRoundedRect(QRect(r.left() + 10, height() - 3, r.width() - 20, 3), 1.5, 1.5);
+            }
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent *e) override { setHover(indexAt(e->position().toPoint())); }
+    void leaveEvent(QEvent *) override { setHover(-1); }
+
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        if (e->button() != Qt::LeftButton) return;
+        const int i = indexAt(e->position().toPoint());
+        if (i < 0) return;
+        if (onSelected) onSelected(i);
+    }
+
+private:
+    QRect itemRect(int i) const
+    {
+        const int w = width() / qMax(1, int(m_labels.size()));
+        return QRect(i * w, 0, w, height());
+    }
+    int indexAt(const QPoint &pt) const
+    {
+        for (int i = 0; i < m_labels.size(); ++i)
+            if (itemRect(i).contains(pt)) return i;
+        return -1;
+    }
+    void setHover(int i)
+    {
+        if (i == m_hover) return;
+        m_hover = i;
+        update();
+    }
+
+    QStringList m_labels;
+    int m_current = 0;
+    int m_hover = -1;
+};
+
+// ---------------------------------------------------------------------------
 // Skin tone popup (opened from the grid)
 // ---------------------------------------------------------------------------
 class TonePopup : public QFrame
@@ -556,6 +649,11 @@ EmojiPicker::EmojiPicker(QWidget *parent)
     lay->setContentsMargins(8, 8, 8, 0);
     lay->setSpacing(6);
 
+    // "Emoji | GIF" tabs, only in the message composer.
+    m_modeBar = new ModeBar({QStringLiteral("Emoji"), QStringLiteral("GIF")});
+    m_modeBar->hide();
+    lay->addWidget(m_modeBar);
+
     m_searchEdit = new QLineEdit;
     m_searchEdit->setPlaceholderText(QStringLiteral("Search emojis…"));
     m_searchEdit->setClearButtonEnabled(true);
@@ -563,11 +661,23 @@ EmojiPicker::EmojiPicker(QWidget *parent)
     m_searchEdit->setMinimumHeight(32);
     lay->addWidget(m_searchEdit);
 
-    m_grid = new Grid;
-    lay->addWidget(m_grid, 1);
+    m_pages = new QStackedWidget;
+    lay->addWidget(m_pages, 1);
 
+    // Page 1: emojis (grid + category bar)
+    auto *emojiPage = new QWidget;
+    auto *emojiLay = new QVBoxLayout(emojiPage);
+    emojiLay->setContentsMargins(0, 0, 0, 0);
+    emojiLay->setSpacing(6);
+    m_grid = new Grid;
+    emojiLay->addWidget(m_grid, 1);
     m_bar = new CategoryBar;
-    lay->addWidget(m_bar);
+    emojiLay->addWidget(m_bar);
+    m_pages->addWidget(emojiPage);
+
+    // Page 2: GIFs
+    m_gif = new GiphyPicker;
+    m_pages->addWidget(m_gif);
 
     // --- data
     QFile catalogFile(QStringLiteral(":/emoji/catalog.json"));
@@ -607,17 +717,33 @@ EmojiPicker::EmojiPicker(QWidget *parent)
     m_grid->onSectionChanged = [this](int i) { m_bar->setCurrent(i); };
     m_bar->onSelected = [this](int i) { m_grid->scrollToSection(i); };
 
-    connect(m_searchEdit, &QLineEdit::textChanged, this,
-            [this](const QString &text) { updateSearchResults(text); });
-    // Enter picks the first match.
+    m_modeBar->onSelected = [this](int i) { setMode(i == 1 ? Mode::Gif : Mode::Emoji); };
+    connect(m_gif, &GiphyPicker::gifSelected, this, [this](const QUrl &url, const QUrl &analytics) {
+        hide();
+        emit gifSelected(url, analytics);
+    });
+    connect(m_gif, &GiphyPicker::configureRequested, this, [this] {
+        hide();
+        emit giphyConfigureRequested();
+    });
+
+    connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString &text) {
+        if (m_mode == Mode::Gif) m_gif->setQuery(text);
+        else updateSearchResults(text);
+    });
+    // Enter picks the first emoji, or searches GIFs right away.
     connect(m_searchEdit, &QLineEdit::returnPressed, this, [this] {
+        if (m_mode == Mode::Gif) {
+            m_gif->searchNow();
+            return;
+        }
         const QStringList shown = m_grid->emojis();
         if (!m_searchEdit->text().trimmed().isEmpty() && !shown.isEmpty())
             activateEmoji(shown.first());
     });
 
     rebuildSections();
-    setFixedSize(kColumns * kCellSize + 16 + 14, 420);
+    setFixedSize(kColumns * kCellSize + 16 + 24, 460);
 }
 
 EmojiPicker::~EmojiPicker()
@@ -753,11 +879,73 @@ void EmojiPicker::showTonePopup(const Entry &entry, const QRect &globalCellRect)
     tones->show();
 }
 
+void EmojiPicker::setGifsAvailable(bool available)
+{
+    m_gifsAvailable = available;
+    m_modeBar->setVisible(available);
+    if (!available && m_mode == Mode::Gif) setMode(Mode::Emoji);
+}
+
+void EmojiPicker::setGiphyApiKey(const QString &apiKey, const QString &error)
+{
+    m_gif->setApiKey(apiKey, error);
+}
+
+void EmojiPicker::setGiphyApiBase(const QUrl &apiBase)
+{
+    m_gif->setApiBase(apiBase);
+}
+
+bool EmojiPicker::isGifTabActive() const
+{
+    return m_mode == Mode::Gif;
+}
+
+void EmojiPicker::showGifTab()
+{
+    if (m_gifsAvailable) setMode(Mode::Gif);
+}
+
+// Switches between the emoji and the GIF page; both share the search field.
+void EmojiPicker::setMode(Mode mode)
+{
+    if (mode == Mode::Gif && !m_gifsAvailable) mode = Mode::Emoji;
+    m_mode = mode;
+    m_modeBar->setCurrent(mode == Mode::Gif ? 1 : 0);
+
+    // Each tab starts with an empty search.
+    m_searchEdit->blockSignals(true);
+    m_searchEdit->clear();
+    m_searchEdit->blockSignals(false);
+
+    if (mode == Mode::Gif) {
+        m_searchEdit->setPlaceholderText(QStringLiteral("Search GIFs…"));
+        m_searchEdit->setToolTip(QStringLiteral("Search GIPHY"));
+        m_pages->setCurrentWidget(m_gif);
+        emit giphyKeyRequested(); // answered synchronously via setGiphyApiKey()
+        m_gif->setQuery(QString()); // no-op if the panel is already showing trending GIFs
+    } else {
+        m_searchEdit->setPlaceholderText(QStringLiteral("Search emojis…"));
+        m_searchEdit->setToolTip(QStringLiteral("Search by emoji name"));
+        m_pages->setCurrentIndex(0);
+        rebuildSections(true);
+    }
+    m_searchEdit->setFocus();
+}
+
 void EmojiPicker::popup(const QPoint &globalPos)
 {
     // Always start fresh: no old query, back at the top.
-    m_searchEdit->clear();
-    rebuildSections(true);
+    if (m_mode == Mode::Gif && m_gifsAvailable) {
+        setMode(Mode::Gif);
+    } else {
+        m_mode = Mode::Emoji;
+        m_modeBar->setCurrent(0);
+        m_pages->setCurrentIndex(0);
+        m_searchEdit->setPlaceholderText(QStringLiteral("Search emojis…"));
+        m_searchEdit->clear();
+        rebuildSections(true);
+    }
 
     QPoint p = globalPos;
     if (const QScreen *s = QGuiApplication::screenAt(globalPos)) {
