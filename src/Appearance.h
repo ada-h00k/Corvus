@@ -12,6 +12,7 @@ struct Appearance {
     QColor inText;
     int radius = 16;   // bubble corner radius in px
     bool showAvatars = true; // contact avatars next to the names in the chat list
+    bool alwaysShowSend = false; // Send button next to the message field even when it is not expanded
     enum IconChoice { IconFollowTheme = 0, IconLight = 1, IconDark = 2 };
     int appIcon = IconFollowTheme; // window / tray icon variant
 

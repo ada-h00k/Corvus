@@ -70,6 +70,7 @@ protected:
     void dropEvent(QDropEvent *e) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
     void positionExpandButton();
+    void updateSendButton();
     void showSavedToast(const QString &path); // "Attachment saved · Show in folder"
     void positionSavedToast();
 

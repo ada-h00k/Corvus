@@ -79,9 +79,17 @@ AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) :
     m_showAvatars = new QCheckBox(tr("Show avatars in the contact list"));
     m_showAvatars->setObjectName(QStringLiteral("showAvatars"));
     form->addRow(m_showAvatars);
+    m_alwaysShowSend = new QCheckBox(tr("Always show the Send button"));
+    m_alwaysShowSend->setObjectName(QStringLiteral("alwaysShowSend"));
+    m_alwaysShowSend->setToolTip(tr("Show the Send button next to the message field, not only when the field is expanded"));
+    form->addRow(m_alwaysShowSend);
     lay->addLayout(form);
     connect(m_showAvatars, &QCheckBox::toggled, this, [this](bool on) {
         m_ap.showAvatars = on;
+        refresh();
+    });
+    connect(m_alwaysShowSend, &QCheckBox::toggled, this, [this](bool on) {
+        m_ap.alwaysShowSend = on;
         refresh();
     });
     connect(m_appIcon, &QComboBox::currentIndexChanged, this, [this](int index) {
@@ -135,6 +143,8 @@ void AppearanceDialog::refresh()
     }
     QSignalBlocker blockAvatars(m_showAvatars);
     m_showAvatars->setChecked(m_ap.showAvatars);
+    QSignalBlocker blockSend(m_alwaysShowSend);
+    m_alwaysShowSend->setChecked(m_ap.alwaysShowSend);
     QSignalBlocker blockIcon(m_appIcon);
     m_appIcon->setCurrentIndex(m_ap.appIcon);
     QSignalBlocker block(m_radius);

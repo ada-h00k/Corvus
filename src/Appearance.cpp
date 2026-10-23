@@ -14,6 +14,7 @@ Appearance Appearance::defaults(const QPalette &pal)
     a.inText = dark ? QColor(0xee, 0xee, 0xee) : QColor(0x1b, 0x1b, 0x1b);
     a.radius = 16;
     a.showAvatars = true;
+    a.alwaysShowSend = false;
 #ifdef Q_OS_MACOS
     // Like Messages: own bubbles follow the system accent colour, slightly rounder.
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
@@ -50,6 +51,8 @@ Appearance Appearance::load(const QPalette &pal)
     const int r = s.value(QStringLiteral("radius")).toInt(&ok);
     if (ok) a.radius = qBound(0, r, 28);
     if (s.contains(QStringLiteral("showAvatars"))) a.showAvatars = s.value(QStringLiteral("showAvatars")).toBool();
+    if (s.contains(QStringLiteral("alwaysShowSend")))
+        a.alwaysShowSend = s.value(QStringLiteral("alwaysShowSend")).toBool();
     const int icon = s.value(QStringLiteral("appIcon")).toInt(&ok);
     if (ok) a.appIcon = qBound(int(IconFollowTheme), icon, int(IconDark));
     return a;
@@ -74,6 +77,10 @@ void Appearance::save(const QPalette &pal) const
         s.remove(QStringLiteral("showAvatars"));
     else
         s.setValue(QStringLiteral("showAvatars"), showAvatars);
+    if (alwaysShowSend == def.alwaysShowSend)
+        s.remove(QStringLiteral("alwaysShowSend"));
+    else
+        s.setValue(QStringLiteral("alwaysShowSend"), alwaysShowSend);
     if (appIcon == def.appIcon)
         s.remove(QStringLiteral("appIcon"));
     else
@@ -88,5 +95,6 @@ void Appearance::reset()
 bool Appearance::operator==(const Appearance &o) const
 {
     return background == o.background && outBg == o.outBg && outText == o.outText && inBg == o.inBg &&
-           inText == o.inText && radius == o.radius && showAvatars == o.showAvatars && appIcon == o.appIcon;
+           inText == o.inText && radius == o.radius && showAvatars == o.showAvatars &&
+           alwaysShowSend == o.alwaysShowSend && appIcon == o.appIcon;
 }

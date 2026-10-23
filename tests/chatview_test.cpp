@@ -386,6 +386,20 @@ int main(int argc, char **argv)
         CHECK(!s2.contains("showAvatars"));
         CHECK(Appearance::load(pal).showAvatars);
 
+        // permanent Send button: off by default, stored only when switched on
+        CHECK(!Appearance::defaults(pal).alwaysShowSend);
+        Appearance send = Appearance::defaults(pal);
+        send.alwaysShowSend = true;
+        CHECK(!(send == Appearance::defaults(pal)));
+        send.save(pal);
+        CHECK(Appearance::load(pal).alwaysShowSend);
+        send.alwaysShowSend = false;
+        send.save(pal);
+        QSettings sSend;
+        sSend.beginGroup("appearance");
+        CHECK(!sSend.contains("alwaysShowSend"));
+        CHECK(!Appearance::load(pal).alwaysShowSend);
+
         // app icon: follows the theme by default, stored only when a variant is chosen
         CHECK(Appearance::defaults(pal).appIcon == Appearance::IconFollowTheme);
         Appearance dark = Appearance::defaults(pal);
@@ -423,6 +437,14 @@ int main(int argc, char **argv)
             CHECK(!dlg.appearance().showAvatars);
             avatarBox->click();
             CHECK(dlg.appearance().showAvatars);
+        }
+        auto *sendBox = dlg.findChild<QCheckBox *>("alwaysShowSend");
+        CHECK(sendBox && !sendBox->isChecked()); // default: off
+        if (sendBox) {
+            sendBox->click();
+            CHECK(dlg.appearance().alwaysShowSend);
+            sendBox->click();
+            CHECK(!dlg.appearance().alwaysShowSend);
         }
         auto *iconBox = dlg.findChild<QComboBox *>("appIcon");
         CHECK(iconBox && iconBox->count() == 3 && iconBox->currentIndex() == Appearance::IconFollowTheme);

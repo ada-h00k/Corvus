@@ -209,7 +209,7 @@ MainWindow::MainWindow()
 
     m_sendBtn = new QPushButton(tr("Send"));
     m_sendBtn->setFixedHeight(40);
-    m_sendBtn->hide();
+    m_sendBtn->setVisible(m_appearance.alwaysShowSend); // otherwise shown while the field is expanded
 
     h->addWidget(m_emojiBtn);
     h->addWidget(m_input, 1);
@@ -385,7 +385,7 @@ MainWindow::MainWindow()
         m_expandInputBtn->setText(expanded ? QStringLiteral("⌄") : QStringLiteral("⌃"));
         m_expandInputBtn->setToolTip(expanded ? tr("Collapse message field") : tr("Expand message field"));
         m_expandInputBtn->setAccessibleName(expanded ? tr("Collapse message field") : tr("Expand message field"));
-        m_sendBtn->setVisible(expanded);
+        updateSendButton();
         if (expanded) m_input->setFocus();
         positionExpandButton();
         updateEditBar(); // the save hint depends on the mode
@@ -704,6 +704,15 @@ void MainWindow::positionSavedToast()
     const int x = (panel->width() - m_savedToast->width()) / 2;
     const int y = qMax(0, inputTop - m_savedToast->height() - 12);
     m_savedToast->move(qMax(0, x), y);
+}
+
+// The Send button is shown while the message field is expanded, or always if the
+// appearance option says so.
+void MainWindow::updateSendButton()
+{
+    if (!m_sendBtn || !m_input) return;
+    m_sendBtn->setVisible(m_appearance.alwaysShowSend || m_input->isExpanded());
+    positionExpandButton(); // the field's width changes with the button
 }
 
 void MainWindow::positionExpandButton()
@@ -3213,6 +3222,7 @@ void MainWindow::editAppearance()
     m_appearance = dlg.appearance();
     m_appearance.save(palette());
     m_view->setAppearance(m_appearance);
+    updateSendButton();
     AppIcon::setMode(iconMode(m_appearance));
     refreshIcons();
     refreshList(); // shows or hides the avatars (and fetches them if needed)
@@ -3246,6 +3256,7 @@ void MainWindow::applyTheme()
     if (ap != m_appearance) {
         m_appearance = ap;
         m_view->setAppearance(m_appearance);
+        updateSendButton();
     }
 }
 
