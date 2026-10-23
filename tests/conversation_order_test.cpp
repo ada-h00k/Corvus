@@ -1,6 +1,8 @@
 // Contact list order and Ctrl+Up / Ctrl+Down stepping.
 #include "ConversationOrder.h"
 #include "MessageInput.h"
+#include "Model.h"
+#include "Records.h"
 
 #include <QAction>
 #include <QApplication>
@@ -44,6 +46,22 @@ private slots:
     {
         QVERIFY(before("anna", QDateTime(), "1", "Bob", QDateTime(), "2", true));
         QVERIFY(before("Anna", QDateTime(), "1", "bob", QDateTime(), "2", true));
+    }
+
+    void senderClockDoesNotControlTimelineOrder()
+    {
+        Message previous;
+        previous.time = QDateTime::fromMSecsSinceEpoch(4'000'000'000'000LL); // legacy message with a bad clock
+
+        Message received;
+        received.time = QDateTime::fromMSecsSinceEpoch(1'000); // sender clock is far in the past
+        received.orderTs = previous.sortTs() + 1;
+
+        QVERIFY(received.sortTs() > previous.sortTs());
+        const QJsonObject record = Records::message("+49111", received);
+        const Message restored = Records::messageFromRecord(record);
+        QCOMPARE(restored.ts(), received.ts()); // protocol identity/time remains untouched
+        QCOMPARE(restored.sortTs(), received.sortTs()); // local order survives history reload
     }
 
     void steppingMovesByOneAndDoesNotWrap()

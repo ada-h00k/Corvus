@@ -1034,6 +1034,7 @@ final class AppModel {
         var preview = Message()
         preview.ts = nowMs()
         while chats.findMessage(chats.convs[key]!, ts: preview.ts, authors: []) != nil { preview.ts += 1 }
+        preview.orderTs = max(preview.ts, (chats.convs[key]!.msgs.last?.sortTs ?? 0) + 1)
         preview.text = text
         preview.outgoing = true
         preview.authorKey = account

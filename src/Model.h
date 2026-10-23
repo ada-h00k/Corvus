@@ -52,6 +52,10 @@ struct Quote {
 
 struct Message {
     QDateTime time;
+    // Local timeline order is independent from Signal's sender timestamp (`time`). A sender's
+    // device clock can be wrong; new messages should still appear where they were received.
+    // Zero means a legacy history record without an explicit order value.
+    qint64 orderTs = 0;
     QString sender;       // display name at the time of receiving
     QString text;
     bool outgoing = false;
@@ -61,8 +65,8 @@ struct Message {
     QHash<QString, QString> reactions; // reactor key -> emoji
 
     // Editing: `time` stays the timestamp of the original message (its identity in the
-    // history and its place in the list). An edit arrives as a new message timestamp,
-    // which is remembered in editTs; peers refer to the message by that latest timestamp.
+    // history and displayed time). An edit arrives as a new message timestamp, which is
+    // remembered in editTs; peers refer to the message by that latest timestamp.
     qint64 editTs = 0;   // timestamp of the latest revision (0 = never edited)
     int editCount = 0;
     int expiresInSeconds = 0;
@@ -73,6 +77,7 @@ struct Message {
     bool deleted = false;
 
     qint64 ts() const { return time.toMSecsSinceEpoch(); }
+    qint64 sortTs() const { return orderTs > 0 ? orderTs : ts(); }
     qint64 latestTs() const { return editTs > 0 ? editTs : ts(); }
     bool isEdited() const { return editCount > 0; }
     // Same limits as the official clients: own text messages, 3 hours after sending, 10 edits.

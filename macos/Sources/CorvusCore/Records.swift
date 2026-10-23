@@ -37,6 +37,7 @@ public enum Records {
 
     public static func message(_ conv: String, _ m: Message) -> JSON {
         var d: JSON = [:]
+        if m.orderTs > 0 { d["ot"] = m.orderTs }
         if m.deleted { d["dl"] = true } // placeholder only: no quote, attachments or edit state
         if m.expiresInSeconds > 0 {
             d["ex"] = m.expiresInSeconds
@@ -74,6 +75,7 @@ public enum Records {
 
     /// Extras ("d": quote, attachments, edit state, expiry, deletion) as stored in message / update records.
     public static func applyExtras(_ m: inout Message, _ d: JSON) {
+        if d["ot"] != nil { m.orderTs = jsonInt64(d["ot"]) }
         if let q = d["q"] as? JSON {
             m.quote.valid = true
             m.quote.id = jsonInt64(q["id"])

@@ -157,6 +157,35 @@ final class ChatStateTests: XCTestCase {
         XCTAssertNil(s.addMessage("+49alice", m))
     }
 
+    func testIncorrectSenderClockDoesNotInsertNewMessageIntoPast() {
+        var s = makeState()
+        s.ensure("+49alice")
+
+        // Simulate a legacy history entry whose sender clock was far ahead of ours.
+        var old = Message()
+        old.ts = nowMs() + 60 * 60 * 1000
+        old.text = "Earlier message with a bad clock"
+        old.authorKey = "+49alice"
+        s.convs["+49alice"]!.msgs.append(old)
+
+        // The next message has a sender timestamp far in the past, but arrived now.
+        var incoming = Message()
+        incoming.ts = 1_000
+        incoming.text = "New message"
+        incoming.authorKey = "+49alice"
+        XCTAssertNotNil(s.addMessage("+49alice", incoming))
+
+        let conversation = s.convs["+49alice"]!
+        XCTAssertEqual(conversation.msgs.last?.text, "New message")
+        XCTAssertGreaterThan(conversation.msgs.last!.sortTs, old.sortTs)
+
+        // The independent ordering value must survive encrypted-history compaction/reload.
+        var reloaded = makeState()
+        reloaded.loadHistory(s.allRecords())
+        XCTAssertEqual(reloaded.convs["+49alice"]!.msgs.last?.text, "New message")
+        XCTAssertEqual(reloaded.convs["+49alice"]!.msgs.last?.orderTs, conversation.msgs.last?.orderTs)
+    }
+
     func testReactionEditAndReload() {
         var s = makeState()
         var m = Message()

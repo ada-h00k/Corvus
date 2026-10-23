@@ -49,6 +49,7 @@ static QJsonObject editToJson(const Message &m)
 QJsonObject message(const QString &conv, const Message &m)
 {
     QJsonObject d;
+    if (m.orderTs > 0) d["ot"] = QJsonValue(static_cast<qint64>(m.orderTs));
     if (m.deleted) d["dl"] = true; // placeholder only: no quote, attachments or edit state
     if (m.expiresInSeconds > 0) {
         d["ex"] = m.expiresInSeconds;
@@ -106,6 +107,7 @@ QJsonObject expirationUpdate(const QString &conv, const Message &m)
 
 void applyExtras(Message &m, const QJsonObject &d)
 {
+    if (d.contains("ot")) m.orderTs = d["ot"].toVariant().toLongLong();
     if (d.contains("q")) {
         const QJsonObject q = d["q"].toObject();
         m.quote.valid = true;

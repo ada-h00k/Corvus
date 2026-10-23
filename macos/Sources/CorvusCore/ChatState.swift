@@ -144,8 +144,13 @@ public struct ChatState {
         ensure(key, title: title, group: group)
         let c = convs[key]!
         if findMessage(c, ts: m.ts, authors: [effectiveAuthor(c, m)]) != nil { return nil }
-        let at = convs[key]!.insertSorted(m)
-        var recs = [Records.message(key, m)]
+        var message = m
+        // Always append new arrivals in local receive order. The original Signal timestamp
+        // remains untouched because quotes, edits and reactions use it as the message ID.
+        let previousOrder = c.msgs.last?.sortTs ?? 0
+        message.orderTs = max(message.orderTs, max(nowMs(), previousOrder + 1))
+        let at = convs[key]!.insertSorted(message)
+        var recs = [Records.message(key, message)]
         // Like the official client: activity brings an archived chat back.
         if convs[key]!.archived {
             convs[key]!.archived = false
@@ -261,7 +266,7 @@ public struct ChatState {
             convs[key]!.msgs[previewIndex] = confirmed
             // stable sort by time
             convs[key]!.msgs = convs[key]!.msgs.enumerated()
-                .sorted { $0.element.ts != $1.element.ts ? $0.element.ts < $1.element.ts : $0.offset < $1.offset }
+                .sorted { $0.element.sortTs != $1.element.sortTs ? $0.element.sortTs < $1.element.sortTs : $0.offset < $1.offset }
                 .map(\.element)
             recs.append(Records.message(key, confirmed))
         }

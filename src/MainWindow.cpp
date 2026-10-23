@@ -1247,7 +1247,7 @@ void MainWindow::loadHistory(const QJsonArray &records)
             Conversation &c = conv(key, group ? tr("Group") : key, group);
             const Message m = Records::messageFromRecord(o);
             int at = c.msgs.size();
-            while (at > 0 && c.msgs[at - 1].time > m.time) --at;
+            while (at > 0 && c.msgs[at - 1].sortTs() > m.sortTs()) --at;
             c.msgs.insert(at, m);
         } else if (t == QLatin1String("n")) {
             Conversation &c = conv(key, key, group);
@@ -1558,7 +1558,7 @@ bool MainWindow::removeMessage(const QString &key, qint64 timestamp)
     const int rc = m_store.rewrite(allRecords());
     if (rc != SC_OK) {
         int at = conversation->msgs.size();
-        while (at > 0 && conversation->msgs[at - 1].time > removed.time) --at;
+        while (at > 0 && conversation->msgs[at - 1].sortTs() > removed.sortTs()) --at;
         conversation->msgs.insert(at, removed);
         statusBar()->showMessage(tr("Could not remove message from history: %1").arg(HistoryStore::errorText(rc)), 10000);
         return false;
@@ -1621,11 +1621,13 @@ bool MainWindow::addMessage(const QString &key, Message m, const QString &title,
 {
     Conversation &c = conv(key, title, group);
     if (findMessage(c, m.ts(), QStringList{effectiveAuthor(c, m)}) >= 0) return false; // duplicate
+    const qint64 previousOrder = c.msgs.isEmpty() ? 0 : c.msgs.last().sortTs();
+    m.orderTs = std::max({m.orderTs, QDateTime::currentMSecsSinceEpoch(), previousOrder + 1});
     if (!m.outgoing && m.expiresInSeconds > 0 && key == m_current && isVisible() && !isMinimized())
         m.expirationStartMs = QDateTime::currentMSecsSinceEpoch();
 
     int at = c.msgs.size();
-    while (at > 0 && c.msgs[at - 1].time > m.time) --at;
+    while (at > 0 && c.msgs[at - 1].sortTs() > m.sortTs()) --at;
     c.msgs.insert(at, m);
     persist(Records::message(key, m));
 
@@ -1713,7 +1715,7 @@ void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const 
     } else {
         conversation.msgs[previewIndex] = confirmed;
         std::stable_sort(conversation.msgs.begin(), conversation.msgs.end(),
-                         [](const Message &a, const Message &b) { return a.time < b.time; });
+                         [](const Message &a, const Message &b) { return a.sortTs() < b.sortTs(); });
         persist(Records::message(pending.conversationKey, confirmed));
     }
 
@@ -1932,8 +1934,8 @@ void MainWindow::refreshList()
 
     const bool alphabetical = m_appearance.sortAlphabetically;
     std::sort(items.begin(), items.end(), [alphabetical](const Conversation *a, const Conversation *b) {
-        const QDateTime ta = a->msgs.isEmpty() ? QDateTime() : a->msgs.last().time;
-        const QDateTime tb = b->msgs.isEmpty() ? QDateTime() : b->msgs.last().time;
+        const QDateTime ta = a->msgs.isEmpty() ? QDateTime() : QDateTime::fromMSecsSinceEpoch(a->msgs.last().sortTs());
+        const QDateTime tb = b->msgs.isEmpty() ? QDateTime() : QDateTime::fromMSecsSinceEpoch(b->msgs.last().sortTs());
         return ConversationOrder::before(a->title, ta, a->key, b->title, tb, b->key, alphabetical);
     });
 
@@ -2627,6 +2629,7 @@ void MainWindow::sendMessage()
     preview.expiresInSeconds = c.expirationSeconds;
     preview.quote = quote;
     preview.attachments = atts;
+    preview.orderTs = std::max(preview.ts(), (target.msgs.isEmpty() ? qint64(0) : target.msgs.last().sortTs()) + 1);
 
     const QString key = c.key;
     const QString pendingId = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -2637,7 +2640,7 @@ void MainWindow::sendMessage()
     m_pendingSends.insert(pendingId, pending);
 
     int at = target.msgs.size();
-    while (at > 0 && target.msgs[at - 1].time > preview.time) --at;
+    while (at > 0 && target.msgs[at - 1].sortTs() > preview.sortTs()) --at;
     target.msgs.insert(at, preview);
 
     m_input->clear();

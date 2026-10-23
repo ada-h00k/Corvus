@@ -64,7 +64,11 @@ public struct Quote: Equatable, Hashable {
 }
 
 public struct Message: Equatable, Identifiable {
-    public var ts: Int64 = 0          // ms since epoch: identity in the history and place in the list
+    public var ts: Int64 = 0          // ms since epoch: Signal message identity and displayed time
+    // Local timeline order is separate from Signal's sender timestamp (`ts`). A sender's
+    // device clock can be wrong; the message must still appear where it was received.
+    // Zero means a legacy history record without an explicit order value.
+    public var orderTs: Int64 = 0
     public var sender = ""            // display name at the time of receiving
     public var text = ""
     public var outgoing = false
@@ -73,8 +77,9 @@ public struct Message: Equatable, Identifiable {
     public var attachments: [Attachment] = []
     public var reactions: [String: String] = [:] // reactor key -> emoji
 
-    // Editing: `ts` stays the timestamp of the original message. An edit arrives as a new
-    // message timestamp, remembered in editTs; peers refer to the message by that latest timestamp.
+    // Editing: `ts` stays the timestamp of the original message and remains its protocol
+    // identity. An edit arrives as a new timestamp, remembered in editTs; peers refer to
+    // the message by that latest timestamp.
     public var editTs: Int64 = 0
     public var editCount = 0
     public var expiresInSeconds = 0
@@ -85,6 +90,7 @@ public struct Message: Equatable, Identifiable {
 
     public var id: String { "\(ts)|\(authorKey)|\(outgoing)" }
     public var time: Date { Date(timeIntervalSince1970: TimeInterval(ts) / 1000) }
+    public var sortTs: Int64 { orderTs > 0 ? orderTs : ts }
     public var latestTs: Int64 { editTs > 0 ? editTs : ts }
     public var isEdited: Bool { editCount > 0 }
 
@@ -128,13 +134,13 @@ public struct Conversation: Identifiable {
     }
 
     public var id: String { key }
-    public var lastTs: Int64 { msgs.last?.ts ?? 0 }
+    public var lastTs: Int64 { msgs.last?.sortTs ?? 0 }
 
-    /// Inserts `m` keeping the list sorted by time (after messages with the same time). Returns the index.
+    /// Inserts `m` keeping the list sorted by local timeline order. Returns the index.
     @discardableResult
     public mutating func insertSorted(_ m: Message) -> Int {
         var at = msgs.count
-        while at > 0 && msgs[at - 1].ts > m.ts { at -= 1 }
+        while at > 0 && msgs[at - 1].sortTs > m.sortTs { at -= 1 }
         msgs.insert(m, at: at)
         return at
     }
