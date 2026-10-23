@@ -42,7 +42,7 @@ mode = os.environ.get("MOCK_ACCOUNTS", "ok")        # ok | empty | fail | okexit
 
 if "--version" in args:
     time.sleep(nap)
-    print("signal-cli 0.13.99")
+    print("signal-cli 0.14.9")
     sys.exit(0)
 
 if "listAccounts" in args:
