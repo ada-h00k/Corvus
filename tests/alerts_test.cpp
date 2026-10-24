@@ -388,7 +388,7 @@ int main(int argc, char **argv)
         Notifier n;
         CHECK(n.usingDBus());
         QSignalSpy clicked(&n, &Notifier::activated);
-        n.notify("conv1", "Alice", "hello <b>world</b> & co");
+        CHECK(n.notify("conv1", "Alice", "hello <b>world</b> & co") == Notifier::Delivery::DBus);
         auto calls = bus.notif->snapshot();
         CHECK(calls.size() == 1);
         if (calls.size() == 1) {

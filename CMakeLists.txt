@@ -267,6 +267,14 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(notifier_test tests/notifier_test.cpp)
+    target_link_libraries(notifier_test PRIVATE app_core Qt6::Test)
+    add_test(NAME notifier COMMAND notifier_test)
+    set_tests_properties(notifier PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(chatview_test tests/chatview_test.cpp)
     target_link_libraries(chatview_test PRIVATE app_core Qt6::Test)
     add_test(NAME chatview COMMAND chatview_test)

@@ -1,6 +1,8 @@
 <RCC>
     <qresource prefix="/sounds">
         <file alias="pop.ogg">sounds/pop.ogg</file>
+        <!-- Same sound as WAV: Windows can only play WAV through PowerShell -->
+        <file alias="pop.wav">sounds/pop.wav</file>
     </qresource>
     <qresource prefix="/emoji">
         <file alias="catalog.json">emoji-catalog.json</file>

@@ -64,7 +64,69 @@ const char *kService = "org.freedesktop.Notifications";
 const char *kPath = "/org/freedesktop/Notifications";
 }
 
-Notifier::Notifier(QObject *parent) : QObject(parent) {}
+Notifier::Notifier(QObject *parent) : QObject(parent)
+{
+    // The temporary tray icon stays long enough for the message to be read.
+    m_tempTrayTimer.setSingleShot(true);
+    m_tempTrayTimer.setInterval(12000);
+    connect(&m_tempTrayTimer, &QTimer::timeout, this, [this] {
+        if (m_tempTray) m_tempTray->hide();
+    });
+}
+
+void Notifier::setTrayCapabilitiesForTesting(bool available, bool supportsMessages)
+{
+    m_forcedTrayAvailable = available;
+    m_forcedTrayMessages = supportsMessages;
+}
+
+QString Notifier::describe(Delivery d)
+{
+    switch (d) {
+    case Delivery::DBus:
+        return tr("Sent to the desktop notification service.");
+    case Delivery::Tray:
+        return tr("Sent as a tray icon message. If nothing appeared, check that notifications are allowed for "
+                  "Corvus in your system settings (on Windows: Settings → System → Notifications, and turn off "
+                  "Do not disturb / Focus assist).");
+    case Delivery::TemporaryTray:
+        return tr("Sent as a message of a tray icon that is shown only for this (the tray icon is switched off). "
+                  "If nothing appeared, check that notifications are allowed for Corvus in your system settings "
+                  "(on Windows: Settings → System → Notifications, and turn off Do not disturb / Focus assist).");
+    case Delivery::None:
+        break;
+    }
+    return tr("Notifications cannot be shown here: no notification service and no system tray were found.");
+}
+
+// The tray icon whose balloon messages serve as notifications; null if there is none.
+// With the tray icon switched off a temporary one takes over, so that notifications do
+// not silently disappear just because the icon is not wanted permanently.
+QSystemTrayIcon *Notifier::trayForMessages(bool *temporary)
+{
+    *temporary = false;
+    const bool messages = m_forcedTrayMessages.value_or(QSystemTrayIcon::supportsMessages());
+    const bool available = m_forcedTrayAvailable.value_or(QSystemTrayIcon::isSystemTrayAvailable());
+    if (!m_tray || !messages) return nullptr;
+    if (m_tray->isVisible()) return m_tray;
+    if (!available) return nullptr;
+    if (!m_tempTray) m_tempTray = new QSystemTrayIcon(this);
+    m_tempTray->setIcon(m_tray->icon());
+    m_tempTray->show();
+    m_tempTrayTimer.start();
+    *temporary = true;
+    return m_tempTray;
+}
+
+void Notifier::connectTray(QSystemTrayIcon *tray)
+{
+    bool &connected = tray == m_tempTray ? m_tempTrayConnected : m_trayConnected;
+    if (connected) return;
+    connected = true;
+    connect(tray, &QSystemTrayIcon::messageClicked, this, [this] {
+        if (!m_lastTrayKey.isEmpty()) emit activated(m_lastTrayKey);
+    });
+}
 
 bool Notifier::ensureDBus()
 {
@@ -98,7 +160,7 @@ bool Notifier::usingDBus()
     return ensureDBus();
 }
 
-void Notifier::notify(const QString &key, const QString &title, const QString &body, const QPixmap &icon)
+Notifier::Delivery Notifier::notify(const QString &key, const QString &title, const QString &body, const QPixmap &icon)
 {
 #ifdef HAVE_QT_DBUS
     if (ensureDBus()) {
@@ -117,26 +179,24 @@ void Notifier::notify(const QString &key, const QString &title, const QString &b
             if (old && old != id) m_keyForId.remove(old);
             m_idForKey.insert(key, id);
             m_keyForId.insert(id, key);
-            return;
+            return Delivery::DBus;
         }
         // The service stopped answering: fall through to the tray fallback.
         m_ok = false;
         m_checked = false;
     }
 #endif
-    if (m_tray && m_tray->isVisible() && QSystemTrayIcon::supportsMessages()) {
-        if (!m_trayConnected) {
-            m_trayConnected = true;
-            connect(m_tray, &QSystemTrayIcon::messageClicked, this, [this] {
-                if (!m_lastTrayKey.isEmpty()) emit activated(m_lastTrayKey);
-            });
-        }
+    bool temporary = false;
+    if (QSystemTrayIcon *tray = trayForMessages(&temporary)) {
+        connectTray(tray);
         m_lastTrayKey = key;
         if (icon.isNull())
-            m_tray->showMessage(title, body, QSystemTrayIcon::NoIcon, 8000);
+            tray->showMessage(title, body, QSystemTrayIcon::NoIcon, 8000);
         else
-            m_tray->showMessage(title, body, QIcon(icon), 8000);
+            tray->showMessage(title, body, QIcon(icon), 8000);
+        return temporary ? Delivery::TemporaryTray : Delivery::Tray;
     }
+    return Delivery::None;
 }
 
 void Notifier::close(const QString &key)

@@ -1,11 +1,14 @@
 #include "SoundPlayer.h"
 
 #include <QApplication>
+#include <QAudioOutput>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMediaPlayer>
 #include <QResource>
 #include <QStandardPaths>
+#include <QUrl>
 #include <QtMath>
 
 #include "SignalCli.h"
@@ -155,6 +158,16 @@ SoundPlayer::~SoundPlayer()
     }
 }
 
+QString SoundPlayer::popResource(bool wavOnly)
+{
+    return wavOnly ? QStringLiteral(":/sounds/pop.wav") : QStringLiteral(":/sounds/pop.ogg");
+}
+
+bool SoundPlayer::powerShellCanPlay(const QString &file)
+{
+    return file.endsWith(QLatin1String(".wav"), Qt::CaseInsensitive);
+}
+
 QString SoundPlayer::resolveFile(const NotificationSettings &s) const
 {
     if (s.soundId == QLatin1String("custom")
@@ -163,7 +176,8 @@ QString SoundPlayer::resolveFile(const NotificationSettings &s) const
         return s.soundFile;
         }
 
-        // Return the embedded OGG sound after extracting it to the cache.
+        // The embedded "Pop" is extracted to the cache directory. Windows can only
+        // play WAV through PowerShell, so it gets the WAV copy there.
         if (s.soundId == QLatin1String("pop-ogg")) {
             initSoundsResource();
 
@@ -174,18 +188,24 @@ QString SoundPlayer::resolveFile(const NotificationSettings &s) const
             if (!QDir().mkpath(dir))
                 return {};
 
-            const QString path = dir + QStringLiteral("/pop-ogg.ogg");
+#ifdef Q_OS_WIN
+            const bool wavOnly = true;
+#else
+            const bool wavOnly = false;
+#endif
+            const QString path = dir + (wavOnly ? QStringLiteral("/pop-ogg.wav")
+                                                : QStringLiteral("/pop-ogg.ogg"));
 
-            QFile resource(QStringLiteral(":/sounds/pop.ogg"));
+            QFile resource(popResource(wavOnly));
             if (!resource.open(QIODevice::ReadOnly))
                 return {};
 
-            const QByteArray ogg = resource.readAll();
+            const QByteArray data = resource.readAll();
 
-            if (QFileInfo(path).size() != ogg.size()) {
+            if (QFileInfo(path).size() != data.size()) {
                 QFile f(path);
                 if (!f.open(QIODevice::WriteOnly)
-                    || f.write(ogg) != ogg.size()) {
+                    || f.write(data) != data.size()) {
                     return {};
                     }
             }
@@ -293,6 +313,12 @@ bool SoundPlayer::play(const QString &file)
         return false;
     }
 
+#ifdef Q_OS_WIN
+    // PowerShell's SoundPlayer cannot play anything but WAV.
+    if (!powerShellCanPlay(file))
+        return playInProcess(file);
+#endif
+
     Command cmd;
     if (!findCommand(file, &cmd)) {
         QApplication::beep();
@@ -302,13 +328,8 @@ bool SoundPlayer::play(const QString &file)
         return false;
     }
 
-    if (m_proc) {
-        // A new sound replaces one that is still playing.
-        m_proc->disconnect(this);
-        m_proc->kill();
-        m_proc->deleteLater();
-        m_proc = nullptr;
-    }
+    if (m_media) m_media->stop(); // a new sound replaces one that is still playing
+    stopProcess();
 
     auto *p = new QProcess(this);
     m_proc = p;
@@ -346,5 +367,39 @@ bool SoundPlayer::play(const QString &file)
     p->start(cmd.program, cmd.args);
     p->closeWriteChannel();
 
+    return true;
+}
+
+void SoundPlayer::stopProcess()
+{
+    if (!m_proc) return;
+    m_proc->disconnect(this);
+    m_proc->kill();
+    m_proc->deleteLater();
+    m_proc = nullptr;
+}
+
+bool SoundPlayer::playInProcess(const QString &file)
+{
+    if (file.isEmpty()) {
+        QApplication::beep();
+        emit failed(tr("No audio file is available to play."));
+        return false;
+    }
+
+    if (!m_media) {
+        m_audioOut = new QAudioOutput(this);
+        m_media = new QMediaPlayer(this);
+        m_media->setAudioOutput(m_audioOut);
+        connect(m_media, &QMediaPlayer::errorOccurred, this,
+                [this](QMediaPlayer::Error, const QString &error) {
+                    emit failed(tr("The audio player failed: %1").arg(error));
+                });
+    }
+
+    stopProcess();
+    m_media->stop();
+    m_media->setSource(QUrl::fromLocalFile(file));
+    m_media->play();
     return true;
 }

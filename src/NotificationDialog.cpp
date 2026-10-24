@@ -54,6 +54,9 @@ NotificationDialog::NotificationDialog(const NotificationSettings &current, Soun
     m_testNotify = new QPushButton(tr("Test"));
     row->addWidget(m_testNotify);
     nl->addLayout(row);
+    m_notifyNote = new QLabel;
+    m_notifyNote->setWordWrap(true);
+    nl->addWidget(m_notifyNote);
     lay->addWidget(notifyBox);
 
     // --- sound
@@ -97,8 +100,10 @@ NotificationDialog::NotificationDialog(const NotificationSettings &current, Soun
         if (!m_notifier) return;
         const int c = m_content->currentData().toInt();
         const bool hide = c == NotificationSettings::Hidden;
-        m_notifier->notify(QStringLiteral("::test"), hide ? tr("Corvus") : tr("Alex"),
-                           hide || c == NotificationSettings::NameOnly ? tr("New message") : tr("This is a test notification 👋"));
+        const Notifier::Delivery d = m_notifier->notify(
+            QStringLiteral("::test"), hide ? tr("Corvus") : tr("Alex"),
+            hide || c == NotificationSettings::NameOnly ? tr("New message") : tr("This is a test notification 👋"));
+        m_notifyNote->setText(Notifier::describe(d)); // says how it was handed over, or why it could not be
     });
     connect(m_testSound, &QPushButton::clicked, this, [this] {
         if (m_sound) m_sound->play(settings());
@@ -143,6 +148,7 @@ void NotificationDialog::refreshEnabled()
     m_startMinimizedInTray->setEnabled(m_tray->isEnabled() && m_tray->isChecked());
     m_content->setEnabled(m_notify->isChecked());
     m_testNotify->setEnabled(m_notify->isChecked());
+    if (!m_notify->isChecked()) m_notifyNote->clear();
     m_soundBox->setEnabled(m_soundOn->isChecked());
     m_pickFile->setEnabled(m_soundOn->isChecked() && custom);
     m_testSound->setEnabled(m_soundOn->isChecked());

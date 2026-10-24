@@ -36,6 +36,7 @@ private:
     QCheckBox *m_notify;
     QComboBox *m_content;
     QPushButton *m_testNotify;
+    QLabel *m_notifyNote; // result of the last "Test"
     QCheckBox *m_soundOn;
     QComboBox *m_soundBox;
     QPushButton *m_pickFile;
