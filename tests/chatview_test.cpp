@@ -353,6 +353,82 @@ int main(int argc, char **argv)
         CHECK(t.elapsed() < 3000);
     }
 
+    // the round arrow at the bottom right: shown when scrolled away, brings us back
+    std::printf("scroll to latest button\n");
+    {
+        view.showMessages(sample(true));
+        pump();
+        QWidget *btn = view.findChild<QWidget *>("scrollToLatest");
+        QScrollBar *sb = view.verticalScrollBar();
+        CHECK(btn != nullptr);
+        if (btn) {
+            CHECK(sb->value() == sb->maximum());
+            CHECK(!btn->isVisible()); // at the newest message there is nothing to scroll to
+            sb->setValue(sb->maximum() - 40);
+            pump();
+            CHECK(!btn->isVisible()); // a few pixels up: not worth an arrow
+            sb->setValue(0);
+            pump();
+            CHECK(btn->isVisible());
+            // bottom right corner of the chat, fully inside it
+            CHECK(view.viewport()->rect().contains(btn->geometry()));
+            CHECK(btn->geometry().center().x() > view.viewport()->width() * 3 / 4);
+            CHECK(btn->geometry().center().y() > view.viewport()->height() * 3 / 4);
+            CHECK(!btn->toolTip().isEmpty());
+
+            // a click on the chat next to it does not trigger it ...
+            click(view.viewport(), QPoint(view.viewport()->width() / 2, view.viewport()->height() / 2));
+            pump();
+            CHECK(sb->value() == 0);
+            // ... but a click on the arrow jumps to the newest message and hides it
+            click(btn, btn->rect().center());
+            pump();
+            CHECK(sb->value() == sb->maximum());
+            CHECK(!btn->isVisible());
+
+            // incoming messages that arrive below the visible part are counted
+            sb->setValue(0);
+            pump();
+            CHECK(view.missedMessages() == 0);
+            Message in;
+            in.time = QDateTime::currentDateTime();
+            in.authorKey = "+49111";
+            in.sender = "Alice";
+            in.text = "while you were away";
+            view.appendMessage(in);
+            in.time = in.time.addSecs(1);
+            view.appendMessage(in);
+            pump();
+            CHECK(view.missedMessages() == 2);
+            CHECK(sb->value() == 0); // the view did not move
+            CHECK(btn->isVisible());
+            click(btn, btn->rect().center());
+            pump();
+            CHECK(view.missedMessages() == 0); // back at the bottom: everything seen
+            CHECK(sb->value() == sb->maximum());
+
+            // own messages are never "missed"; sending takes you to the bottom anyway
+            sb->setValue(0);
+            pump();
+            Message mine = in;
+            mine.outgoing = true;
+            mine.time = in.time.addSecs(2);
+            view.appendMessage(mine);
+            pump();
+            CHECK(view.missedMessages() == 0);
+            CHECK(sb->value() == sb->maximum());
+
+            // an empty view has nothing to scroll to
+            sb->setValue(0);
+            pump();
+            view.clearView();
+            pump();
+            CHECK(!btn->isVisible());
+            view.showMessages(sample(true)); // restore for the following sections
+            pump();
+        }
+    }
+
     std::printf("appearance persistence\n");
     {
         const QPalette pal;

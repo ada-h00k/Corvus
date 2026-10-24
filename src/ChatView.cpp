@@ -21,6 +21,7 @@
 #include <QSlider>
 #include <QStyle>
 #include <QStyleOptionSlider>
+#include <QToolTip>
 #include <QTextDocument>
 #include <QTimer>
 #include <QToolButton>
@@ -142,6 +143,125 @@ void updateVideoTimes(QLabel *elapsed, QLabel *remaining, qint64 position, qint6
 }
 } // namespace
 
+// ---------------------------------------------------------------------------
+// The round "scroll to the newest message" button, with a badge for the messages
+// that arrived while the view was scrolled up (like in Signal Desktop).
+// ---------------------------------------------------------------------------
+class ScrollToLatestButton : public QWidget
+{
+public:
+    std::function<void()> onClicked;
+
+    explicit ScrollToLatestButton(QWidget *parent) : QWidget(parent)
+    {
+        setObjectName(QStringLiteral("scrollToLatest"));
+        setFixedSize(kWidth, kHeight);
+        setCursor(Qt::PointingHandCursor);
+        setMouseTracking(true);
+        setFocusPolicy(Qt::NoFocus);
+        setAccessibleName(QObject::tr("Scroll to latest message"));
+        setToolTip(QObject::tr("Scroll to latest message"));
+        hide();
+    }
+
+    void setMissed(int count)
+    {
+        if (count == m_missed) return;
+        m_missed = count;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QRectF circle(kInset, kHeight - kDiameter - kInset, kDiameter, kDiameter);
+
+        // soft shadow
+        p.setPen(Qt::NoPen);
+        for (int i = 3; i >= 1; --i) {
+            p.setBrush(QColor(0, 0, 0, 14));
+            p.drawEllipse(circle.adjusted(-i, -i + 2, i, i + 2));
+        }
+        QColor fill = palette().color(QPalette::Button);
+        if (m_hover) fill = fill.lighter(m_pressed ? 90 : 115);
+        p.setBrush(fill);
+        p.setPen(QPen(QColor(128, 128, 128, 90), 1));
+        p.drawEllipse(circle);
+
+        // chevron pointing down
+        QPen pen(palette().color(QPalette::ButtonText), 2.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        const QPointF c = circle.center();
+        QPainterPath chevron;
+        chevron.moveTo(c + QPointF(-7, -3));
+        chevron.lineTo(c + QPointF(0, 4));
+        chevron.lineTo(c + QPointF(7, -3));
+        p.drawPath(chevron);
+
+        if (m_missed > 0) {
+            const QString text = m_missed > 99 ? QStringLiteral("99+") : QString::number(m_missed);
+            QFont f = font();
+            f.setBold(true);
+            f.setPointSizeF(qMax(7.0, f.pointSizeF() - 1.5));
+            p.setFont(f);
+            const int w = qMax(kBadge, QFontMetrics(f).horizontalAdvance(text) + 10);
+            const QRectF badge(kWidth - w, 0, w, kBadge);
+            p.setPen(Qt::NoPen);
+            p.setBrush(palette().color(QPalette::Highlight));
+            p.drawRoundedRect(badge, kBadge / 2.0, kBadge / 2.0);
+            p.setPen(palette().color(QPalette::HighlightedText));
+            p.drawText(badge, Qt::AlignCenter, text);
+        }
+    }
+
+    void enterEvent(QEnterEvent *) override { setHover(true); }
+    void leaveEvent(QEvent *) override
+    {
+        m_pressed = false;
+        setHover(false);
+    }
+    // Accepted so that they do not fall through to the chat underneath.
+    void mouseMoveEvent(QMouseEvent *e) override { e->accept(); }
+    void contextMenuEvent(QContextMenuEvent *e) override { e->accept(); }
+    void mouseDoubleClickEvent(QMouseEvent *e) override { e->accept(); }
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        e->accept();
+        if (e->button() != Qt::LeftButton) return;
+        m_pressed = true;
+        update();
+    }
+    void mouseReleaseEvent(QMouseEvent *e) override
+    {
+        e->accept();
+        const bool click = e->button() == Qt::LeftButton && m_pressed && rect().contains(e->position().toPoint());
+        m_pressed = false;
+        update();
+        if (click && onClicked) onClicked();
+    }
+
+private:
+    static constexpr int kDiameter = 40;
+    static constexpr int kInset = 2;
+    static constexpr int kBadge = 20;
+    static constexpr int kWidth = kDiameter + 2 * kInset + 10;  // room for the badge on the right
+    static constexpr int kHeight = kDiameter + 2 * kInset + 10; // ... and above
+
+    void setHover(bool on)
+    {
+        if (m_hover == on) return;
+        m_hover = on;
+        update();
+    }
+
+    int m_missed = 0;
+    bool m_hover = false;
+    bool m_pressed = false;
+};
+
 ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
 {
     setFrameShape(QFrame::NoFrame);
@@ -151,7 +271,13 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setFocusPolicy(Qt::StrongFocus);
     m_ap = Appearance::defaults(palette());
-    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { updateVideoGeometry(); });
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        updateVideoGeometry();
+        updateToLatestButton();
+    });
+    connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, [this] { updateToLatestButton(); });
+    m_toLatest = new ScrollToLatestButton(viewport());
+    m_toLatest->onClicked = [this] { verticalScrollBar()->setValue(verticalScrollBar()->maximum()); };
     m_resizeTimer = new QTimer(this);
     m_resizeTimer->setSingleShot(true);
     m_resizeTimer->setInterval(70);
@@ -182,6 +308,21 @@ QString ChatView::nameOf(const QString &key) const
 bool ChatView::atBottom() const
 {
     return verticalScrollBar()->value() >= verticalScrollBar()->maximum() - 4;
+}
+
+// Shows the arrow once the view is clearly away from the newest message (or messages
+// arrived below the visible part) and keeps it in the bottom right corner.
+void ChatView::updateToLatestButton()
+{
+    if (!m_toLatest) return;
+    if (atBottom()) m_missed = 0;
+    const int distance = verticalScrollBar()->maximum() - verticalScrollBar()->value();
+    const int threshold = qMax(160, viewport()->height() / 3);
+    const bool show = !m_items.isEmpty() && (distance > threshold || (m_missed > 0 && !atBottom()));
+    m_toLatest->setMissed(m_missed);
+    m_toLatest->move(viewport()->width() - m_toLatest->width() - 6, viewport()->height() - m_toLatest->height() - 6);
+    m_toLatest->setVisible(show);
+    if (show) m_toLatest->raise();
 }
 
 // ------------------------------------------------------------ public API
@@ -229,6 +370,8 @@ void ChatView::clearView()
     m_flash = -1;
     updateScrollRange();
     verticalScrollBar()->setValue(0);
+    m_missed = 0;
+    updateToLatestButton();
     viewport()->update();
 }
 
@@ -245,6 +388,8 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll)
     clearSelection();
     relayoutAll();
     verticalScrollBar()->setValue((bottom || !keepScroll) ? verticalScrollBar()->maximum() : old);
+    if (!keepScroll) m_missed = 0; // another conversation: nothing is "new" here
+    updateToLatestButton();
     updateVideoGeometry();
 }
 
@@ -255,8 +400,10 @@ void ChatView::appendMessage(const Message &m)
     m_items.append(Item());
     const int i = m_msgs.size() - 1;
     layoutItem(i, i > 0 ? m_items[i - 1].y + m_items[i - 1].height : 0);
+    if (!bottom && !m.outgoing) ++m_missed; // arrived below the visible part
     updateScrollRange();
     if (bottom || m.outgoing) verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+    updateToLatestButton();
     updateVideoGeometry();
     viewport()->update();
 }
@@ -854,6 +1001,7 @@ void ChatView::resizeEvent(QResizeEvent *e)
         updateScrollRange();
         verticalScrollBar()->setValue(bottom ? verticalScrollBar()->maximum() : old);
     }
+    updateToLatestButton();
     updateVideoGeometry();
 }
 

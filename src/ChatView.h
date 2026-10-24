@@ -21,6 +21,8 @@ class QLabel;
 
 // Message list that paints rounded bubbles itself: quotes, inline images,
 // file rows, reactions, date separators, links and per-message text selection.
+class ScrollToLatestButton;
+
 class ChatView : public QAbstractScrollArea
 {
     Q_OBJECT
@@ -53,6 +55,8 @@ public:
     // Message under a viewport position, -1 if none.
     int messageAt(const QPoint &viewportPos) const;
     int messageCount() const { return m_msgs.size(); }
+    // Incoming messages that arrived while the view was scrolled away from the bottom.
+    int missedMessages() const { return m_missed; }
 
     // Geometry in viewport coordinates (also used by tests).
     QRect bubbleRect(int idx) const;
@@ -132,6 +136,7 @@ private:
     void updateCursorShape(const QPoint &vp);
     void stopAutoScroll();
     bool atBottom() const;
+    void updateToLatestButton();
     void updateVideoGeometry();
     QRect attachmentRectForVideo() const;
 
@@ -173,6 +178,8 @@ private:
     Hit m_pressHit;
     QTimer *m_autoScrollTimer = nullptr;
     QTimer *m_resizeTimer = nullptr;
+    ScrollToLatestButton *m_toLatest = nullptr; // round arrow button at the bottom right
+    int m_missed = 0;
     QPoint m_autoScrollAnchor;
     QPoint m_autoScrollPos;
     bool m_autoScrolling = false;
