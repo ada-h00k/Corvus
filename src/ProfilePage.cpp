@@ -1,6 +1,5 @@
-#include "ProfileDialog.h"
+#include "ProfilePage.h"
 
-#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -9,11 +8,20 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-ProfileDialog::ProfileDialog(QWidget *parent) : QDialog(parent)
+ProfilePage::ProfilePage(QWidget *parent) : QWidget(parent)
 {
-    setWindowTitle(tr("Profile settings"));
-    setObjectName(QStringLiteral("profileDialog"));
-    auto *lay = new QVBoxLayout(this);
+    setObjectName(QStringLiteral("profilePage"));
+    auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    m_offline = new QLabel(tr("Connect to signal-cli to edit your Signal profile."));
+    m_offline->setWordWrap(true);
+    m_offline->setVisible(false);
+    outer->addWidget(m_offline);
+    m_content = new QWidget;
+    outer->addWidget(m_content);
+    outer->addStretch(1);
+    auto *lay = new QVBoxLayout(m_content);
+    lay->setContentsMargins(0, 0, 0, 0);
 
     // --- Signal username
     auto *userBox = new QGroupBox(tr("Signal username"));
@@ -55,6 +63,13 @@ ProfileDialog::ProfileDialog(QWidget *parent) : QDialog(parent)
     // --- avatar
     auto *avatarBox = new QGroupBox(tr("Avatar"));
     auto *al = new QHBoxLayout(avatarBox);
+    m_avatarView = new QLabel;
+    m_avatarView->setObjectName(QStringLiteral("avatarView"));
+    m_avatarView->setFixedSize(80, 80);
+    m_avatarView->setAlignment(Qt::AlignCenter);
+    m_avatarView->setText(tr("No avatar"));
+    m_avatarView->setEnabled(false);
+    al->addWidget(m_avatarView);
     m_chooseAvatar = new QPushButton(tr("Choose avatar …"));
     m_chooseAvatar->setObjectName(QStringLiteral("avatarChoose"));
     m_removeAvatar = new QPushButton(tr("Remove avatar"));
@@ -70,15 +85,12 @@ ProfileDialog::ProfileDialog(QWidget *parent) : QDialog(parent)
     m_status->setWordWrap(true);
     lay->addWidget(m_status);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
-    lay->addWidget(buttons);
-
     connect(m_username, &QLineEdit::textChanged, this, [this](const QString &t) {
         m_applyUsername->setEnabled(!t.trimmed().isEmpty());
     });
     connect(m_displayName, &QLineEdit::textChanged, this, [this](const QString &t) {
-        m_applyDisplayName->setEnabled(!t.trimmed().isEmpty());
+        // nothing to change while the field still shows the current name
+        m_applyDisplayName->setEnabled(!t.trimmed().isEmpty() && t.trimmed() != m_currentName);
     });
 
     auto sendUsername = [this] {
@@ -97,29 +109,56 @@ ProfileDialog::ProfileDialog(QWidget *parent) : QDialog(parent)
     connect(m_username, &QLineEdit::returnPressed, this, sendUsername);
     connect(m_applyDisplayName, &QPushButton::clicked, this, sendDisplayName);
     connect(m_displayName, &QLineEdit::returnPressed, this, sendDisplayName);
-    connect(m_chooseAvatar, &QPushButton::clicked, this, &ProfileDialog::chooseAvatar);
+    connect(m_chooseAvatar, &QPushButton::clicked, this, &ProfilePage::chooseAvatar);
     connect(m_removeAvatar, &QPushButton::clicked, this, [this] {
         setStatus(tr("Saving …"));
         emit avatarRemoveRequested();
     });
 
-    setMinimumWidth(420);
 }
 
-void ProfileDialog::setCurrentUsername(const QString &text)
+void ProfilePage::setConnected(bool connected)
+{
+    m_offline->setVisible(!connected);
+    m_content->setEnabled(connected);
+}
+
+void ProfilePage::setCurrentDisplayName(const QString &name)
+{
+    // Do not overwrite what the user is typing: only follow while the field shows the old value.
+    const bool untouched = m_displayName->text().trimmed() == m_currentName;
+    m_currentName = name.trimmed();
+    if (untouched) m_displayName->setText(m_currentName);
+    m_applyDisplayName->setEnabled(!m_displayName->text().trimmed().isEmpty() &&
+                                   m_displayName->text().trimmed() != m_currentName);
+}
+
+void ProfilePage::setAvatar(const QPixmap &avatar)
+{
+    if (avatar.isNull()) {
+        m_avatarView->setPixmap(QPixmap());
+        m_avatarView->setText(tr("No avatar"));
+        m_avatarView->setEnabled(false);
+        return;
+    }
+    m_avatarView->setEnabled(true);
+    m_avatarView->setPixmap(avatar.scaled(m_avatarView->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+}
+
+void ProfilePage::setCurrentUsername(const QString &text)
 {
     m_currentUsername->setText(text);
 }
 
-void ProfileDialog::setStatus(const QString &text, bool error)
+void ProfilePage::setStatus(const QString &text, bool error)
 {
     m_status->setText(text);
     m_status->setStyleSheet(error ? QStringLiteral("color: #c0392b;") : QString());
 }
 
-void ProfileDialog::chooseAvatar()
+void ProfilePage::chooseAvatar()
 {
-    QFileDialog picker(this);
+    QFileDialog picker(window());
     picker.setWindowTitle(tr("Choose avatar"));
     picker.setFileMode(QFileDialog::ExistingFile);
     picker.setNameFilter(tr("Image files (*.png *.jpg *.jpeg *.webp *.gif);;All files (*)"));

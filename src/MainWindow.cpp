@@ -1,6 +1,6 @@
 #include "MainWindow.h"
 
-#include "AppearanceDialog.h"
+#include "AppearancePage.h"
 #include "AppIcon.h"
 #include "Attachments.h"
 #include "ChatView.h"
@@ -14,10 +14,10 @@
 #include "LinkDialog.h"
 #include "MediaGallery.h"
 #include "MessageInput.h"
-#include "NotificationDialog.h"
 #include "Notifier.h"
 #include "PassphraseDialog.h"
-#include "ProfileDialog.h"
+#include "ProfilePage.h"
+#include "SettingsDialog.h"
 #include "Records.h"
 #include "SoundPlayer.h"
 
@@ -282,12 +282,7 @@ MainWindow::MainWindow()
     file->addAction(tr("Quit"), QKeySequence::Quit, this, &MainWindow::quitApplication);
 
     QMenu *settings = menuBar()->addMenu(tr("&Settings"));
-    settings->addAction(tr("Appearance …"), this, &MainWindow::editAppearance);
-    settings->addAction(tr("Notifications && sound …"), this, &MainWindow::editNotifications);
-    settings->addAction(tr("History protection …"), this, &MainWindow::changeHistoryProtection);
-    settings->addAction(tr("Profile settings …"), this, &MainWindow::editProfile);
-    settings->addAction(tr("GIPHY API key …"), this, &MainWindow::configureGiphyApiKey);
-    settings->addAction(tr("Path to signal-cli …"), this, &MainWindow::chooseExecutable);
+    settings->addAction(tr("Configure Corvus …"), QKeySequence::Preferences, this, [this] { openSettings(); });
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
     help->addAction(tr("Check for signal-cli update"), this, [this] { checkForUpdates(false); });
@@ -920,6 +915,7 @@ void MainWindow::connectAccount()
             return;
         }
         m_version = version.section(QLatin1Char(' '), -1);
+        syncSettingsDialog();
 
         m_cli.queryAccounts([this, gen](const SignalCli::Result &r, const QStringList &accounts) {
             if (gen != m_connectGen) return;
@@ -1004,6 +1000,7 @@ void MainWindow::linkDevice()
 
 void MainWindow::setConnected(bool connected, const QString &info)
 {
+    QTimer::singleShot(0, this, [this] { syncSettingsDialog(); });
     m_input->setEnabled(connected);
     m_expandInputBtn->setEnabled(connected);
     m_sendBtn->setEnabled(connected);
@@ -3245,17 +3242,16 @@ void MainWindow::showAbout()
                                 historyPath().toHtmlEscaped()));
 }
 
-void MainWindow::editAppearance()
+void MainWindow::applyAppearance(const Appearance &appearance)
 {
-    AppearanceDialog dlg(m_appearance, this);
-    if (dlg.exec() != QDialog::Accepted) return;
-    m_appearance = dlg.appearance();
+    if (appearance == m_appearance) return;
+    m_appearance = appearance;
     m_appearance.save(palette());
     m_view->setAppearance(m_appearance);
     updateSendButton();
     AppIcon::setMode(iconMode(m_appearance));
     refreshIcons();
-    refreshList(); // shows or hides the avatars (and fetches them if needed)
+    refreshList(); // shows or hides the avatars (and fetches them if needed), re-sorts the list
 }
 
 // ----------------------------------------- Tray, notifications, sound
@@ -3403,56 +3399,107 @@ void MainWindow::setMuted(const QString &key, bool muted)
     refreshList();
 }
 
-void MainWindow::editNotifications()
+void MainWindow::applyNotifications(const NotificationSettings &notify)
 {
-    NotificationDialog dlg(m_notify, m_sound, m_notifier, QSystemTrayIcon::isSystemTrayAvailable(), this);
-    if (dlg.exec() != QDialog::Accepted) return;
-    m_notify = dlg.settings();
+    if (notify == m_notify) return;
+    m_notify = notify;
     m_notify.save();
     applyNotificationSettings();
 }
 
-void MainWindow::editProfile()
+// One window for everything (Settings → Configure Corvus …). General, Appearance and Notifications
+// are applied through OK / Apply; the buttons of the other pages act at once and are wired here.
+void MainWindow::openSettings(int page)
 {
-    if (m_profileDialog) { // already open: just bring it to the front
-        m_profileDialog->show();
-        m_profileDialog->raise();
-        m_profileDialog->activateWindow();
+    if (m_settings) { // already open: just bring it to the front
+        m_settings->showPage(SettingsDialog::Page(page));
+        m_settings->raise();
+        m_settings->activateWindow();
         return;
     }
-    if (m_account.isEmpty() || !m_cli.isRunning()) {
-        statusBar()->showMessage(tr("Connect to signal-cli before editing your profile."), 8000);
-        return;
-    }
+    SettingsDialog dlg(m_appearance, m_notify, m_sound, m_notifier, QSystemTrayIcon::isSystemTrayAvailable(), this);
+    m_settings = &dlg;
+    m_profilePage = dlg.profilePage();
 
-    auto *dlg = new ProfileDialog(this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    m_profileDialog = dlg;
-    connect(dlg, &ProfileDialog::usernameChosen, this, &MainWindow::applySignalUsername);
-    connect(dlg, &ProfileDialog::displayNameChosen, this, [this](const QString &name) {
+    connect(&dlg, &SettingsDialog::applied, this, [this](const Appearance &ap, const NotificationSettings &ns) {
+        applyAppearance(ap);
+        applyNotifications(ns);
+    });
+
+    // Profile (talks to Signal)
+    connect(m_profilePage, &ProfilePage::usernameChosen, this, &MainWindow::applySignalUsername);
+    connect(m_profilePage, &ProfilePage::displayNameChosen, this, [this](const QString &name) {
         sendProfileUpdate({{QStringLiteral("givenName"), name},
                            {QStringLiteral("familyName"), QString()},
                            {QStringLiteral("removeAvatar"), false}},
-                          tr("Signal display name updated."));
+                          tr("Signal display name updated."), [this, name] {
+                              if (m_profilePage) m_profilePage->setCurrentDisplayName(name);
+                          });
     });
-    connect(dlg, &ProfileDialog::avatarChosen, this, [this](const QString &path) {
+    connect(m_profilePage, &ProfilePage::avatarChosen, this, [this](const QString &path) {
         // The copy stays in the temporary directory until Corvus quits.
         const QString staged = SignalCli::stageFiles({path}, m_tmp.path() + QStringLiteral("/avatar-") +
                                                                   QUuid::createUuid().toString(QUuid::WithoutBraces)).first();
         sendProfileUpdate({{QStringLiteral("avatar"), staged}, {QStringLiteral("removeAvatar"), false}},
-                          tr("Signal avatar updated."));
+                          tr("Signal avatar updated."), [this, staged] {
+                              if (!m_profilePage) return;
+                              const QImage img(staged);
+                              m_profilePage->setAvatar(img.isNull() ? QPixmap() : roundAvatar(img, 80));
+                          });
     });
-    connect(dlg, &ProfileDialog::avatarRemoveRequested, this, [this] {
-        sendProfileUpdate({{QStringLiteral("removeAvatar"), true}}, tr("Signal avatar removed."));
+    connect(m_profilePage, &ProfilePage::avatarRemoveRequested, this, [this] {
+        sendProfileUpdate({{QStringLiteral("removeAvatar"), true}}, tr("Signal avatar removed."), [this] {
+            if (m_profilePage) m_profilePage->setAvatar(QPixmap());
+        });
     });
-    dlg->show();
-    loadSignalUsername();
+
+    // Privacy, Advanced
+    connect(dlg.privacyPage(), &PrivacyPage::changeProtectionRequested, this, [this] {
+        changeHistoryProtection();
+        syncSettingsDialog();
+    });
+    AdvancedPage *adv = dlg.advancedPage();
+    connect(adv, &AdvancedPage::chooseExecutableRequested, this, [this] {
+        chooseExecutable();
+        syncSettingsDialog();
+    });
+    connect(adv, &AdvancedPage::checkForUpdateRequested, this, [this] { checkForUpdates(false); });
+    connect(adv, &AdvancedPage::reconnectRequested, this, [this] {
+        reconnect();
+        syncSettingsDialog();
+    });
+    connect(adv, &AdvancedPage::giphyKeyRequested, this, [this] {
+        configureGiphyApiKey();
+        syncSettingsDialog();
+    });
+
+    syncSettingsDialog();
+    dlg.showPage(SettingsDialog::Page(page));
+    if (page == SettingsDialog::Profile && m_profilePage && !m_account.isEmpty() && m_cli.isRunning()) loadSignalUsername();
+    connect(&dlg, &SettingsDialog::pageChanged, this, [this](int p) {
+        if (p == SettingsDialog::Profile && !m_account.isEmpty() && m_cli.isRunning()) loadSignalUsername();
+    });
+    dlg.exec();
+    m_settings = nullptr;
+    m_profilePage = nullptr;
+}
+
+// Brings the pages that show state of the application (connection, paths, key) up to date.
+void MainWindow::syncSettingsDialog()
+{
+    if (!m_settings) return;
+    m_settings->profilePage()->setConnected(!m_account.isEmpty() && m_cli.isRunning());
+    m_settings->privacyPage()->setHistory(historyPath(), m_historyProtectionMode, m_store.isOpen());
+    m_settings->advancedPage()->setSignalCli(m_cli.executable(), m_version);
+    QString key, error;
+    const bool known = GiphyApiKeyStore::load(key, error);
+    m_settings->advancedPage()->setGiphyKeyState(known, !key.isEmpty());
 }
 
 void MainWindow::reportProfileStatus(const QString &message, bool error)
 {
     statusBar()->showMessage(message, 10000);
-    if (m_profileDialog) m_profileDialog->setStatus(message, error);
+    if (m_profilePage) m_profilePage->setStatus(message, error);
 }
 
 void MainWindow::loadSignalUsername()
@@ -3460,27 +3507,67 @@ void MainWindow::loadSignalUsername()
     m_cli.call(QStringLiteral("listContacts"),
                {{QStringLiteral("recipients"), QJsonArray{m_account}}},
                [this](const QJsonValue &res, const QString &err) {
-        if (!m_profileDialog) return;
+        if (!m_profilePage) return;
         if (!err.isEmpty()) {
-            m_profileDialog->setCurrentUsername(tr("unavailable"));
+            m_profilePage->setCurrentUsername(tr("unavailable"));
             reportProfileStatus(tr("Could not read your Signal username: %1").arg(err), true);
             return;
         }
 
         bool accountFound = false;
         QString currentUsername;
+        QString currentName;
         for (const QJsonValue &value : res.toArray()) {
             const QJsonObject account = value.toObject();
             if (account.value(QStringLiteral("number")).toString() == m_account ||
                 account.value(QStringLiteral("uuid")).toString() == m_account) {
                 accountFound = true;
                 currentUsername = account.value(QStringLiteral("username")).toString();
+                // The display name is the profile's given + family name (signal-cli also has a
+                // plain "name" for contacts; it is the fallback).
+                const QJsonObject profile = account.value(QStringLiteral("profile")).toObject();
+                QString given = profile.value(QStringLiteral("givenName")).toString();
+                QString family = profile.value(QStringLiteral("familyName")).toString();
+                if (given.isEmpty() && family.isEmpty()) {
+                    given = account.value(QStringLiteral("givenName")).toString();
+                    family = account.value(QStringLiteral("familyName")).toString();
+                }
+                currentName = (given + QLatin1Char(' ') + family).trimmed();
+                if (currentName.isEmpty()) currentName = account.value(QStringLiteral("name")).toString();
                 break;
             }
         }
-        m_profileDialog->setCurrentUsername(!accountFound ? tr("unavailable")
+        m_profilePage->setCurrentUsername(!accountFound ? tr("unavailable")
                                             : currentUsername.isEmpty() ? tr("not set") : currentUsername);
+        if (accountFound) m_profilePage->setCurrentDisplayName(currentName);
+        loadOwnAvatar();
     });
+}
+
+// The avatar of this account: first the profile picture, then (as the other avatars do) the address book.
+void MainWindow::loadOwnAvatar()
+{
+    if (!m_profilePage || m_account.isEmpty() || !m_cli.isRunning()) return;
+    auto show = [this](const QByteArray &data) {
+        if (!m_profilePage) return;
+        const QImage img = data.isEmpty() ? QImage() : AttachmentUtil::imageFromData(data);
+        m_profilePage->setAvatar(img.isNull() ? QPixmap() : roundAvatar(img, 80));
+    };
+    auto dataOf = [](const QJsonValue &res) {
+        return QByteArray::fromBase64(res.toObject().value(QStringLiteral("data")).toString().toLatin1());
+    };
+    m_cli.call(QStringLiteral("getAvatar"), {{QStringLiteral("profile"), m_account}},
+               [this, show, dataOf](const QJsonValue &res, const QString &err) {
+                   const QByteArray data = err.isEmpty() ? dataOf(res) : QByteArray();
+                   if (!data.isEmpty()) {
+                       show(data);
+                       return;
+                   }
+                   m_cli.call(QStringLiteral("getAvatar"), {{QStringLiteral("contact"), m_account}},
+                              [show, dataOf](const QJsonValue &res2, const QString &err2) {
+                                  show(err2.isEmpty() ? dataOf(res2) : QByteArray());
+                              });
+               });
 }
 
 void MainWindow::applySignalUsername(const QString &username)
@@ -3497,20 +3584,22 @@ void MainWindow::applySignalUsername(const QString &username)
             return;
         }
         const QString updatedUsername = result.toObject().value(QStringLiteral("username")).toString();
-        if (m_profileDialog && !updatedUsername.isEmpty()) m_profileDialog->setCurrentUsername(updatedUsername);
+        if (m_profilePage && !updatedUsername.isEmpty()) m_profilePage->setCurrentUsername(updatedUsername);
         reportProfileStatus(updatedUsername.isEmpty() ? tr("Signal username updated.")
                                                       : tr("Signal username: %1").arg(updatedUsername),
                             false);
     });
 }
 
-void MainWindow::sendProfileUpdate(const QJsonObject &params, const QString &successMessage)
+void MainWindow::sendProfileUpdate(const QJsonObject &params, const QString &successMessage,
+                                   const std::function<void()> &onSuccess)
 {
     if (m_account.isEmpty() || !m_cli.isRunning()) {
         reportProfileStatus(tr("Connect to signal-cli before editing your profile."), true);
         return;
     }
-    m_cli.call(QStringLiteral("updateProfile"), params, [this, successMessage](const QJsonValue &, const QString &err) {
+    m_cli.call(QStringLiteral("updateProfile"), params, [this, successMessage, onSuccess](const QJsonValue &, const QString &err) {
+        if (err.isEmpty() && onSuccess) onSuccess();
         reportProfileStatus(err.isEmpty() ? successMessage
                                           : tr("Could not update your Signal profile: %1").arg(err),
                             !err.isEmpty());

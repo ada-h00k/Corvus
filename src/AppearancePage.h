@@ -1,22 +1,23 @@
 #pragma once
 
-#include <QDialog>
+#include <QWidget>
 
 #include "Appearance.h"
 
 class ChatView;
-class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
 class QSlider;
 
-// Settings → Appearance …: bubble colours, corner radius (live preview), the avatar switch and the app icon.
-class AppearanceDialog : public QDialog
+// Settings → Appearance: bubble colours, corner radius (live preview) and the app icon.
+// appearance() returns the values of these controls; the other fields (avatars, sorting, Send
+// button – see the General page) are passed through unchanged from setAppearance().
+class AppearancePage : public QWidget
 {
     Q_OBJECT
 public:
-    explicit AppearanceDialog(const Appearance &current, QWidget *parent = nullptr);
+    explicit AppearancePage(const Appearance &current, QWidget *parent = nullptr);
 
     Appearance appearance() const { return m_ap; }
     void setAppearance(const Appearance &a);
@@ -34,9 +35,9 @@ private:
     QList<Row> m_rows;
     QSlider *m_radius;
     QLabel *m_radiusLabel;
-    QCheckBox *m_showAvatars;
-    QCheckBox *m_sortAlphabetically;
-    QCheckBox *m_alwaysShowSend;
     QComboBox *m_appIcon;
     ChatView *m_preview;
+
+signals:
+    void changed();
 };

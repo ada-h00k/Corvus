@@ -1,7 +1,9 @@
 // Headless test of the bubble view: rounded corners, configurable colours,
 // layout, hit-testing, selection, links, quotes, appearance persistence.
 #include "Appearance.h"
-#include "AppearanceDialog.h"
+#include "AppearancePage.h"
+#include "NotificationSettings.h"
+#include "SettingsDialog.h"
 #include "Attachments.h"
 #include "ChatView.h"
 
@@ -16,6 +18,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScrollBar>
+#include <QListWidget>
+#include <QPushButton>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSlider>
@@ -505,19 +509,25 @@ int main(int argc, char **argv)
         Appearance::reset();
     }
 
-    std::printf("appearance dialog\n");
+    std::printf("settings dialog: appearance, general\n");
     {
-        AppearanceDialog dlg(ap);
+        SettingsDialog dlg(ap, NotificationSettings(), nullptr, nullptr, true);
         dlg.show();
+        dlg.showPage(SettingsDialog::AppearanceSettings);
+        auto *page = dlg.findChild<AppearancePage *>();
+        CHECK(page != nullptr);
+        auto *applyBtn = dlg.findChildren<QPushButton *>().value(0);
+        (void)applyBtn;
         CHECK(dlg.appearance() == ap);
         auto *pv = dlg.findChild<ChatView *>();
         CHECK(pv && pv->messageCount() == 3);
         Appearance changed = ap;
         changed.outBg = QColor("#00aa55");
         changed.radius = 24;
-        dlg.setAppearance(changed);
+        page->setAppearance(changed);
         pump();
         CHECK(dlg.appearance() == changed);
+        CHECK(page->appearance() == changed);
         CHECK(pv->appearance() == changed); // live preview follows
         dlg.grab().save(shots + "/appearance_dialog.png");
         auto *avatarBox = dlg.findChild<QCheckBox *>("showAvatars");
@@ -549,11 +559,52 @@ int main(int argc, char **argv)
         if (iconBox) {
             iconBox->setCurrentIndex(Appearance::IconDark);
             CHECK(dlg.appearance().appIcon == Appearance::IconDark);
-            dlg.setAppearance(Appearance::defaults(dlg.palette())); // "Reset to defaults"
+            page->setAppearance(Appearance::defaults(dlg.palette())); // "Reset to defaults"
             CHECK(iconBox->currentIndex() == Appearance::IconFollowTheme);
         }
-        dlg.setAppearance(Appearance::defaults(dlg.palette()));
+        page->setAppearance(Appearance::defaults(dlg.palette()));
         CHECK(dlg.appearance() == Appearance::defaults(dlg.palette()));
+    }
+
+
+    std::printf("settings dialog: pages and apply\n");
+    {
+        SettingsDialog dlg(ap, NotificationSettings(), nullptr, nullptr, true);
+        dlg.show();
+        auto *cats = dlg.findChild<QListWidget *>("settingsCategories");
+        CHECK(cats && cats->count() == 6);
+        if (cats) {
+            const QStringList want = {"General", "Appearance", "Notifications", "Profile", "Privacy", "Advanced"};
+            for (int i = 0; i < want.size() && i < cats->count(); ++i) CHECK(cats->item(i)->text() == want[i]);
+        }
+        QPushButton *apply = nullptr;
+        for (QPushButton *b : dlg.findChildren<QPushButton *>())
+            if (b->text().remove('&') == "Apply") apply = b;
+        CHECK(apply && !apply->isEnabled()); // nothing changed yet
+        int applied = 0;
+        Appearance seen;
+        QObject::connect(&dlg, &SettingsDialog::applied, [&](const Appearance &a, const NotificationSettings &) {
+            ++applied;
+            seen = a;
+        });
+        // an option on the General page changes the Appearance values handed to MainWindow
+        auto *sort = dlg.findChild<QCheckBox *>("sortAlphabetically");
+        CHECK(sort != nullptr);
+        if (sort) sort->click();
+        CHECK(apply && apply->isEnabled());
+        if (apply) apply->click();
+        CHECK(applied == 1 && seen.sortAlphabetically);
+        CHECK(apply && !apply->isEnabled());
+        // "Reset to defaults" on the Appearance page leaves the General options alone
+        auto *page = dlg.findChild<AppearancePage *>();
+        Appearance changed = dlg.appearance();
+        changed.radius = 3;
+        page->setAppearance(changed);
+        CHECK(dlg.appearance().radius == 3 && dlg.appearance().sortAlphabetically);
+        for (QPushButton *b : page->findChildren<QPushButton *>())
+            if (b->text() == "Reset to defaults") b->click();
+        CHECK(dlg.appearance().radius == Appearance::defaults(dlg.palette()).radius);
+        CHECK(dlg.appearance().sortAlphabetically);
     }
 
     std::printf(g_failed ? "FAILED (%d checks)\n" : "ALL OK\n", g_failed);

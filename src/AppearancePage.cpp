@@ -1,9 +1,7 @@
-#include "AppearanceDialog.h"
+#include "AppearancePage.h"
 
-#include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
-#include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -42,10 +40,11 @@ static QList<Message> sampleMessages()
     return {a, b, c};
 }
 
-AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) : QDialog(parent), m_ap(current)
+AppearancePage::AppearancePage(const Appearance &current, QWidget *parent) : QWidget(parent), m_ap(current)
 {
-    setWindowTitle(tr("Appearance"));
+    setObjectName(QStringLiteral("appearancePage"));
     auto *lay = new QVBoxLayout(this);
+    lay->setContentsMargins(0, 0, 0, 0);
 
     m_preview = new ChatView;
     m_preview->setMinimumSize(440, 320);
@@ -76,30 +75,7 @@ AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) :
     m_appIcon->addItem(QIcon(AppIcon::render(32, 0, false)), tr("Dark"));
     m_appIcon->addItem(QIcon(AppIcon::render(32, 0, true)), tr("Light"));
     form->addRow(tr("App icon"), m_appIcon);
-    m_showAvatars = new QCheckBox(tr("Show avatars in the contact list"));
-    m_showAvatars->setObjectName(QStringLiteral("showAvatars"));
-    form->addRow(m_showAvatars);
-    m_sortAlphabetically = new QCheckBox(tr("Sort contacts alphabetically"));
-    m_sortAlphabetically->setObjectName(QStringLiteral("sortAlphabetically"));
-    m_sortAlphabetically->setToolTip(tr("Keep the contact list in alphabetical order instead of moving chats with new messages to the top"));
-    form->addRow(m_sortAlphabetically);
-    m_alwaysShowSend = new QCheckBox(tr("Always show the Send button"));
-    m_alwaysShowSend->setObjectName(QStringLiteral("alwaysShowSend"));
-    m_alwaysShowSend->setToolTip(tr("Show the Send button next to the message field, not only when the field is expanded"));
-    form->addRow(m_alwaysShowSend);
     lay->addLayout(form);
-    connect(m_showAvatars, &QCheckBox::toggled, this, [this](bool on) {
-        m_ap.showAvatars = on;
-        refresh();
-    });
-    connect(m_sortAlphabetically, &QCheckBox::toggled, this, [this](bool on) {
-        m_ap.sortAlphabetically = on;
-        refresh();
-    });
-    connect(m_alwaysShowSend, &QCheckBox::toggled, this, [this](bool on) {
-        m_ap.alwaysShowSend = on;
-        refresh();
-    });
     connect(m_appIcon, &QComboBox::currentIndexChanged, this, [this](int index) {
         m_ap.appIcon = index;
         refresh();
@@ -109,18 +85,25 @@ AppearanceDialog::AppearanceDialog(const Appearance &current, QWidget *parent) :
         refresh();
     });
 
-    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    auto *reset = box->addButton(tr("Reset to defaults"), QDialogButtonBox::ResetRole);
-    connect(reset, &QPushButton::clicked, this, [this] { setAppearance(Appearance::defaults(palette())); });
-    connect(box, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(box, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    lay->addWidget(box);
+    auto *resetRow = new QHBoxLayout;
+    auto *reset = new QPushButton(tr("Reset to defaults"));
+    connect(reset, &QPushButton::clicked, this, [this] {
+        // Only what this page edits: the General page's options are not touched.
+        const Appearance d = Appearance::defaults(palette());
+        Appearance a = m_ap;
+        a.background = d.background; a.outBg = d.outBg; a.outText = d.outText; a.inBg = d.inBg;
+        a.inText = d.inText; a.radius = d.radius; a.appIcon = d.appIcon;
+        setAppearance(a);
+    });
+    resetRow->addStretch(1);
+    resetRow->addWidget(reset);
+    lay->addLayout(resetRow);
 
     m_preview->showMessages(sampleMessages());
     refresh();
 }
 
-void AppearanceDialog::addColorRow(QFormLayout *form, const QString &title, QColor Appearance::*member)
+void AppearancePage::addColorRow(QFormLayout *form, const QString &title, QColor Appearance::*member)
 {
     auto *b = new QPushButton;
     b->setMinimumWidth(130);
@@ -134,13 +117,13 @@ void AppearanceDialog::addColorRow(QFormLayout *form, const QString &title, QCol
     });
 }
 
-void AppearanceDialog::setAppearance(const Appearance &a)
+void AppearancePage::setAppearance(const Appearance &a)
 {
     m_ap = a;
     refresh();
 }
 
-void AppearanceDialog::refresh()
+void AppearancePage::refresh()
 {
     for (const Row &r : std::as_const(m_rows)) {
         const QColor c = m_ap.*(r.member);
@@ -149,16 +132,11 @@ void AppearanceDialog::refresh()
                                                "border-radius: 4px; padding: 4px; }")
                                     .arg(c.name(), c.lightness() < 128 ? QStringLiteral("white") : QStringLiteral("black")));
     }
-    QSignalBlocker blockAvatars(m_showAvatars);
-    m_showAvatars->setChecked(m_ap.showAvatars);
-    QSignalBlocker blockSort(m_sortAlphabetically);
-    m_sortAlphabetically->setChecked(m_ap.sortAlphabetically);
-    QSignalBlocker blockSend(m_alwaysShowSend);
-    m_alwaysShowSend->setChecked(m_ap.alwaysShowSend);
     QSignalBlocker blockIcon(m_appIcon);
     m_appIcon->setCurrentIndex(m_ap.appIcon);
     QSignalBlocker block(m_radius);
     m_radius->setValue(m_ap.radius);
     m_radiusLabel->setText(tr("%1 px").arg(m_ap.radius));
     m_preview->setAppearance(m_ap);
+    emit changed();
 }

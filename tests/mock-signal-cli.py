@@ -96,6 +96,7 @@ CONTACTS = [
 ]
 GROUPS = [{"id": "R1JPVVA=", "name": "Team", "isMember": True, "isBlocked": False, "messageExpirationTime": 0}]
 current_username = "oldname.1234"
+own_given, own_family = "Old", "Name"
 account_index = args.index("-a") + 1 if "-a" in args else -1
 self_account = args[account_index] if account_index > 0 else ""
 sent = 0
@@ -112,12 +113,13 @@ for line in sys.stdin:
     m, p, rid = req.get("method"), req.get("params", {}), req.get("id")
     if m == "listContacts":
         if self_account in p.get("recipients", []):
-            res = [{"number": self_account, "uuid": "self-uuid", "username": current_username}]
+            res = [{"number": self_account, "uuid": "self-uuid", "username": current_username,
+                    "profile": {"givenName": own_given, "familyName": own_family}}]
         else:
             res = CONTACTS
     elif m == "getAvatar":
         # contact / group avatars exist, profile avatars do not (exercises the fallback path)
-        if "profile" in p:
+        if "profile" in p and p["profile"] != self_account:
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find avatar"}})
             continue
         res = {"data": base64.b64encode(png(48, 48)).decode()}
@@ -127,6 +129,8 @@ for line in sys.stdin:
             current_username += ".5678"
         res = {"username": current_username, "usernameLink": "https://signal.me/#eu/test-link"}
     elif m == "updateProfile":
+        if "givenName" in p:
+            own_given, own_family = p["givenName"], p.get("familyName", "")
         res = {}
     elif m == "listGroups":
         res = GROUPS

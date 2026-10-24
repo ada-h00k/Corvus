@@ -48,16 +48,18 @@ set(APP_SOURCES
     src/SoundPlayer.cpp
     src/Notifier.h
     src/Notifier.cpp
-    src/NotificationDialog.h
-    src/NotificationDialog.cpp
+    src/NotificationPage.h
+    src/NotificationPage.cpp
     src/AppIcon.h
     src/AppIcon.cpp
     src/Appearance.h
     src/Appearance.cpp
-    src/AppearanceDialog.h
-    src/AppearanceDialog.cpp
-    src/ProfileDialog.h
-    src/ProfileDialog.cpp
+    src/AppearancePage.h
+    src/AppearancePage.cpp
+    src/ProfilePage.h
+    src/ProfilePage.cpp
+    src/SettingsDialog.h
+    src/SettingsDialog.cpp
     src/Attachments.h
     src/Attachments.cpp
     src/Records.h

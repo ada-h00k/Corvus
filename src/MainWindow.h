@@ -25,7 +25,8 @@ class ChatView;
 class EmojiPicker;
 class GiphyPicker;
 class MessageInput;
-class ProfileDialog;
+class ProfilePage;
+class SettingsDialog;
 class Notifier;
 class SoundPlayer;
 class QAction;
@@ -87,9 +88,10 @@ private slots:
     void checkForUpdates(bool silent);
     void showAbout();
     void changeHistoryProtection();
-    void editAppearance();
-    void editNotifications();
-    void editProfile();
+    void openSettings(int page = 0); // SettingsDialog::Page
+    void applyAppearance(const Appearance &appearance);
+    void applyNotifications(const NotificationSettings &notify);
+    void syncSettingsDialog();
     void showComposerPicker();
     void configureGiphyApiKey();
     void quitApplication();
@@ -200,12 +202,15 @@ private:
     void openMediaGallery(const QString &key);
     // Files or an image (e.g. a screenshot) from drag & drop / the clipboard -> pending attachments.
     bool attachFromMimeData(const QMimeData *md);
-    void sendProfileUpdate(const QJsonObject &params, const QString &successMessage);
-    void loadSignalUsername();
+    void sendProfileUpdate(const QJsonObject &params, const QString &successMessage,
+                           const std::function<void()> &onSuccess = {});
+    void loadSignalUsername(); // username, display name and avatar of this account
+    void loadOwnAvatar();
     void applySignalUsername(const QString &username);
     void reportProfileStatus(const QString &message, bool error);
 
-    QPointer<ProfileDialog> m_profileDialog;
+    QPointer<SettingsDialog> m_settings;
+    QPointer<ProfilePage> m_profilePage;
 
     SignalCli m_cli;
     HistoryStore m_store;

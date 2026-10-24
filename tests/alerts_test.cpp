@@ -5,7 +5,8 @@
 // Must run inside a session bus: dbus-run-session -- alerts_test
 #include "AppIcon.h"
 #include "MainWindow.h"
-#include "NotificationDialog.h"
+#include "NotificationPage.h"
+#include "SettingsDialog.h"
 #include "NotificationSettings.h"
 #include "Notifier.h"
 #include "PassphraseDialog.h"
@@ -606,9 +607,9 @@ int main(int argc, char **argv)
         SoundPlayer player;
         Notifier notifier;
         NotificationSettings start;
-        NotificationDialog dlg(start, &player, &notifier, true);
+        SettingsDialog dlg(Appearance::defaults(QApplication::palette()), start, &player, &notifier, true);
         dlg.show();
-        CHECK(dlg.settings() == start);
+        CHECK(dlg.notifications() == start);
 
         auto box = [&](const QString &text) {
             for (QCheckBox *c : dlg.findChildren<QCheckBox *>())
@@ -617,11 +618,13 @@ int main(int argc, char **argv)
         };
         QCheckBox *notify = box("notification for new");
         QCheckBox *soundOn = box("Play a sound");
-        QCheckBox *trayOn = box("Show a tray icon");
-        QCheckBox *closeTray = box("Keep running");
-        QCheckBox *startInTray = box("Start minimized");
+        QCheckBox *trayOn = box("Show a tray icon");   // General page
+        QCheckBox *closeTray = box("Keep running");    // General page
+        QCheckBox *startInTray = box("Start minimized"); // General page
         CHECK(notify && soundOn && trayOn && closeTray && startInTray);
-        const QList<QComboBox *> combos = dlg.findChildren<QComboBox *>();
+        auto *np = dlg.findChild<NotificationPage *>();
+        CHECK(np != nullptr);
+        const QList<QComboBox *> combos = np->findChildren<QComboBox *>();
         CHECK(combos.size() == 2);
 
         notify->setChecked(false);
@@ -630,7 +633,7 @@ int main(int argc, char **argv)
         CHECK(!combos[1]->isEnabled());
         trayOn->setChecked(false);
         CHECK(!closeTray->isEnabled() && !startInTray->isEnabled());
-        NotificationSettings got = dlg.settings();
+        NotificationSettings got = dlg.notifications();
         CHECK(!got.notifications && !got.sound && !got.trayIcon && !got.startMinimizedInTray);
 
         NotificationSettings other;
@@ -639,15 +642,17 @@ int main(int argc, char **argv)
         other.startMinimizedInTray = true;
         other.soundId = "pop";
         other.content = NotificationSettings::NameOnly;
-        dlg.setSettings(other);
-        CHECK(dlg.settings() == other);
+        np->setSettings(other);
+        trayOn->setChecked(true);
+        startInTray->setChecked(true);
+        CHECK(dlg.notifications() == other);
         CHECK(startInTray->isChecked());
         CHECK(combos[1]->isEnabled());
 
         // the test buttons really fire
         bus.notif->reset();
         const int before = s.sounds();
-        for (QPushButton *b : dlg.findChildren<QPushButton *>())
+        for (QPushButton *b : np->findChildren<QPushButton *>())
             if (b->text() == "Test" && b->isEnabled()) b->click();
         CHECK(waitFor([&] { return !bus.notif->snapshot().isEmpty(); }));
         CHECK(waitFor([&] { return s.sounds() == before + 1; }));

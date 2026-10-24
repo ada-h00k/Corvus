@@ -6,7 +6,8 @@
 #include "ImageViewer.h"
 #include "MainWindow.h"
 #include "PassphraseDialog.h"
-#include "ProfileDialog.h"
+#include "ProfilePage.h"
+#include "SettingsDialog.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -278,37 +279,27 @@ static QJsonObject lastCall(const QString &log, const QString &method)
     return last;
 }
 
-// Settings → "Profile settings …" opens a window of its own (ProfileDialog).
-static QAction *profileAction(MainWindow &window)
+// Settings → "Configure Corvus …" opens the settings window; the Profile page lives in it.
+static QAction *settingsAction(MainWindow &window)
 {
     for (QAction *menuAction : window.menuBar()->actions()) {
         if (!menuAction->text().contains(QStringLiteral("Settings"))) continue;
         for (QAction *action : menuAction->menu()->actions())
-            if (action->text().contains(QStringLiteral("Profile settings"))) return action;
+            if (action->text().contains(QStringLiteral("Configure Corvus"))) return action;
     }
     return nullptr;
 }
 
-static ProfileDialog *openProfileDialog(MainWindow &window)
+// The settings dialog is modal (exec), so the test drives it from a timer that fires inside its event loop.
+static SettingsDialog *findSettingsDialog()
 {
-    QAction *action = profileAction(window);
-    if (!action) return nullptr;
-    action->trigger();
-    ProfileDialog *dialog = nullptr;
+    SettingsDialog *dialog = nullptr;
     waitFor([&] {
         for (QWidget *w : QApplication::topLevelWidgets())
-            if (auto *d = qobject_cast<ProfileDialog *>(w)) { dialog = d; return d->isVisible(); }
+            if (auto *d = qobject_cast<SettingsDialog *>(w)) { dialog = d; return d->isVisible(); }
         return false;
     }, 3000);
     return dialog;
-}
-
-static void closeProfileDialog(ProfileDialog *dialog)
-{
-    if (!dialog) return;
-    QPointer<ProfileDialog> guard(dialog);
-    dialog->close();
-    waitFor([&] { return guard.isNull(); }, 3000);
 }
 
 static bool loggedAttachmentFetch(const QString &log, const QString &attachmentId)
@@ -320,7 +311,7 @@ static bool loggedAttachmentFetch(const QString &log, const QString &attachmentI
     return false;
 }
 
-static bool changeSignalUsername(ProfileDialog *dialog, const QString &username, const QString &logFile)
+static bool changeSignalUsername(ProfilePage *dialog, const QString &username, const QString &logFile)
 {
     auto *label = dialog->findChild<QLabel *>(QStringLiteral("currentUsernameLabel"));
     auto *edit = dialog->findChild<QLineEdit *>(QStringLiteral("usernameEdit"));
@@ -339,7 +330,7 @@ static bool changeSignalUsername(ProfileDialog *dialog, const QString &username,
     return showedCurrent && updated;
 }
 
-static bool changeProfileDisplayName(ProfileDialog *dialog, const QString &displayName, const QString &logFile)
+static bool changeProfileDisplayName(ProfilePage *dialog, const QString &displayName, const QString &logFile)
 {
     auto *edit = dialog->findChild<QLineEdit *>(QStringLiteral("displayNameEdit"));
     auto *apply = dialog->findChild<QPushButton *>(QStringLiteral("displayNameApply"));
@@ -355,7 +346,7 @@ static bool changeProfileDisplayName(ProfileDialog *dialog, const QString &displ
     return updated;
 }
 
-static bool removeProfileAvatar(ProfileDialog *dialog, const QString &logFile)
+static bool removeProfileAvatar(ProfilePage *dialog, const QString &logFile)
 {
     auto *remove = dialog->findChild<QPushButton *>(QStringLiteral("avatarRemove"));
     CHECK(remove != nullptr);
@@ -571,16 +562,34 @@ int main(int argc, char **argv)
             }
             CHECK(found);
         }
-        ProfileDialog *profile = openProfileDialog(w);
-        CHECK(profile != nullptr);
-        if (profile) {
-            CHECK(profile->windowTitle().contains(QStringLiteral("Profile settings")));
+        QAction *settingsAct = settingsAction(w);
+        CHECK(settingsAct != nullptr);
+        bool settingsDriven = false;
+        QTimer::singleShot(300, &w, [&] {
+            SettingsDialog *settingsDlg = findSettingsDialog();
+            CHECK(settingsDlg != nullptr);
+            if (!settingsDlg) return;
+            settingsDlg->showPage(SettingsDialog::Profile);
+            ProfilePage *profile = settingsDlg->profilePage();
+            CHECK(profile != nullptr);
+            CHECK(settingsDlg->windowTitle().contains(QStringLiteral("Settings")));
             CHECK(profile->findChild<QPushButton *>(QStringLiteral("avatarChoose")) != nullptr);
+            // the page shows the current display name and the current avatar
+            auto *nameEdit = profile->findChild<QLineEdit *>(QStringLiteral("displayNameEdit"));
+            auto *avatarView = profile->findChild<QLabel *>(QStringLiteral("avatarView"));
+            CHECK(nameEdit && avatarView);
+            if (nameEdit && avatarView) {
+                CHECK(waitFor([&] { return nameEdit->text() == QStringLiteral("Old Name"); }, 5000));
+                CHECK(waitFor([&] { return !avatarView->pixmap(Qt::ReturnByValue).isNull(); }, 5000));
+            }
             CHECK(changeSignalUsername(profile, QStringLiteral("newname"), logFile));
             CHECK(changeProfileDisplayName(profile, QStringLiteral("New Display Name"), logFile));
             CHECK(removeProfileAvatar(profile, logFile));
-            closeProfileDialog(profile);
-        }
+            settingsDriven = true;
+            settingsDlg->reject();
+        });
+        if (settingsAct) settingsAct->trigger(); // returns when the dialog is closed
+        CHECK(settingsDriven);
 
         CHECK(chooseChatExpiration(w, list, "Team", 4)); // 1 hour
         CHECK(waitFor([&] { return !findCall(logFile, "updateGroup").isEmpty(); }));

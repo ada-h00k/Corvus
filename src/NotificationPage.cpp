@@ -1,8 +1,7 @@
-#include "NotificationDialog.h"
+#include "NotificationPage.h"
 
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGroupBox>
@@ -14,30 +13,13 @@
 #include "Notifier.h"
 #include "SoundPlayer.h"
 
-NotificationDialog::NotificationDialog(const NotificationSettings &current, SoundPlayer *sound, Notifier *notifier,
-                                       bool trayAvailable, QWidget *parent)
-    : QDialog(parent), m_sound(sound), m_notifier(notifier)
+NotificationPage::NotificationPage(const NotificationSettings &current, SoundPlayer *sound, Notifier *notifier,
+                                   QWidget *parent)
+    : QWidget(parent), m_sound(sound), m_notifier(notifier)
 {
-    setWindowTitle(tr("Notifications & sound"));
+    setObjectName(QStringLiteral("notificationPage"));
     auto *lay = new QVBoxLayout(this);
-
-    // --- tray icon
-    auto *trayBox = new QGroupBox(tr("Tray icon"));
-    auto *tl = new QVBoxLayout(trayBox);
-    m_tray = new QCheckBox(tr("Show a tray icon (with an unread counter)"));
-    m_closeToTray = new QCheckBox(tr("Keep running in the tray when the window is closed"));
-    m_startMinimizedInTray = new QCheckBox(tr("Start minimized in the tray"));
-    tl->addWidget(m_tray);
-    tl->addWidget(m_closeToTray);
-    tl->addWidget(m_startMinimizedInTray);
-    if (!trayAvailable) {
-        auto *note = new QLabel(tr("No system tray was found on this desktop, so the tray icon cannot be shown. "
-                                   "(On GNOME a tray extension is required.)"));
-        note->setWordWrap(true);
-        tl->addWidget(note);
-        m_tray->setEnabled(false);
-    }
-    lay->addWidget(trayBox);
+    lay->setContentsMargins(0, 0, 0, 0);
 
     // --- notifications
     auto *notifyBox = new QGroupBox(tr("Desktop notifications"));
@@ -88,14 +70,12 @@ NotificationDialog::NotificationDialog(const NotificationSettings &current, Soun
     note->setWordWrap(true);
     lay->addWidget(note);
 
-    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    connect(box, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(box, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    lay->addWidget(box);
+    lay->addStretch(1);
 
-    for (QCheckBox *c : {m_tray, m_notify, m_soundOn}) connect(c, &QCheckBox::toggled, this, [this] { refreshEnabled(); });
+    for (QCheckBox *c : {m_notify, m_soundOn}) connect(c, &QCheckBox::toggled, this, [this] { refreshEnabled(); });
+    connect(m_content, &QComboBox::currentIndexChanged, this, &NotificationPage::changed);
     connect(m_soundBox, &QComboBox::currentIndexChanged, this, [this] { refreshEnabled(); });
-    connect(m_pickFile, &QPushButton::clicked, this, &NotificationDialog::chooseFile);
+    connect(m_pickFile, &QPushButton::clicked, this, &NotificationPage::chooseFile);
     connect(m_testNotify, &QPushButton::clicked, this, [this] {
         if (!m_notifier) return;
         const int c = m_content->currentData().toInt();
@@ -114,12 +94,9 @@ NotificationDialog::NotificationDialog(const NotificationSettings &current, Soun
     setSettings(current);
 }
 
-NotificationSettings NotificationDialog::settings() const
+NotificationSettings NotificationPage::settings() const
 {
-    NotificationSettings s;
-    s.trayIcon = m_tray->isChecked();
-    s.closeToTray = m_closeToTray->isChecked();
-    s.startMinimizedInTray = m_startMinimizedInTray->isChecked();
+    NotificationSettings s = m_base;
     s.notifications = m_notify->isChecked();
     s.content = m_content->currentData().toInt();
     s.sound = m_soundOn->isChecked();
@@ -128,11 +105,9 @@ NotificationSettings NotificationDialog::settings() const
     return s;
 }
 
-void NotificationDialog::setSettings(const NotificationSettings &s)
+void NotificationPage::setSettings(const NotificationSettings &s)
 {
-    m_tray->setChecked(s.trayIcon);
-    m_closeToTray->setChecked(s.closeToTray);
-    m_startMinimizedInTray->setChecked(s.startMinimizedInTray);
+    m_base = s;
     m_notify->setChecked(s.notifications);
     m_content->setCurrentIndex(qMax(0, m_content->findData(s.content)));
     m_soundOn->setChecked(s.sound);
@@ -141,11 +116,10 @@ void NotificationDialog::setSettings(const NotificationSettings &s)
     refreshEnabled();
 }
 
-void NotificationDialog::refreshEnabled()
+void NotificationPage::refreshEnabled()
 {
+    emit changed();
     const bool custom = m_soundBox->currentData().toString() == QLatin1String("custom");
-    m_closeToTray->setEnabled(m_tray->isEnabled() && m_tray->isChecked());
-    m_startMinimizedInTray->setEnabled(m_tray->isEnabled() && m_tray->isChecked());
     m_content->setEnabled(m_notify->isChecked());
     m_testNotify->setEnabled(m_notify->isChecked());
     if (!m_notify->isChecked()) m_notifyNote->clear();
@@ -161,7 +135,7 @@ void NotificationDialog::refreshEnabled()
         m_soundNote->clear();
 }
 
-void NotificationDialog::chooseFile()
+void NotificationPage::chooseFile()
 {
     const QString f = QFileDialog::getOpenFileName(this, tr("Choose a sound"), m_customFile,
                                                    tr("Sounds (*.wav *.ogg *.oga *.flac *.mp3);;All files (*)"));
