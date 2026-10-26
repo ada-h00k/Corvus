@@ -212,6 +212,16 @@ if(CORVUS_TESTS)
         TIMEOUT 120
     )
 
+    add_executable(safety_change_test tests/safety_change_test.cpp)
+    target_link_libraries(safety_change_test PRIVATE app_core)
+    target_compile_definitions(safety_change_test PRIVATE
+        MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
+    add_test(NAME safety_change COMMAND safety_change_test)
+    set_tests_properties(safety_change PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 180
+    )
+
     add_executable(migration_test tests/migration_test.cpp)
     target_link_libraries(migration_test PRIVATE app_core Qt6::Test)
     add_test(NAME migration COMMAND migration_test)

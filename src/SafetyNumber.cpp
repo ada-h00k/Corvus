@@ -83,6 +83,18 @@ int pick(const QList<Identity> &identities, const QString &recipient)
     return best;
 }
 
+Change evaluate(const QString &storedDigits, const Identity &now)
+{
+    if (!now.hasSafetyNumber()) return Change::None;
+    if (storedDigits.isEmpty()) return now.isUntrusted() ? Change::Changed : Change::None;
+    return digitsOnly(storedDigits) == now.digits() ? Change::None : Change::Changed;
+}
+
+bool isUntrustedIdentityError(const QString &error)
+{
+    return error.contains(QLatin1String("untrusted identity"), Qt::CaseInsensitive);
+}
+
 QString trustLabel(const QString &trustLevel)
 {
     if (trustLevel == QLatin1String("TRUSTED_VERIFIED"))

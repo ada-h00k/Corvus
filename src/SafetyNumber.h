@@ -43,6 +43,17 @@ QList<Identity> parse(const QJsonValue &result);
 // usable safety number, newest first. -1 if there is none.
 int pick(const QList<Identity> &identities, const QString &recipient);
 
+// Has the safety number of a contact changed since we last saw (or the user last accepted) it?
+// `storedDigits` is the number remembered for the contact, empty if we have never seen one.
+// signal-cli marks a key that replaced a trusted one as UNTRUSTED; that counts as a change even
+// when nothing is remembered yet.
+enum class Change { None, Changed };
+Change evaluate(const QString &storedDigits, const Identity &now);
+
+// signal-cli refuses to send to a contact whose new key was not accepted yet
+// (message: Untrusted Identity for "+49…").
+bool isUntrustedIdentityError(const QString &error);
+
 QString trustLabel(const QString &trustLevel); // translated
 
 } // namespace SafetyNumber

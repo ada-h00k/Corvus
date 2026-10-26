@@ -61,6 +61,33 @@ private slots:
         QVERIFY(SafetyNumber::scannableBytes(QStringLiteral("not base64 !")).isEmpty());
     }
 
+    void detectsChanges()
+    {
+        using SafetyNumber::Change;
+        auto id = [](const QString &safety, const QString &trust) {
+            return SafetyNumber::parse(QJsonArray{identity("+49111", safety, trust)}).first();
+        };
+        const QString other = kNumber.left(59) + QLatin1Char('1');
+        // nothing remembered yet: first sight is not a change, an untrusted key is
+        QCOMPARE(SafetyNumber::evaluate(QString(), id(kNumber, "TRUSTED_UNVERIFIED")), Change::None);
+        QCOMPARE(SafetyNumber::evaluate(QString(), id(kNumber, "UNTRUSTED")), Change::Changed);
+        // remembered: same number is fine (also when grouped differently), another one is a change
+        QCOMPARE(SafetyNumber::evaluate(kNumber, id(kNumber, "TRUSTED_VERIFIED")), Change::None);
+        QCOMPARE(SafetyNumber::evaluate(SafetyNumber::format(kNumber), id(kNumber, "TRUSTED_UNVERIFIED")), Change::None);
+        QCOMPARE(SafetyNumber::evaluate(kNumber, id(other, "TRUSTED_UNVERIFIED")), Change::Changed);
+        QCOMPARE(SafetyNumber::evaluate(kNumber, id(other, "UNTRUSTED")), Change::Changed);
+        // no usable safety number: nothing to compare
+        QCOMPARE(SafetyNumber::evaluate(kNumber, id(QString(), "UNTRUSTED")), Change::None);
+    }
+
+    void recognisesUntrustedSendErrors()
+    {
+        QVERIFY(SafetyNumber::isUntrustedIdentityError(QStringLiteral("Failed to send message: Untrusted Identity for \"+49111\"")));
+        QVERIFY(SafetyNumber::isUntrustedIdentityError(QStringLiteral("untrusted identity")));
+        QVERIFY(!SafetyNumber::isUntrustedIdentityError(QStringLiteral("Network failure")));
+        QVERIFY(!SafetyNumber::isUntrustedIdentityError(QString()));
+    }
+
     void parsesIdentities()
     {
         const auto list = SafetyNumber::parse(QJsonArray{identity("+49111", kNumber, "TRUSTED_VERIFIED", 5), 42, QJsonObject()});

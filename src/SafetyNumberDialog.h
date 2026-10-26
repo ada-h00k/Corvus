@@ -21,6 +21,10 @@ public:
 
     void reload();
 
+signals:
+    // The contact was marked as verified (recipient as passed to the dialog, the 60 digits).
+    void verified(const QString &recipient, const QString &digits);
+
 private:
     void showIdentity();
     void showQrCode();

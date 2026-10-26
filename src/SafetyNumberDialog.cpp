@@ -253,11 +253,12 @@ void SafetyNumberDialog::verify()
     m_verify->setEnabled(false);
     setStatus(tr("Saving …"), false);
 
+    const QString verifiedDigits = m_identity.digits();
     QPointer<SafetyNumberDialog> self(this);
     m_cli.call(QStringLiteral("trust"),
                {{QStringLiteral("recipient"), m_recipient},
                 {QStringLiteral("verifiedSafetyNumber"), m_identity.digits()}},
-               [self](const QJsonValue &, const QString &error) {
+               [self, verifiedDigits](const QJsonValue &, const QString &error) {
         if (!self) return;
         self->m_busy = false;
         if (!error.isEmpty()) {
@@ -265,7 +266,8 @@ void SafetyNumberDialog::verify()
             self->updateCompare();
             return;
         }
-        self->reload();
+        emit self->verified(self->m_recipient, verifiedDigits);
+        if (self) self->reload();
     });
 }
 

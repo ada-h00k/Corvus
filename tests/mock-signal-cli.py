@@ -8,6 +8,7 @@ JsonAttachment, JsonQuote, JsonReaction, ...).
 Environment:
   MOCK_LOG     file: every JSON-RPC request is appended (one JSON per line)
   MOCK_INJECT  file: JSON lines appended here are emitted as `receive` envelopes
+  MOCK_IDENTITY_FILE  file: JSON list replacing the identities of listIdentities (key changes)
 """
 import base64, io, json, os, struct, sys, threading, time, wave, zlib
 
@@ -99,6 +100,17 @@ IDENTITIES = [
      "safetyNumber": "12345" "67890" "11111" "22222" "33333" "44444" "55555" "66666" "77777" "88888" "99999" "00000",
      "scannableSafetyNumber": base64.b64encode(bytes([8, 1, 10, 0, 13, 255, 26] + list(range(100))) ).decode(), "trustLevel": "TRUSTED_UNVERIFIED", "addedTimestamp": 1700000000000},
 ]
+
+
+def reload_identities():
+    """MOCK_IDENTITY_FILE: a JSON list that replaces the identities (the test changes keys with it)."""
+    global IDENTITIES
+    path = os.environ.get("MOCK_IDENTITY_FILE")
+    if path and os.path.exists(path):
+        with open(path) as f:
+            IDENTITIES = json.load(f)
+
+
 GROUPS = [{"id": "R1JPVVA=", "name": "Team", "isMember": True, "isBlocked": False, "messageExpirationTime": 0}]
 current_username = "oldname.1234"
 own_given, own_family = "Old", "Name"
@@ -140,6 +152,7 @@ for line in sys.stdin:
     elif m == "listGroups":
         res = GROUPS
     elif m == "listIdentities":
+        reload_identities()
         found = [i for i in IDENTITIES if p.get("number") in (None, i["number"], i["uuid"])]
         if p.get("number") and not found:
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Unknown recipient"}})
@@ -152,6 +165,9 @@ for line in sys.stdin:
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Failed to verify safety number"}})
             continue
         target[0]["trustLevel"] = "TRUSTED_VERIFIED"
+        if os.environ.get("MOCK_IDENTITY_FILE"):  # keep the change when the file is read again
+            with open(os.environ["MOCK_IDENTITY_FILE"], "w") as f:
+                json.dump(IDENTITIES, f)
         res = {}
     elif m == "updateContact":
         for contact in CONTACTS:
@@ -166,6 +182,12 @@ for line in sys.stdin:
     elif m == "remoteDelete":
         res = {"timestamp": int(time.time() * 1000), "results": []}
     elif m == "send":
+        reload_identities()
+        blocked = [i for i in IDENTITIES if i["trustLevel"] == "UNTRUSTED" and i["number"] in p.get("recipient", [])]
+        if blocked:  # like signal-cli: no sending to a key that has not been accepted
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1,
+                  "message": "Failed to send message: Untrusted Identity for \"%s\"" % blocked[0]["number"]}})
+            continue
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}
         if "editTimestamp" in p:  # an edit gets a newer timestamp than the revision it edits

@@ -5,6 +5,7 @@
 #include "MediaGallery.h"
 #include "Model.h"
 #include "NotificationSettings.h"
+#include "SafetyNumber.h"
 #include "SignalCli.h"
 
 #include <QHash>
@@ -139,6 +140,27 @@ private:
     void setArchived(const QString &key, bool archived);
     void editExpiration(const QString &key);
     void showSafetyNumber(const QString &key); // "View safety number …": check / mark the contact as verified
+
+    // --- "safety number changed" notice
+    // The safety number last seen for a contact is remembered (QSettings, per account). When
+    // signal-cli reports a different one, or marks the key as untrusted, the chat gets a warning
+    // bar until the user verifies the contact or dismisses it.
+    struct SafetyChange {
+        QString recipient; // key the remembered number is stored under
+        QString digits;    // the new safety number
+        bool blocked = false; // signal-cli refuses to send until it is verified
+    };
+    // convKey empty: all contacts. Otherwise that one 1:1 chat (throttled unless `force`).
+    void checkIdentities(const QString &convKey = QString(), bool force = false);
+    void handleIdentities(const QList<SafetyNumber::Identity> &all, bool force);
+    void checkSendResults(const QJsonValue &sendResult);
+    QString conversationForIdentity(const SafetyNumber::Identity &id) const;
+    void flagSafetyChange(const QString &convKey, const SafetyChange &change);
+    void dismissSafetyChange(const QString &convKey);
+    void onSafetyVerified(const QString &convKey, const QString &recipient, const QString &digits);
+    void setKnownSafetyNumber(const QString &recipient, const QString &digits);
+    void loadKnownSafetyNumbers();
+    void updateSafetyBar();
     void setExpiration(const QString &key, int seconds);
     void startIncomingExpirationTimers(const QString &key);
     void expireMessages();
@@ -221,6 +243,12 @@ private:
     QUrl m_pendingGifAnalyticsUrl;
 
     QHash<QString, Conversation> m_convs;
+    QHash<QString, QString> m_knownSafety;         // recipient -> safety number (digits) last seen / accepted
+    QString m_knownSafetyAccount;                  // account m_knownSafety was loaded for
+    QHash<QString, SafetyChange> m_safetyChanged;  // conversation key -> unacknowledged change
+    QHash<QString, qint64> m_identityCheckedMs;    // conversation key -> last check (throttle)
+    QWidget *m_safetyBar = nullptr;
+    QLabel *m_safetyLabel = nullptr;
     QHash<QString, PendingSend> m_pendingSends; // visible previews until signal-cli confirms the send
     QHash<QString, QString> m_alias; // uuid -> number
     QHash<QString, QString> m_contactNames; // key -> contact name from signal-cli

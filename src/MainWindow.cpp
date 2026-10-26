@@ -126,6 +126,34 @@ MainWindow::MainWindow()
     titleRow->addWidget(findMessages);
     v->addLayout(titleRow);
 
+    // "Safety number changed" warning above the chat (shown by updateSafetyBar()).
+    m_safetyBar = new QWidget;
+    m_safetyBar->setObjectName(QStringLiteral("safetyChangedBar"));
+    m_safetyBar->setStyleSheet(QStringLiteral(
+        "#safetyChangedBar { background: #fff3cd; border: 1px solid #e0c36a; border-radius: 4px; }"
+        "#safetyChangedBar QLabel { color: #664d03; }"));
+    {
+        auto *l = new QHBoxLayout(m_safetyBar);
+        l->setContentsMargins(8, 6, 8, 6);
+        m_safetyLabel = new QLabel;
+        m_safetyLabel->setTextFormat(Qt::PlainText);
+        m_safetyLabel->setWordWrap(true);
+        m_safetyLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        l->addWidget(m_safetyLabel, 1);
+        auto *verifyBtn = new QPushButton(tr("Verify …"));
+        verifyBtn->setObjectName(QStringLiteral("safetyVerifyButton"));
+        connect(verifyBtn, &QPushButton::clicked, this, [this] { showSafetyNumber(m_current); });
+        l->addWidget(verifyBtn);
+        auto *dismissBtn = new QToolButton;
+        dismissBtn->setObjectName(QStringLiteral("safetyDismissButton"));
+        dismissBtn->setText(QStringLiteral("✕"));
+        dismissBtn->setToolTip(tr("Dismiss"));
+        connect(dismissBtn, &QToolButton::clicked, this, [this] { dismissSafetyChange(m_current); });
+        l->addWidget(dismissBtn);
+    }
+    m_safetyBar->hide();
+    v->addWidget(m_safetyBar);
+
     m_view = new ChatView;
     m_view->installEventFilter(this);
     m_view->setNameResolver([this](const QString &k) { return displayName(k); });
@@ -1065,6 +1093,7 @@ void MainWindow::loadContactsAndGroups()
             }
         }
         refreshList();
+        checkIdentities(); // any safety number that changed while Corvus was not running
     });
 
     m_cli.call(QStringLiteral("listGroups"), {}, [this](const QJsonValue &res, const QString &err) {
@@ -1856,7 +1885,150 @@ void MainWindow::showSafetyNumber(const QString &key)
     }
     auto *dialog = new SafetyNumberDialog(m_cli, resolveKey(key), displayName(key), this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &SafetyNumberDialog::verified, this,
+            [this, key](const QString &recipient, const QString &digits) { onSafetyVerified(key, recipient, digits); });
     dialog->show();
+}
+
+// ------------------------------------------- Safety number changes
+
+static QString identityRecipient(const SafetyNumber::Identity &id)
+{
+    return id.number.isEmpty() ? id.uuid : id.number;
+}
+
+void MainWindow::loadKnownSafetyNumbers()
+{
+    if (m_knownSafetyAccount == m_account) return;
+    m_knownSafetyAccount = m_account;
+    m_knownSafety.clear();
+    QSettings s;
+    s.beginGroup(QStringLiteral("knownSafetyNumbers/") + m_account);
+    for (const QString &k : s.childKeys())
+        m_knownSafety.insert(k, s.value(k).toString());
+}
+
+void MainWindow::setKnownSafetyNumber(const QString &recipient, const QString &digits)
+{
+    if (recipient.isEmpty() || digits.isEmpty() || m_account.isEmpty()) return;
+    loadKnownSafetyNumbers();
+    m_knownSafety.insert(recipient, digits);
+    QSettings().setValue(QStringLiteral("knownSafetyNumbers/") + m_account + QLatin1Char('/') + recipient, digits);
+}
+
+QString MainWindow::conversationForIdentity(const SafetyNumber::Identity &id) const
+{
+    for (const QString &k : {id.number, id.uuid})
+        if (!k.isEmpty() && m_convs.contains(k) && !m_convs.value(k).isGroup) return k;
+    return {};
+}
+
+void MainWindow::checkIdentities(const QString &convKey, bool force)
+{
+    if (!m_cli.isRunning() || m_account.isEmpty()) return;
+    loadKnownSafetyNumbers();
+    QJsonObject params;
+    if (!convKey.isEmpty()) {
+        const auto it = m_convs.constFind(convKey);
+        if (it == m_convs.constEnd() || it->isGroup) return;
+        const QString recipient = resolveKey(convKey);
+        if (recipient == m_account) return;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (!force && now - m_identityCheckedMs.value(convKey) < 20000) return;
+        m_identityCheckedMs.insert(convKey, now);
+        params[QStringLiteral("number")] = recipient;
+    }
+    m_cli.call(QStringLiteral("listIdentities"), params, [this, force](const QJsonValue &res, const QString &err) {
+        if (!err.isEmpty()) return; // e.g. a contact signal-cli does not know: nothing to compare
+        handleIdentities(SafetyNumber::parse(res), force);
+    });
+}
+
+void MainWindow::handleIdentities(const QList<SafetyNumber::Identity> &all, bool force)
+{
+    QHash<QString, QList<SafetyNumber::Identity>> byRecipient;
+    for (const SafetyNumber::Identity &id : all) {
+        const QString recipient = identityRecipient(id);
+        if (!recipient.isEmpty() && recipient != m_account && id.uuid != m_account)
+            byRecipient[recipient] << id;
+    }
+    for (auto it = byRecipient.cbegin(); it != byRecipient.cend(); ++it) {
+        const int index = SafetyNumber::pick(it.value(), it.key());
+        if (index < 0) continue;
+        const SafetyNumber::Identity &id = it.value().at(index);
+        const QString stored = m_knownSafety.value(it.key());
+        const bool changed = SafetyNumber::evaluate(stored, id) == SafetyNumber::Change::Changed;
+        if (changed || (force && id.isUntrusted())) {
+            const QString convKey = conversationForIdentity(id);
+            if (!convKey.isEmpty()) flagSafetyChange(convKey, {it.key(), id.digits(), id.isUntrusted()});
+        } else if (stored.isEmpty()) {
+            setKnownSafetyNumber(it.key(), id.digits()); // first sight: this is the baseline
+        }
+    }
+}
+
+void MainWindow::checkSendResults(const QJsonValue &sendResult)
+{
+    // Messages to several recipients (groups) report failures per recipient, not as an error.
+    for (const QJsonValue &rv : sendResult.toObject().value(QStringLiteral("results")).toArray()) {
+        const QJsonObject r = rv.toObject();
+        if (r.value(QStringLiteral("type")).toString() != QLatin1String("IDENTITY_FAILURE")) continue;
+        const QJsonObject address = r.value(QStringLiteral("recipientAddress")).toObject();
+        QString who = address.value(QStringLiteral("number")).toString();
+        if (who.isEmpty()) who = address.value(QStringLiteral("uuid")).toString();
+        who = resolveKey(who);
+        statusBar()->showMessage(tr("Not delivered to %1: the safety number has changed.").arg(displayName(who)), 10000);
+        checkIdentities(who, true);
+    }
+}
+
+void MainWindow::flagSafetyChange(const QString &convKey, const SafetyChange &change)
+{
+    const auto old = m_safetyChanged.constFind(convKey);
+    if (old != m_safetyChanged.constEnd() && old->digits == change.digits && old->blocked == change.blocked) return;
+    const bool isNew = old == m_safetyChanged.constEnd() || old->digits != change.digits;
+    m_safetyChanged.insert(convKey, change);
+    if (convKey == m_current)
+        updateSafetyBar();
+    else if (isNew)
+        statusBar()->showMessage(tr("The safety number with %1 has changed.").arg(displayName(convKey)), 10000);
+    refreshList();
+}
+
+void MainWindow::dismissSafetyChange(const QString &convKey)
+{
+    const auto it = m_safetyChanged.constFind(convKey);
+    if (it == m_safetyChanged.constEnd()) return;
+    setKnownSafetyNumber(it->recipient, it->digits); // accepted: only a further change warns again
+    m_safetyChanged.remove(convKey);
+    updateSafetyBar();
+    refreshList();
+}
+
+void MainWindow::onSafetyVerified(const QString &convKey, const QString &recipient, const QString &digits)
+{
+    setKnownSafetyNumber(recipient, digits);
+    if (m_safetyChanged.remove(convKey)) {
+        updateSafetyBar();
+        refreshList();
+    }
+}
+
+void MainWindow::updateSafetyBar()
+{
+    if (!m_safetyBar) return;
+    const auto it = m_safetyChanged.constFind(m_current);
+    if (it == m_safetyChanged.constEnd() || !m_convs.contains(m_current) || m_convs.value(m_current).isGroup) {
+        m_safetyBar->hide();
+        return;
+    }
+    QString text = tr("Your safety number with %1 has changed. They may have reinstalled Signal or "
+                      "switched phones, but it can also mean that someone is intercepting your chat. "
+                      "Compare the number with them before you rely on this chat.")
+                       .arg(displayName(m_current));
+    if (it->blocked) text += QLatin1Char(' ') + tr("Messages cannot be sent until you verify it.");
+    m_safetyLabel->setText(text);
+    m_safetyBar->show();
 }
 
 void MainWindow::setExpiration(const QString &key, int seconds)
@@ -1972,7 +2144,8 @@ void MainWindow::refreshList()
 
     QListWidgetItem *toSelect = nullptr;
     for (const Conversation *c : items) {
-        QString text = (c->muted ? QStringLiteral("🔕 ") : QString()) + (c->isGroup ? QStringLiteral("👥 ") + c->title : c->title);
+        QString text = (m_safetyChanged.contains(c->key) ? QStringLiteral("⚠ ") : QString()) +
+                       (c->muted ? QStringLiteral("🔕 ") : QString()) + (c->isGroup ? QStringLiteral("👥 ") + c->title : c->title);
         auto *it = new QListWidgetItem;
         if (c->unread > 0) {
             text += QStringLiteral(" (%1)").arg(c->unread);
@@ -2215,6 +2388,7 @@ void MainWindow::openConversation(const QString &key)
     showConversation();
     refreshList();
     m_notifier->close(key); // the notification for this chat is obsolete now
+    checkIdentities(key);
     focusComposer();
 }
 
@@ -2239,11 +2413,13 @@ void MainWindow::showConversation(bool keepScroll)
     if (!m_convs.contains(m_current)) {
         m_title->setText(tr("No conversation selected"));
         m_view->clearView();
+        updateSafetyBar();
         updateMessageSearch();
         return;
     }
     const Conversation &c = m_convs[m_current];
     m_title->setText(c.title);
+    updateSafetyBar();
     m_view->setGroupMode(c.isGroup);
     m_view->showMessages(c.msgs, keepScroll);
     updateMessageSearch();
@@ -2457,6 +2633,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     if (m.quote.valid) m.quote.authorKey = resolveKey(m.quote.authorKey);
 
     if (!pe.outgoing) {
+        checkIdentities(srcKey); // a new key becomes known when its first message arrives
         QString display = m_convs.contains(srcKey) ? m_convs[srcKey].title : QString();
         if (display.isEmpty()) display = pe.srcName.isEmpty() ? pe.src : pe.srcName;
         m.sender = display;
@@ -2675,6 +2852,7 @@ void MainWindow::sendMessage()
             removePendingPreview(pending);
             m_pendingSends.erase(pendingIt);
             statusBar()->showMessage(tr("Sending failed: %1").arg(err), 10000);
+            if (SafetyNumber::isUntrustedIdentityError(err)) checkIdentities(key, true);
             if (key != m_current) {
                 // The user has moved on to another chat: put the unsent message back into
                 // that chat's draft, never into the composer of the chat that is open now.
@@ -2717,6 +2895,7 @@ void MainWindow::sendMessage()
         finalizePendingSend(pendingId, ts);
         registerGiphyAnalytics(giphySentAnalyticsUrl);
         if (m_pendingGifAnalyticsUrl == giphySentAnalyticsUrl) m_pendingGifAnalyticsUrl.clear();
+        checkSendResults(res);
     });
 }
 
