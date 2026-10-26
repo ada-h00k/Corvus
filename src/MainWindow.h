@@ -138,6 +138,7 @@ private:
                        const QString &emoji);
     void setArchived(const QString &key, bool archived);
     void editExpiration(const QString &key);
+    void showSafetyNumber(const QString &key); // "View safety number …": check / mark the contact as verified
     void setExpiration(const QString &key, int seconds);
     void startIncomingExpirationTimers(const QString &key);
     void expireMessages();

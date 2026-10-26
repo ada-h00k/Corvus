@@ -86,6 +86,10 @@ set(APP_SOURCES
     src/HistoryKeychain.cpp
     src/PassphraseDialog.h
     src/PassphraseDialog.cpp
+    src/SafetyNumber.h
+    src/SafetyNumber.cpp
+    src/SafetyNumberDialog.h
+    src/SafetyNumberDialog.cpp
     src/MessageInput.h
     src/MessageInput.cpp
     src/MainWindow.h
@@ -197,6 +201,16 @@ if(CORVUS_TESTS)
     target_compile_definitions(gui_integration_test PRIVATE
         MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
     add_test(NAME gui_integration COMMAND gui_integration_test)
+
+    add_executable(safety_number_test tests/safety_number_test.cpp)
+    target_link_libraries(safety_number_test PRIVATE app_core Qt6::Test)
+    target_compile_definitions(safety_number_test PRIVATE
+        MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
+    add_test(NAME safety_number COMMAND safety_number_test)
+    set_tests_properties(safety_number PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 120
+    )
 
     add_executable(migration_test tests/migration_test.cpp)
     target_link_libraries(migration_test PRIVATE app_core Qt6::Test)

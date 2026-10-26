@@ -94,6 +94,11 @@ CONTACTS = [
     {"number": "+49222", "uuid": "u-bob", "name": "Bob", "isArchived": True, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
     {"number": "+49333", "uuid": "u-carol", "name": "Carol", "isArchived": True, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
 ]
+IDENTITIES = [
+    {"number": "+49111", "uuid": "u-alice", "fingerprint": "0568" + "ab" * 32,
+     "safetyNumber": "12345" "67890" "11111" "22222" "33333" "44444" "55555" "66666" "77777" "88888" "99999" "00000",
+     "scannableSafetyNumber": base64.b64encode(bytes([8, 1, 10, 0, 13, 255, 26] + list(range(100))) ).decode(), "trustLevel": "TRUSTED_UNVERIFIED", "addedTimestamp": 1700000000000},
+]
 GROUPS = [{"id": "R1JPVVA=", "name": "Team", "isMember": True, "isBlocked": False, "messageExpirationTime": 0}]
 current_username = "oldname.1234"
 own_given, own_family = "Old", "Name"
@@ -134,6 +139,20 @@ for line in sys.stdin:
         res = {}
     elif m == "listGroups":
         res = GROUPS
+    elif m == "listIdentities":
+        found = [i for i in IDENTITIES if p.get("number") in (None, i["number"], i["uuid"])]
+        if p.get("number") and not found:
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Unknown recipient"}})
+            continue
+        res = found
+    elif m == "trust":
+        target = [i for i in IDENTITIES if p.get("recipient") in (i["number"], i["uuid"])]
+        digits = "".join(c for c in p.get("verifiedSafetyNumber", "") if c.isdigit())
+        if not target or digits != target[0]["safetyNumber"]:
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Failed to verify safety number"}})
+            continue
+        target[0]["trustLevel"] = "TRUSTED_VERIFIED"
+        res = {}
     elif m == "updateContact":
         for contact in CONTACTS:
             if p.get("recipient") in (contact["number"], contact["uuid"]):

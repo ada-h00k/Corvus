@@ -16,6 +16,7 @@
 #include "MessageInput.h"
 #include "Notifier.h"
 #include "PassphraseDialog.h"
+#include "SafetyNumberDialog.h"
 #include "ProfilePage.h"
 #include "SettingsDialog.h"
 #include "Records.h"
@@ -347,6 +348,8 @@ MainWindow::MainWindow()
             });
             if (!conversation.localNickname.isEmpty())
                 menu.addAction(tr("Remove nickname"), this, [this, key] { setNickname(key, QString()); });
+            if (key != m_account && resolveKey(key) != m_account)
+                menu.addAction(tr("View safety number …"), this, [this, key] { showSafetyNumber(key); });
             menu.addSeparator();
         }
         const bool archived = m_convs[key].archived;
@@ -1841,6 +1844,19 @@ void MainWindow::editExpiration(const QString &key)
                                                    tr("Timer for %1:").arg(it->title), labels,
                                                    current < 0 ? 0 : current, false, &ok);
     if (ok) setExpiration(key, values.at(labels.indexOf(selected)));
+}
+
+void MainWindow::showSafetyNumber(const QString &key)
+{
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd() || it->isGroup) return;
+    if (!m_cli.isRunning()) {
+        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
+        return;
+    }
+    auto *dialog = new SafetyNumberDialog(m_cli, resolveKey(key), displayName(key), this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->show();
 }
 
 void MainWindow::setExpiration(const QString &key, int seconds)
