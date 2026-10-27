@@ -72,6 +72,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyleHints>
+#include <QStyleOptionToolButton>
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QToolButton>
@@ -141,6 +142,30 @@ static AppIcon::Mode iconMode(const Appearance &a)
     default: return AppIcon::Mode::FollowTheme;
     }
 }
+
+// QToolButton that paints itself mirrored horizontally. Used for the
+// microphone button so the 🎤 glyph leans in the opposite direction.
+namespace {
+class MirroredToolButton : public QToolButton
+{
+public:
+    using QToolButton::QToolButton;
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        Q_UNUSED(event);
+        QPainter p(this);
+        // Mirror around the vertical centre line of the button.
+        p.translate(width() / 2.0, 0);
+        p.scale(-1.0, 1.0);
+        p.translate(-width() / 2.0, 0);
+        QStyleOptionToolButton opt;
+        initStyleOption(&opt);
+        style()->drawComplexControl(QStyle::CC_ToolButton, &opt, &p, this);
+    }
+};
+} // namespace
 
 MainWindow::MainWindow()
 {
@@ -261,7 +286,7 @@ MainWindow::MainWindow()
     m_attachBtn->setText(QStringLiteral("📎"));
     m_attachBtn->setToolTip(tr("Attach files"));
     m_attachBtn->setFixedSize(40, 40);
-    m_micBtn = new QToolButton;
+    m_micBtn = new MirroredToolButton; // paints the mic emoji mirrored
     m_micBtn->setObjectName(QStringLiteral("voiceButton"));
     m_micBtn->setText(QStringLiteral("🎤"));
     m_micBtn->setToolTip(tr("Record a voice message"));
@@ -305,8 +330,9 @@ MainWindow::MainWindow()
     h->addWidget(m_emojiBtn);
     h->addWidget(m_input, 1);
     h->addWidget(m_sendBtn);
-    h->addWidget(m_attachBtn);
+    // The voice recording button sits to the LEFT of the attach-files button.
     h->addWidget(m_micBtn);
+    h->addWidget(m_attachBtn);
 
     // Shown instead of the message field while a voice message is being recorded.
     m_recordBar = new QWidget;
