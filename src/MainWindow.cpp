@@ -24,6 +24,7 @@
 #include "SettingsDialog.h"
 #include "Records.h"
 #include "SoundPlayer.h"
+#include "VoiceRecorder.h"
 
 #include <QAction>
 #include <QApplication>
@@ -241,6 +242,10 @@ MainWindow::MainWindow()
         updateReplyBar();
     });
     m_attachBar = makeBar(m_attachLabel, [this] {
+        for (const QString &f : std::as_const(m_pendingFiles)) {
+            const QString abs = QFileInfo(f).absoluteFilePath();
+            if (m_voiceFiles.remove(abs)) QFile::remove(abs); // a discarded recording is deleted
+        }
         m_pendingFiles.clear();
         m_pendingGifAnalyticsUrl.clear();
         updateAttachBar();
@@ -256,13 +261,19 @@ MainWindow::MainWindow()
     m_attachBtn->setText(QStringLiteral("📎"));
     m_attachBtn->setToolTip(tr("Attach files"));
     m_attachBtn->setFixedSize(40, 40);
+    m_micBtn = new QToolButton;
+    m_micBtn->setObjectName(QStringLiteral("voiceButton"));
+    m_micBtn->setText(QStringLiteral("🎤"));
+    m_micBtn->setToolTip(tr("Record a voice message"));
+    m_micBtn->setAccessibleName(tr("Record a voice message"));
+    m_micBtn->setFixedSize(40, 40);
     m_emojiBtn = new QToolButton;
     m_emojiBtn->setText(QStringLiteral("😊"));
     m_emojiBtn->setToolTip(tr("Emoji, GIFs and stickers"));
     m_emojiBtn->setFixedSize(40, 40);
 #ifdef Q_OS_MACOS
     // Flat, borderless buttons next to the input field, as in Messages.
-    for (QToolButton *b : {m_attachBtn, m_emojiBtn})
+    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_micBtn})
         b->setAutoRaise(true);
 #endif
     m_input = new MessageInput;
@@ -295,6 +306,57 @@ MainWindow::MainWindow()
     h->addWidget(m_input, 1);
     h->addWidget(m_sendBtn);
     h->addWidget(m_attachBtn);
+    h->addWidget(m_micBtn);
+
+    // Shown instead of the message field while a voice message is being recorded.
+    m_recordBar = new QWidget;
+    m_recordBar->setObjectName(QStringLiteral("recordBar"));
+    {
+        auto *rl = new QHBoxLayout(m_recordBar);
+        rl->setContentsMargins(4, 0, 4, 0);
+        m_recordDot = new QLabel(QStringLiteral("●"));
+        m_recordDot->setStyleSheet(QStringLiteral("color: #c0392b;"));
+        m_recordTime = new QLabel(QStringLiteral("0:00"));
+        m_recordTime->setObjectName(QStringLiteral("recordTime"));
+        auto *hint = new QLabel(tr("Recording a voice message …"));
+        hint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        hint->setMinimumWidth(0);
+        rl->addWidget(m_recordDot);
+        rl->addWidget(m_recordTime);
+        rl->addWidget(hint, 1);
+        auto *discard = new QPushButton(tr("Discard"));
+        discard->setObjectName(QStringLiteral("recordCancelButton"));
+        auto *stop = new QPushButton(tr("Stop"));
+        stop->setObjectName(QStringLiteral("recordStopButton"));
+        stop->setToolTip(tr("Stop and attach the recording to the message. You can add text before sending."));
+        auto *send = new QPushButton(tr("Send"));
+        send->setObjectName(QStringLiteral("recordSendButton"));
+        rl->addWidget(discard);
+        rl->addWidget(stop);
+        rl->addWidget(send);
+        connect(discard, &QPushButton::clicked, this, &MainWindow::cancelVoiceRecording);
+        connect(stop, &QPushButton::clicked, this, [this] { stopVoiceRecording(false); });
+        connect(send, &QPushButton::clicked, this, [this] { stopVoiceRecording(true); });
+        m_recordBar->hide();
+    }
+    m_recordBlink = new QTimer(this);
+    m_recordBlink->setInterval(600);
+    connect(m_recordBlink, &QTimer::timeout, this, [this] {
+        const bool on = m_recordDot->property("blinkOff").toBool();
+        m_recordDot->setProperty("blinkOff", !on);
+        m_recordDot->setStyleSheet(on ? QStringLiteral("color: #c0392b;") : QStringLiteral("color: transparent;"));
+    });
+    m_recorder = VoiceRecording::create(this);
+    connect(m_recorder, &VoiceRecorder::durationChanged, this,
+            [this](qint64 ms) { m_recordTime->setText(VoiceRecording::durationText(ms)); });
+    connect(m_recorder, &VoiceRecorder::finished, this, &MainWindow::onVoiceRecorded);
+    connect(m_recorder, &VoiceRecorder::failed, this, [this](const QString &error) {
+        updateRecordingUi();
+        m_recordKey.clear();
+        m_recordSendWhenDone = false;
+        QMessageBox::warning(this, tr("Voice message"), tr("The recording failed: %1").arg(error));
+    });
+    connect(m_micBtn, &QToolButton::clicked, this, &MainWindow::startVoiceRecording);
 
     m_searchBar = new QWidget(right);
     auto *searchLayout = new QHBoxLayout(m_searchBar);
@@ -335,6 +397,7 @@ MainWindow::MainWindow()
     connect(findMessages, &QToolButton::clicked, this, &MainWindow::openMessageSearch);
     m_input->installEventFilter(this);
     right->installEventFilter(this);
+    v->addWidget(m_recordBar);
     v->addLayout(h);
     split->addWidget(right);
     split->setStretchFactor(1, 1);
@@ -1110,6 +1173,8 @@ void MainWindow::setConnected(bool connected, const QString &info)
     m_sendBtn->setEnabled(connected);
     m_attachBtn->setEnabled(connected);
     m_emojiBtn->setEnabled(connected);
+    m_composerConnected = connected;
+    updateRecordingUi();
     if (connected) {
         m_statusLabel->setText(tr("Connected · signal-cli %1").arg(m_version));
     } else {
@@ -1265,6 +1330,100 @@ void MainWindow::openGroupInvitations()
     });
     connect(dialog, &GroupInvitesDialog::declined, this, [this] { refreshGroups(); });
     dialog->show();
+}
+
+// ------------------------------------------------------ Voice messages
+
+bool MainWindow::allVoiceNotes(const QStringList &files) const
+{
+    if (files.isEmpty()) return false;
+    for (const QString &f : files)
+        if (!m_voiceFiles.contains(QFileInfo(f).absoluteFilePath())) return false;
+    return true;
+}
+
+void MainWindow::updateRecordingUi()
+{
+    const bool recording = m_recorder && m_recorder->isRecording();
+    m_recordBar->setVisible(recording);
+    if (recording) {
+        if (!m_recordBlink->isActive()) m_recordBlink->start();
+    } else {
+        m_recordBlink->stop();
+        m_recordDot->setProperty("blinkOff", false);
+        m_recordDot->setStyleSheet(QStringLiteral("color: #c0392b;"));
+    }
+    // While recording the composer is not usable: what is sent is the recording.
+    const bool on = m_composerConnected && !recording;
+    m_input->setEnabled(on);
+    m_expandInputBtn->setEnabled(on);
+    m_sendBtn->setEnabled(on);
+    m_attachBtn->setEnabled(on);
+    m_emojiBtn->setEnabled(on);
+    m_micBtn->setEnabled(on);
+}
+
+void MainWindow::startVoiceRecording()
+{
+    if (!m_cli.isRunning() || !m_convs.contains(m_current) || m_recorder->isRecording()) return;
+    if (!m_editKey.isEmpty()) {
+        statusBar()->showMessage(tr("Finish editing the message before recording."), 5000);
+        return;
+    }
+    const QString why = m_recorder->unavailableReason();
+    if (!why.isEmpty()) {
+        QMessageBox::warning(this, tr("Voice message"), why);
+        return;
+    }
+    m_recordKey = m_current;
+    m_recordSendWhenDone = false;
+    m_recordTime->setText(VoiceRecording::durationText(0));
+    m_recorder->start(m_tmp.path() + QStringLiteral("/voice"), VoiceRecording::baseName(QDateTime::currentDateTime()));
+    updateRecordingUi();
+}
+
+void MainWindow::stopVoiceRecording(bool sendWhenDone)
+{
+    if (!m_recorder->isRecording()) return;
+    m_recordSendWhenDone = sendWhenDone;
+    m_recorder->stop(); // onVoiceRecorded() follows
+}
+
+void MainWindow::cancelVoiceRecording()
+{
+    if (!m_recorder->isRecording()) return;
+    m_recordKey.clear();
+    m_recordSendWhenDone = false;
+    m_recorder->cancel();
+    updateRecordingUi();
+}
+
+void MainWindow::onVoiceRecorded(const QString &path, qint64 durationMs)
+{
+    const bool send = m_recordSendWhenDone;
+    const QString key = m_recordKey;
+    m_recordSendWhenDone = false;
+    m_recordKey.clear();
+    updateRecordingUi();
+    if (key.isEmpty() || !m_convs.contains(key)) {
+        QFile::remove(path);
+        return;
+    }
+    if (durationMs < VoiceRecording::kMinDurationMs) { // an accidental click
+        QFile::remove(path);
+        statusBar()->showMessage(tr("The recording was too short and was discarded."), 5000);
+        return;
+    }
+    const QString abs = QFileInfo(path).absoluteFilePath();
+    m_voiceFiles.insert(abs, durationMs);
+    if (key == m_current) {
+        addPendingFiles({abs});
+        if (send) sendMessage();
+    } else {
+        Draft &d = m_drafts[key];
+        if (!d.files.contains(abs)) d.files << abs;
+        statusBar()->showMessage(tr("The voice message was kept in the draft of “%1”.").arg(m_convs.value(key).title), 8000);
+    }
 }
 
 void MainWindow::updateGroupActions()
@@ -2611,6 +2770,8 @@ void MainWindow::loadDraft(const QString &key)
 void MainWindow::switchConversation(const QString &key)
 {
     if (key == m_current) return;
+    // A running recording stays with the chat it was made in (it ends up in that chat's draft).
+    if (m_recorder && m_recorder->isRecording()) stopVoiceRecording(false);
     cancelEdit(); // an edit in progress is dropped and the text typed before it comes back
     saveDraft(m_current);
     m_current = key;
@@ -2740,7 +2901,12 @@ void MainWindow::updateAttachBar()
         return;
     }
     QStringList names;
-    for (const QString &f : std::as_const(m_pendingFiles)) names << QFileInfo(f).fileName();
+    for (const QString &f : std::as_const(m_pendingFiles)) {
+        const auto voice = m_voiceFiles.constFind(QFileInfo(f).absoluteFilePath());
+        names << (voice == m_voiceFiles.constEnd()
+                      ? QFileInfo(f).fileName()
+                      : tr("Voice message (%1)").arg(VoiceRecording::durationText(voice.value())));
+    }
     m_attachLabel->setText(QStringLiteral("📎 ") + names.join(QStringLiteral(", ")));
 
     // small preview of the first image, so it is obvious that the paste worked
@@ -3050,6 +3216,10 @@ void MainWindow::sendMessage()
     }
     if (!paths.isEmpty())
         p[QStringLiteral("attachments")] = QJsonArray::fromStringList(SignalCli::stageFiles(paths, stageDir));
+    // Recorded voice messages go out as voice notes (shown inline by the Signal apps) when this
+    // signal-cli can do that and nothing but recordings is attached.
+    if (allVoiceNotes(files) && VoiceRecording::supportsVoiceNote(m_version))
+        p[QStringLiteral("voiceNote")] = true;
 
     if (quote.valid && !quote.authorKey.isEmpty()) {
         p[QStringLiteral("quoteTimestamp")] = QJsonValue(static_cast<qint64>(quote.id));
