@@ -4142,8 +4142,10 @@ void MainWindow::sendSticker(const QString &packId, int stickerId, const QByteAr
     if (m_editKey.size() > 0) return;
 
     const Quote quote = m_replyQuote;
-    QJsonObject params{{QStringLiteral("message"), QString()},
-                       {QStringLiteral("sticker"), packId + QLatin1Char(':') + QString::number(stickerId)}};
+    // Send stickers as a standalone Signal sticker message. Do not include an
+    // explicit (even empty) message body alongside the sticker reference.
+    QJsonObject params{{QStringLiteral("sticker"),
+                        packId + QLatin1Char(':') + QString::number(stickerId)}};
     if (quote.valid && !quote.authorKey.isEmpty()) {
         params[QStringLiteral("quoteTimestamp")] = QJsonValue(static_cast<qint64>(quote.id));
         params[QStringLiteral("quoteAuthor")] = quote.authorKey;
