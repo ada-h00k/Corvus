@@ -203,6 +203,16 @@ QJsonObject archive(const QString &conv, bool archived, bool sigArchived)
     return {{"t", "a"}, {"c", conv}, {"v", archived}, {"s", sigArchived}};
 }
 
+QJsonObject blocked(const QString &conv, bool blocked)
+{
+    return {{"t", "b"}, {"c", conv}, {"v", blocked}};
+}
+
+QJsonObject requestDeclined(const QString &conv)
+{
+    return {{"t", "j"}, {"c", conv}};
+}
+
 QJsonObject mute(const QString &conv, bool muted)
 {
     return {{"t", "k"}, {"c", conv}, {"v", muted}};

@@ -94,6 +94,8 @@ set(APP_SOURCES
     src/GroupDialog.cpp
     src/GroupInvitesDialog.h
     src/GroupInvitesDialog.cpp
+    src/MessageRequestsDialog.h
+    src/MessageRequestsDialog.cpp
     src/VoiceRecorder.h
     src/VoiceRecorder.cpp
     src/SafetyNumber.h

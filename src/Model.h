@@ -126,5 +126,6 @@ struct Conversation {
     bool archived = false;    // shown in the "Archived chats" folder
     bool sigArchived = false; // archive state last reported by signal-cli
     bool muted = false;       // local "mute notifications" (signal-cli does not report mute state)
+    bool blocked = false;     // signal-cli "block" state (synced to the phone): no incoming messages
     int expirationSeconds = 0; // Signal disappearing-message timer; 0 = disabled
 };

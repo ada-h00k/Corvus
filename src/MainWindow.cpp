@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 
+#include "MessageRequestsDialog.h"
+
 #include "AppearancePage.h"
 #include "AppIcon.h"
 #include "Attachments.h"
@@ -86,7 +88,13 @@
 static const QString kFolderKey = QStringLiteral("::archived");
 static const QString kBackKey = QStringLiteral("::back");
 static const QString kInvitesKey = QStringLiteral("::invites");
-static bool isSpecialKey(const QString &key) { return key == kFolderKey || key == kBackKey || key == kInvitesKey; }
+static const QString kRequestsKey = QStringLiteral("::requests");
+static const QString kContactPrefix = QStringLiteral("contact:");
+static bool isSpecialKey(const QString &key)
+{
+    return key == kFolderKey || key == kBackKey || key == kInvitesKey || key == kRequestsKey
+           || key.startsWith(kContactPrefix);
+}
 static const qint64 kMaxThumbSource = 30LL * 1024 * 1024;
 static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload limit
 
@@ -174,10 +182,26 @@ MainWindow::MainWindow()
     setAcceptDrops(true);
 
     auto *split = new QSplitter(this);
+    auto *leftPane = new QWidget;
+    auto *leftLayout = new QVBoxLayout(leftPane);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(4);
+    // Contact management: live search over the chats and the address book. The field
+    // stays hidden until it is asked for: the File menu entry ("Search chats …", Ctrl+K)
+    // reveals it, pressing Ctrl+K again or Esc hides it and resets the filter.
+    m_contactSearch = new QLineEdit(leftPane);
+    m_contactSearch->setObjectName(QStringLiteral("contactSearch"));
+    m_contactSearch->setPlaceholderText(tr("Search chats and contacts"));
+    m_contactSearch->setClearButtonEnabled(true);
+    m_contactSearch->setVisible(false); // hidden until asked for
+    leftLayout->addWidget(m_contactSearch);
+    m_contactSearch->installEventFilter(this); // Esc closes the field again
     m_list = new QListWidget;
     m_list->setMinimumWidth(240);
     m_list->setIconSize(QSize(32, 32));
-    split->addWidget(m_list);
+    leftLayout->addWidget(m_list, 1);
+    connect(m_contactSearch, &QLineEdit::textChanged, this, [this] { refreshList(); });
+    split->addWidget(leftPane);
 #ifdef Q_OS_MACOS
     // Sidebar like a macOS source list: no frame, no focus ring, hairline divider.
     m_list->setFrameShape(QFrame::NoFrame);
@@ -447,6 +471,10 @@ MainWindow::MainWindow()
     file->addAction(tr("New conversation …"), QKeySequence::New, this, &MainWindow::newConversation);
     file->addAction(tr("New group …"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N), this, &MainWindow::newGroup);
     file->addAction(tr("Join group via link …"), this, &MainWindow::joinGroupByLink);
+    // A switch, not a one-way door: the entry (and Ctrl+K) hides the field again when
+    // it is already visible, so no second control is needed to get rid of it.
+    m_contactSearchAction =
+        file->addAction(tr("Search chats …"), QKeySequence(Qt::CTRL | Qt::Key_K), this, &MainWindow::toggleContactSearch);
     m_groupSettingsAction = file->addAction(tr("Group settings …"), this, [this] { openGroupSettings(m_current); });
     m_groupSettingsAction->setEnabled(false);
     m_invitesAction = file->addAction(tr("Group invitations …"), this, &MainWindow::openGroupInvitations);
@@ -498,9 +526,21 @@ MainWindow::MainWindow()
         const QString key = it->data(Qt::UserRole).toString();
         if (key == kInvitesKey) {
             openGroupInvitations();
+        } else if (key == kRequestsKey) {
+            openMessageRequests();
         } else if (key == kFolderKey || key == kBackKey) {
             m_showArchived = (key == kFolderKey);
             refreshList();
+        } else if (key.startsWith(kContactPrefix)) {
+            // An address book hit: start the conversation with that contact.
+            const QString target = key.mid(kContactPrefix.size());
+            conv(target); // create the chat (title comes from the address book)
+            m_showArchived = false;
+            switchConversation(target);
+            m_convs[target].unread = 0;
+            refreshList();
+            showConversation();
+            focusComposer();
         }
     });
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -539,6 +579,15 @@ MainWindow::MainWindow()
         menu.addAction(tr("Disappearing messages …"), this, [this, key] { editExpiration(key); });
         if (!selfChat)
             menu.addAction(tr("Delete conversation …"), this, [this, key] { deleteConversation(key); });
+        if (!conversation.isGroup && !selfChat) {
+            // Contact management, like the official client offers in the conversation menu.
+            menu.addSeparator();
+            if (conversation.blocked) {
+                menu.addAction(tr("Unblock contact"), this, [this, key] { setBlocked(key, false); });
+            } else {
+                menu.addAction(tr("Block contact …"), this, [this, key] { blockContact(key); });
+            }
+        }
         menu.exec(m_list->viewport()->mapToGlobal(pos));
     });
 
@@ -791,6 +840,10 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
         if (watched == m_searchEdit && keyEvent->key() == Qt::Key_Escape) {
             closeMessageSearch();
+            return true;
+        }
+        if (watched == m_contactSearch && keyEvent->key() == Qt::Key_Escape) {
+            hideContactSearch();
             return true;
         }
     }
@@ -1236,14 +1289,29 @@ void MainWindow::loadContactsAndGroups()
             if (title.isEmpty()) title = c.value(QStringLiteral("profileName")).toString();
             if (!title.isEmpty()) m_contactNames.insert(key, title);
 
+            // Hidden contacts are the message requests (like the official client): offered in the
+            // "Message requests" dialog, not as normal chats.
+            const bool blocked = c.value(QStringLiteral("isBlocked")).toBool();
+            if (c.value(QStringLiteral("isHidden")).toBool()) {
+                m_hiddenContacts.insert(key, title.isEmpty() ? key : title);
+                continue;
+            }
+            m_hiddenContacts.remove(key);
+            // Blocked contacts without a chat are not offered by the search (only a chat with the
+            // "🚫" marker offers the unblock action).
+            if (!blocked || m_convs.contains(key)) m_contacts.insert(key, title.isEmpty() ? key : title);
+
             // signal-cli lists every known recipient (address book, group members, …), not just
             // people we have chatted with. Only show a chat once there is one: local history,
             // a new message, or an archived chat on the phone.
             const bool sig = c.value(QStringLiteral("isArchived")).toBool();
-            if (c.value(QStringLiteral("isHidden")).toBool()) continue;
             if (!m_convs.contains(key) && !sig) continue;
 
             Conversation &cv2 = conv(key, key);
+            if (blocked != cv2.blocked) { // e.g. blocked on the phone: follow signal-cli
+                cv2.blocked = blocked;
+                persist(Records::blocked(key, blocked));
+            }
             const int expiration = c.value(QStringLiteral("messageExpirationTime")).toInt();
             if (cv2.expirationSeconds != expiration) {
                 cv2.expirationSeconds = expiration;
@@ -1734,6 +1802,10 @@ void MainWindow::loadHistory(const QJsonArray &records)
             Conversation &c = conv(key, key, group);
             c.archived = o.value(QStringLiteral("v")).toBool();
             c.sigArchived = o.value(QStringLiteral("s")).toBool();
+        } else if (t == QLatin1String("b")) {
+            conv(key, key, group).blocked = o.value(QStringLiteral("v")).toBool();
+        } else if (t == QLatin1String("j")) {
+            m_declined.insert(key); // declined message request (no conversation is created)
         }
     }
     refreshList();
@@ -1749,6 +1821,7 @@ QJsonArray MainWindow::allRecords() const
         if (!c.storedName.isEmpty()) out.append(Records::name(c.key, c.storedName));
         if (!c.localNickname.isEmpty()) out.append(Records::nickname(c.key, c.localNickname));
         if (c.archived || c.sigArchived) out.append(Records::archive(c.key, c.archived, c.sigArchived));
+        if (c.blocked) out.append(Records::blocked(c.key, true));
         if (c.muted) out.append(Records::mute(c.key, true));
         out.append(Records::expiration(c.key, c.expirationSeconds));
         for (const Message &m : c.msgs) {
@@ -1765,6 +1838,9 @@ QJsonArray MainWindow::allRecords() const
                 out.append(Records::reaction(c.key, m.ts(), effectiveAuthor(c, m), it.key(), it.value()));
         }
     }
+    QStringList declined = m_declined.values(); // keeps outliving a deleted conversation
+    std::sort(declined.begin(), declined.end());
+    for (const QString &k : declined) out.append(Records::requestDeclined(k));
     return out;
 }
 
@@ -1932,6 +2008,13 @@ void MainWindow::deleteConversation(const QString &key)
                               tr("Delete “%1” and its stored messages from this computer?").arg(m_convs[key].title))
         != QMessageBox::Yes)
         return;
+    removeConversation(key);
+}
+
+// Removes the conversation and its history without asking (used by "Delete conversation").
+void MainWindow::removeConversation(const QString &key)
+{
+    if (!m_convs.contains(key)) return;
     if (key == m_editKey) cancelEdit();
     m_convs.remove(key);
     m_drafts.remove(key);
@@ -2586,6 +2669,15 @@ void MainWindow::refreshList()
         if (self.title != tr("Note to Self")) self.title = tr("Note to Self"); // normalise legacy titles
     }
 
+    // Contact search: non-empty filters the chats and shows address book hits at the end.
+    const QString needle = m_contactSearch && !m_contactSearch->text().trimmed().isEmpty()
+                               ? m_contactSearch->text().trimmed()
+                               : QString();
+    const auto matchesNeedle = [&needle](const QString &key, const QString &title) {
+        return needle.isEmpty() || title.contains(needle, Qt::CaseInsensitive)
+               || (!key.startsWith(QLatin1String("g:")) && key.contains(needle, Qt::CaseInsensitive));
+    };
+
     int archivedCount = 0, archivedUnread = 0;
     for (const Conversation &c : std::as_const(m_convs)) {
         if (c.archived) {
@@ -2595,10 +2687,21 @@ void MainWindow::refreshList()
     }
     if (m_showArchived && archivedCount == 0) m_showArchived = false; // folder became empty
 
+    // Open message requests: hidden contacts we have received messages from and have not
+    // declined or blocked yet.
+    int requestCount = 0;
+    if (needle.isEmpty()) {
+        for (auto it = m_hiddenContacts.constBegin(); it != m_hiddenContacts.constEnd(); ++it) {
+            const auto convIt = m_convs.constFind(it.key());
+            if (convIt != m_convs.constEnd() && convIt->blocked) continue;
+            if (!m_declined.contains(it.key()) && convIt != m_convs.constEnd()) ++requestCount;
+        }
+    }
+
     QList<const Conversation *> items;
     for (const Conversation &c : std::as_const(m_convs)) {
         if (!c.archived && isNoteToSelf(c.key)) continue; // pinned separately below (an archived one lives in the folder)
-        if (c.archived == m_showArchived) items.append(&c);
+        if (c.archived == m_showArchived && matchesNeedle(c.key, c.title)) items.append(&c);
     }
 
     const bool alphabetical = m_appearance.sortAlphabetically;
@@ -2620,18 +2723,22 @@ void MainWindow::refreshList()
         it->setFont(f);
         m_list->addItem(it);
     };
-    if (!m_showArchived && !m_invitations.isEmpty())
-        addSpecial(tr("✉ Group invitations (%1)").arg(m_invitations.size()), kInvitesKey, true);
-    if (m_showArchived)
-        addSpecial(tr("← Back to chats"), kBackKey, false);
-    else if (archivedCount > 0)
-        addSpecial(tr("🗄 Archived chats (%1)").arg(archivedCount) + (archivedUnread > 0 ? QStringLiteral(" ●") : QString()),
-                   kFolderKey, archivedUnread > 0);
+    if (needle.isEmpty()) { // searching shows the chats and contacts only
+        if (!m_showArchived && !m_invitations.isEmpty())
+            addSpecial(tr("✉ Group invitations (%1)").arg(m_invitations.size()), kInvitesKey, true);
+        if (!m_showArchived && requestCount > 0)
+            addSpecial(tr("Message requests (%1)").arg(requestCount), kRequestsKey, true);
+        if (m_showArchived)
+            addSpecial(tr("← Back to chats"), kBackKey, false);
+        else if (archivedCount > 0)
+            addSpecial(tr("🗄 Archived chats (%1)").arg(archivedCount) + (archivedUnread > 0 ? QStringLiteral(" ●") : QString()),
+                       kFolderKey, archivedUnread > 0);
+    }
 
     QListWidgetItem *toSelect = nullptr;
 
     // The pinned "Note to Self" row, directly under the folder rows.
-    if (!m_showArchived && !m_account.isEmpty()) {
+    if (!m_showArchived && !m_account.isEmpty() && needle.isEmpty()) {
         const auto selfIt = m_convs.constFind(m_account);
         if (selfIt != m_convs.constEnd() && !selfIt->archived) {
             const Conversation &self = *selfIt;
@@ -2653,6 +2760,7 @@ void MainWindow::refreshList()
 
     for (const Conversation *c : items) {
         QString text = (m_safetyChanged.contains(c->key) ? QStringLiteral("⚠ ") : QString()) +
+                       (c->blocked ? QStringLiteral("🚫 ") : QString()) +
                        (c->muted ? QStringLiteral("🔕 ") : QString()) + (c->isGroup ? QStringLiteral("👥 ") + c->title : c->title);
         auto *it = new QListWidgetItem;
         if (c->unread > 0) {
@@ -2664,9 +2772,31 @@ void MainWindow::refreshList()
         it->setText(text);
         it->setData(Qt::UserRole, c->key);
         if (m_appearance.showAvatars) it->setIcon(avatarIcon(*c));
+        if (c->blocked) it->setToolTip(tr("Blocked contact"));
         m_list->addItem(it);
         if (c->key == m_current) toSelect = it;
     }
+
+    // Address book hits without a chat: click to start a conversation with them.
+    if (!needle.isEmpty()) {
+        QList<QString> hits;
+        for (auto it = m_contacts.constBegin(); it != m_contacts.constEnd(); ++it) {
+            if (m_convs.contains(it.key())) continue; // already shown as a chat row
+            if (m_hiddenContacts.contains(it.key())) continue; // only reachable via the requests dialog
+            if (matchesNeedle(it.key(), it.value())) hits.append(it.key());
+        }
+        std::sort(hits.begin(), hits.end(), [this](const QString &a, const QString &b) {
+            const int c = m_contacts.value(a).compare(m_contacts.value(b), Qt::CaseInsensitive);
+            return c != 0 ? c : a < b;
+        });
+        for (int i = 0; i < hits.size() && i < 10; ++i) {
+            auto *it = new QListWidgetItem(QStringLiteral("👤 ") + m_contacts.value(hits.at(i)));
+            it->setData(Qt::UserRole, kContactPrefix + hits.at(i));
+            it->setToolTip(hits.at(i));
+            m_list->addItem(it);
+        }
+    }
+
     if (toSelect) m_list->setCurrentItem(toSelect);
     updateTray();
     fetchMissingAvatars();
@@ -2957,6 +3087,40 @@ void MainWindow::closeMessageSearch()
     m_input->setFocus();
 }
 
+// The chat search field is hidden by default. The File menu entry ("Search chats …",
+// Ctrl+K) is a switch: the first press reveals the field and focuses it, the next
+// hides and resets it — the same as Esc. The menu text follows the state.
+void MainWindow::showContactSearch()
+{
+    m_contactSearch->setVisible(true);
+    m_contactSearch->setFocus(Qt::OtherFocusReason);
+    m_contactSearch->selectAll();
+    if (m_contactSearchAction)
+        m_contactSearchAction->setText(tr("Hide chat search")); // the next Ctrl+K hides it again
+}
+
+// Esc or the menu entry again: reset the filter and hide the field, so the list goes
+// back to showing every chat and the special rows (requests, pinned).
+void MainWindow::hideContactSearch()
+{
+    if (!m_contactSearch->text().isEmpty())
+        m_contactSearch->clear(); // textChanged -> refreshList(): nothing filtered anymore
+    m_contactSearch->setVisible(false);
+    m_list->setFocus();
+    if (m_contactSearchAction)
+        m_contactSearchAction->setText(tr("Search chats …"));
+}
+
+// The File menu entry and its Ctrl+K shortcut toggle the field instead of only
+// revealing it, so repeating the hotkey is enough to put the list back as it was.
+void MainWindow::toggleContactSearch()
+{
+    if (m_contactSearch->isVisible())
+        hideContactSearch();
+    else
+        showContactSearch();
+}
+
 void MainWindow::updateMessageSearch(bool selectFirst)
 {
     const int oldPosition = m_searchPosition;
@@ -3112,6 +3276,11 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     const QString srcKey = resolveKey(pe.src);
     const QString key = group ? QStringLiteral("g:") + pe.groupId : (pe.outgoing ? resolveKey(pe.destination) : srcKey);
     if (key.isEmpty()) return;
+
+    // Like signal-cli: messages from blocked contacts are dropped entirely — no chat entry,
+    // no notification. Our own outgoing messages are unaffected (the phone may not have blocked).
+    const auto blockedIt = m_convs.find(key);
+    if (!pe.outgoing && !group && blockedIt != m_convs.end() && blockedIt->blocked) return;
 
     // A dataMessage straight from our own number is a note to ourselves: like the official
     // client we treat it as our own send (no unread badge, no notification for it).
@@ -3284,6 +3453,10 @@ void MainWindow::sendMessage()
     const int end = last < 0 ? lead : last + 1;
     const QJsonArray textStyles = normalizedStyles(m_input->textStyles(), lead, end);
     if ((text.isEmpty() && m_pendingFiles.isEmpty()) || !m_convs.contains(m_current)) return;
+    if (m_convs[m_current].blocked) {
+        statusBar()->showMessage(tr("%1 is blocked. Unblock the contact to send messages.").arg(m_convs[m_current].title), 8000);
+        return;
+    }
 
     const Conversation c = m_convs[m_current];
     const QStringList files = m_pendingFiles;
@@ -4183,6 +4356,92 @@ void MainWindow::setMuted(const QString &key, bool muted)
     it->muted = muted;
     persist(Records::mute(key, muted));
     refreshList();
+}
+
+// Contact management -------------------------------------------------------
+
+// Block / unblock through signal-cli ("block" / "unblock"): no more incoming messages, the
+// state is synced to the phone. The local state is only kept after signal-cli confirmed it.
+void MainWindow::setBlocked(const QString &key, bool blocked)
+{
+    if (isNoteToSelf(key)) return; // Note to Self cannot be blocked (like the official client)
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd() || it->blocked == blocked) return;
+    const QString recipient = resolveKey(key);
+    m_cli.call(blocked ? QStringLiteral("block") : QStringLiteral("unblock"),
+               QJsonObject{{QStringLiteral("recipient"), QJsonArray{recipient}}},
+               [this, key, blocked](const QJsonValue &, const QString &err) {
+        auto convIt = m_convs.find(key);
+        if (!err.isEmpty()) {
+            statusBar()->showMessage(tr("Could not change the block state: %1").arg(err), 8000);
+            return;
+        }
+        if (convIt == m_convs.end() || convIt->blocked == blocked) return;
+        convIt->blocked = blocked;
+        persist(Records::blocked(key, blocked));
+        refreshList();
+        statusBar()->showMessage(blocked ? tr("Contact blocked.") : tr("Contact unblocked."), 5000);
+    });
+}
+
+void MainWindow::blockContact(const QString &key)
+{
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd() || it->isGroup || it->blocked) return;
+    if (QMessageBox::question(this, tr("Block contact"),
+                              tr("Block %1? You will no longer receive messages or calls from this contact.")
+                                  .arg(it->title))
+        != QMessageBox::Yes)
+        return;
+    setBlocked(key, true);
+}
+
+// The "Message requests (N)" row of the chat list: hidden contacts that sent us a message.
+void MainWindow::openMessageRequests()
+{
+    MessageRequestsDialog::RequestList requests;
+    for (auto it = m_hiddenContacts.constBegin(); it != m_hiddenContacts.constEnd(); ++it) {
+        if (m_declined.contains(it.key())) continue;
+        const auto convIt = m_convs.constFind(it.key());
+        if (convIt != m_convs.constEnd() && convIt->blocked) continue;
+        QString title = convIt != m_convs.constEnd() && !convIt->title.isEmpty() ? convIt->title : it.value();
+        if (title.isEmpty()) title = it.key();
+        requests.append({it.key(), title});
+    }
+    if (requests.isEmpty()) return;
+
+    MessageRequestsDialog dlg(m_cli, requests, this);
+    connect(&dlg, &MessageRequestsDialog::accepted, this, [this](const QString &key) {
+        m_hiddenContacts.remove(key);
+        m_declined.remove(key);
+        const int rc = m_store.rewrite(allRecords()); // drop a stored "declined" record, if any
+        if (rc != SC_OK)
+            statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
+        if (m_convs.contains(key)) {
+            m_showArchived = false;
+            switchConversation(key);
+            m_convs[key].unread = 0;
+            showConversation();
+            focusComposer();
+        }
+        refreshList();
+    });
+    connect(&dlg, &MessageRequestsDialog::declined, this, [this](const QString &key) {
+        m_declined.insert(key);
+        persist(Records::requestDeclined(key));
+        refreshList();
+    });
+    connect(&dlg, &MessageRequestsDialog::blockedContact, this, [this](const QString &key) {
+        m_hiddenContacts.remove(key);
+        m_declined.insert(key);
+        persist(Records::requestDeclined(key));
+        if (m_convs.contains(key)) {
+            m_convs[key].blocked = true;
+            persist(Records::blocked(key, true));
+        }
+        refreshList();
+    });
+    dlg.exec();
 }
 
 void MainWindow::applyNotifications(const NotificationSettings &notify)

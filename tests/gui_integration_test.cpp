@@ -5,11 +5,13 @@
 #include "HistoryKeychain.h"
 #include "ImageViewer.h"
 #include "MainWindow.h"
+#include "MessageRequestsDialog.h"
 #include "PassphraseDialog.h"
 #include "ProfilePage.h"
 #include "SettingsDialog.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QClipboard>
 #include <QComboBox>
 #include <QBuffer>
@@ -126,6 +128,16 @@ static bool listHas(QListWidget *l, const QString &needle)
     return false;
 }
 
+// Like listHas, but only counts rows that are actually visible (the contact search hides rows).
+static bool listVisibleHas(QListWidget *l, const QString &needle)
+{
+    for (int i = 0; i < l->count(); ++i) {
+        QListWidgetItem *it = l->item(i);
+        if (!it->isHidden() && it->text().contains(needle)) return true;
+    }
+    return false;
+}
+
 static void selectItem(QListWidget *l, const QString &needle)
 {
     for (int i = 0; i < l->count(); ++i)
@@ -216,7 +228,10 @@ static bool chooseChatNickname(MainWindow &window, QListWidget *list, const QStr
 
 // Opens the conversation list context menu on the row matching `needle` and
 // triggers the first action whose text contains `actionText` (e.g. "Archive").
-static bool chooseChatAction(MainWindow &window, QListWidget *list, const QString &needle, const QString &actionText)
+// With `confirmText` set, the same text is clicked away in the confirmation box
+// the action opens (Block).
+static bool chooseChatAction(MainWindow &window, QListWidget *list, const QString &needle, const QString &actionText,
+                             const QString &confirmText = QString())
 {
     QListWidgetItem *item = nullptr;
     for (int i = 0; i < list->count(); ++i) {
@@ -229,7 +244,7 @@ static bool chooseChatAction(MainWindow &window, QListWidget *list, const QStrin
 
     const QPoint pos = list->visualItemRect(item).center();
     bool triggered = false;
-    QTimer::singleShot(0, &window, [actionText, &triggered] {
+    QTimer::singleShot(0, &window, [actionText, confirmText, &triggered] {
         QAction *action = nullptr;
         QList<QMenu *> menus;
         for (QWidget *top : QApplication::topLevelWidgets()) {
@@ -244,6 +259,17 @@ static bool chooseChatAction(MainWindow &window, QListWidget *list, const QStrin
         if (action) {
             triggered = true;
             action->trigger();
+            if (!confirmText.isEmpty()) {
+                // the action opened a confirmation box: click the requested button
+                QTimer::singleShot(100, [confirmText] {
+                    for (QWidget *top : QApplication::topLevelWidgets()) {
+                        if (auto *box = qobject_cast<QMessageBox *>(top)) {
+                            for (QAbstractButton *button : box->buttons())
+                                if (button->text().contains(confirmText)) { button->click(); return; }
+                        }
+                    }
+                });
+            }
         } else {
             for (QMenu *menu : menus) menu->close(); // nothing matched: don't leave it open
         }
@@ -542,7 +568,10 @@ int main(int argc, char **argv)
         w.show();
         auto *list = w.findChild<QListWidget *>();
         auto *view = w.findChild<ChatView *>();
-        auto *input = w.findChild<QLineEdit *>();
+        // The composer is a MessageInput (a QTextEdit subclass). Finding it by its type instead of
+        // "the first QLineEdit" keeps the test independent of the other line edits of the window
+        // (contact search, message search).
+        auto *input = w.findChild<MessageInput *>();
         CHECK(list && view && input);
 
         // A light / dark switch while running re-colours the chat without a restart.
@@ -734,6 +763,117 @@ int main(int argc, char **argv)
                 CHECK(listHas(list, "Archived chats (1)")); // only Carol remains archived
                 selectItem(list, "Alice"); // the following tests expect Alice's chat to be open
             }
+        }
+
+        // --- contact management: search, message requests, block
+        {
+            // the chat search field is hidden by default; ONLY the File menu entry
+            // ("Search chats …", Ctrl+K) reveals it, and pressing it again — like Esc —
+            // closes it and resets the filter
+            auto *searchField = w.findChild<QLineEdit *>(QStringLiteral("contactSearch"));
+            CHECK(searchField);
+            CHECK(!w.findChild<QToolButton *>(QStringLiteral("contactSearchToggle"))); // no button on purpose
+            QAction *searchAction = nullptr;
+            const auto actions = w.findChildren<QAction *>();
+            for (QAction *a : actions)
+                if (a->shortcut() == QKeySequence(Qt::CTRL | Qt::Key_K)) { searchAction = a; break; }
+            CHECK(searchAction);
+            if (searchField && searchAction) {
+                CHECK(!searchField->isVisible());
+                searchAction->trigger(); // what pressing Ctrl+K runs
+                CHECK(searchField->isVisible());
+                CHECK(QApplication::focusWidget() == searchField);
+                CHECK(searchAction->text() == MainWindow::tr("Hide chat search")); // menu now offers hiding
+                searchField->setText(QStringLiteral("ali"));
+                CHECK(waitFor([&] { return listVisibleHas(list, "Alice"); }));
+                CHECK(!listVisibleHas(list, "Note to Self")); // the pinned row hides while searching
+                searchAction->trigger(); // Ctrl+K / the menu entry again: hide + reset
+                CHECK(!searchField->isVisible());
+                CHECK(searchField->text().isEmpty());
+                CHECK(listVisibleHas(list, "Note to Self")); // filter reset: the row is back
+                CHECK(searchAction->text() == MainWindow::tr("Search chats …")); // label back
+                searchAction->trigger(); // and the field comes back
+                CHECK(searchField->isVisible());
+                QTest::keyClick(searchField, Qt::Key_Escape);
+                CHECK(!searchField->isVisible());
+                CHECK(searchField->text().isEmpty());
+                CHECK(listVisibleHas(list, "Note to Self"));
+            }
+
+            // the search filters the chat list and finds address book contacts without a chat
+            auto *searchList = w.findChild<QLineEdit *>(QStringLiteral("contactSearch"));
+            CHECK(searchList);
+            if (searchList) {
+                QAction *searchAction = nullptr;
+                const auto actions = w.findChildren<QAction *>();
+                for (QAction *a : actions)
+                    if (a->shortcut() == QKeySequence(Qt::CTRL | Qt::Key_K)) { searchAction = a; break; }
+                if (searchAction && !searchList->isVisible()) searchAction->trigger(); // open it like a user
+                searchList->setText(QStringLiteral("erin"));
+                CHECK(waitFor([&] { return listVisibleHas(list, "Erin"); })); // contact hit from the address book
+                QListWidgetItem *erin = nullptr;
+                for (int i = 0; i < list->count(); ++i)
+                    if (list->item(i)->text().contains("Erin")) { erin = list->item(i); break; }
+                CHECK(erin);
+                if (erin) {
+                    QMetaObject::invokeMethod(list, "itemClicked", Qt::DirectConnection, Q_ARG(QListWidgetItem *, erin));
+                    CHECK(waitFor([&] { // the hit turned into a plain (unfiltered) chat row
+                        for (int i = 0; i < list->count(); ++i) {
+                            QListWidgetItem *row = list->item(i);
+                            if (row->text().contains("Erin")) return !row->isHidden() && !row->text().contains("👤");
+                        }
+                        return false;
+                    }));
+                }
+                searchList->clear();
+                QTest::keyClick(searchList, Qt::Key_Escape); // close it again
+            }
+
+            // a message from a hidden contact shows up as a message request
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+49444"}, {"sourceUuid", "u-dave"}, {"sourceName", "Dave"},
+                {"timestamp", 1700000500000LL},
+                {"dataMessage", QJsonObject{{"timestamp", 1700000500000LL}, {"message", "dave here"}}}});
+            CHECK(waitFor([&] { return listVisibleHas(list, "Message requests (1)"); }));
+            QListWidgetItem *requestsRow = nullptr;
+            for (int i = 0; i < list->count(); ++i)
+                if (list->item(i)->text().contains("Message requests")) { requestsRow = list->item(i); break; }
+            CHECK(requestsRow);
+            if (requestsRow) {
+                QTimer::singleShot(0, &w, [&] {
+                    for (QWidget *top : QApplication::topLevelWidgets()) {
+                        if (auto *dlg = qobject_cast<MessageRequestsDialog *>(top)) {
+                            const auto buttons = dlg->findChildren<QPushButton *>(QStringLiteral("requestAccept"));
+                            if (!buttons.isEmpty()) buttons.first()->click();
+                            return;
+                        }
+                    }
+                });
+                QMetaObject::invokeMethod(list, "itemClicked", Qt::DirectConnection, Q_ARG(QListWidgetItem *, requestsRow));
+                CHECK(waitFor([&] { return !findCall(logFile, "removeContact").isEmpty(); }));
+                CHECK(findCall(logFile, "removeContact")["params"].toObject()["recipient"].toString() == "u-dave");
+                CHECK(waitFor([&] { return listVisibleHas(list, "Dave"); })); // accepted: a normal chat row
+                bool requestsLeft = false;
+                for (int i = 0; i < list->count(); ++i)
+                    if (list->item(i)->text().contains("Message requests")) requestsLeft = true;
+                CHECK(!requestsLeft);
+            }
+
+            // block a contact from the context menu: her row is marked, her messages are dropped
+            selectItem(list, "Alice");
+            const int aliceBefore = view->messageCount();
+            CHECK(chooseChatAction(w, list, "Alice", "Block contact", "Yes"));
+            CHECK(waitFor([&] { return listVisibleHas(list, "🚫"); }));
+            CHECK(findCall(logFile, "block")["params"].toObject()["recipient"].toArray().first().toString() == "+49111");
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"timestamp", 1700000600000LL},
+                {"dataMessage", QJsonObject{{"timestamp", 1700000600000LL}, {"message", "should not arrive"}}}});
+            CHECK(!waitFor([&] { return view->messageCount() != aliceBefore; }, 700));
+            CHECK(chooseChatAction(w, list, "Alice", "Unblock contact"));
+            CHECK(waitFor([&] { return !listVisibleHas(list, "🚫"); }));
+            CHECK(!findCall(logFile, "unblock").isEmpty());
+
+            selectItem(list, "Alice"); // the following tests expect Alice's chat to be open
         }
 
         auto *search = w.findChild<QLineEdit *>(QStringLiteral("messageSearchInput"));

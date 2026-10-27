@@ -61,6 +61,11 @@ public:
     void addPendingFiles(const QStringList &files);
     // Local per-chat mute (signal-cli does not report mute state): no notification, no sound.
     void setMuted(const QString &key, bool muted);
+    // --- contact management (block, message requests, search)
+    void setBlocked(const QString &key, bool blocked); // signal-cli "block" / "unblock" + local state
+    void removeConversation(const QString &key);       // without confirmation (deleteConversation asks)
+    void blockContact(const QString &key);             // asks, then setBlocked(key, true)
+    void openMessageRequests();                        // accept / decline / block hidden contacts
 
     // Closing the window hides it to the tray only if the tray icon is really there and enabled.
     static bool shouldHideOnClose(bool trayVisible, bool closeToTray, bool quitting);
@@ -212,6 +217,12 @@ private:
     void showConversation(bool keepScroll = false);
     void openMessageSearch();
     void closeMessageSearch();
+    // Chat search above the list: hidden by default, revealed only via the File menu
+    // entry ("Search chats …", Ctrl+K); the entry and Ctrl+K are a switch — pressing
+    // them again, or Esc, hides it and resets the filter.
+    void showContactSearch();
+    void hideContactSearch();
+    void toggleContactSearch();
     void updateMessageSearch(bool selectFirst = false);
     void navigateMessageSearch(bool backwards);
     void updateReplyBar();
@@ -289,6 +300,9 @@ private:
     QHash<QString, PendingSend> m_pendingSends; // visible previews until signal-cli confirms the send
     QHash<QString, QString> m_alias; // uuid -> number
     QHash<QString, QString> m_contactNames; // key -> contact name from signal-cli
+    QHash<QString, QString> m_contacts;      // address book from listContacts: key -> display name
+    QHash<QString, QString> m_hiddenContacts; // isHidden contacts from listContacts: key -> name
+    QSet<QString> m_declined;                // declined message requests (persisted, outlives the chat)
     QString m_current;
     QString m_account;
     QString m_version; // e.g. "0.13.12"
@@ -349,6 +363,8 @@ private:
     QTimer m_expandHoverTimer;                  // polls the mouse for the expand handle, only while it is in the right panel
 
     QListWidget *m_list;
+    QLineEdit *m_contactSearch = nullptr; // filters the chat list, finds address book contacts
+    QAction *m_contactSearchAction = nullptr; // File menu entry: toggles m_contactSearch, text follows the state
     QLabel *m_title;
     ChatView *m_view = nullptr;
     QWidget *m_searchBar;

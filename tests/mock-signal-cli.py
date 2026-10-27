@@ -95,6 +95,8 @@ CONTACTS = [
     {"number": "+49111", "uuid": "u-alice", "name": "Alice", "isArchived": False, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
     {"number": "+49222", "uuid": "u-bob", "name": "Bob", "isArchived": True, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
     {"number": "+49333", "uuid": "u-carol", "name": "Carol", "isArchived": True, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
+    {"number": "+49444", "uuid": "u-dave", "name": "Dave", "isArchived": False, "isBlocked": False, "isHidden": True, "messageExpirationTime": 0},
+    {"number": "+49555", "uuid": "u-erin", "name": "Erin", "isArchived": False, "isBlocked": False, "isHidden": False, "messageExpirationTime": 0},
 ]
 IDENTITIES = [
     {"number": "+49111", "uuid": "u-alice", "fingerprint": "0568" + "ab" * 32,
@@ -309,6 +311,27 @@ for line in sys.stdin:
         for contact in CONTACTS:
             if p.get("recipient") in (contact["number"], contact["uuid"]):
                 contact["messageExpirationTime"] = p.get("expiration", 0)
+        res = {}
+    elif m in ("block", "unblock"):
+        targets = p.get("recipient", [])
+        if isinstance(targets, str):
+            targets = [targets]
+        for contact in CONTACTS:
+            if contact["number"] in targets or contact["uuid"] in targets:
+                contact["isBlocked"] = (m == "block")
+        for g in GROUPS:
+            if any(gid in targets for gid in (g.get("id"),)):
+                g["isBlocked"] = (m == "block")
+        res = {}
+    elif m == "removeContact":
+        target = next((c for c in CONTACTS if p.get("recipient") in (c["number"], c["uuid"])), None)
+        if target:
+            if p.get("forget"):
+                CONTACTS.remove(target)
+            elif p.get("hide"):
+                target["isHidden"] = True
+            else:  # plain removeContact: clear the contact details (and the hidden state)
+                target["isHidden"] = False
         res = {}
     elif m == "updateGroup":
         res, failure = update_group(p)

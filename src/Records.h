@@ -21,6 +21,9 @@ QJsonObject expirationUpdate(const QString &conv, const Message &m);
 QJsonObject attachmentsUpdate(const QString &conv, const Message &m);
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji);
 QJsonObject archive(const QString &conv, bool archived, bool sigArchived);
+QJsonObject blocked(const QString &conv, bool blocked);
+// A declined message request (the hidden contact stays hidden and is not offered again).
+QJsonObject requestDeclined(const QString &conv);
 QJsonObject name(const QString &conv, const QString &name);
 QJsonObject nickname(const QString &conv, const QString &nickname);
 QJsonObject mute(const QString &conv, bool muted);
