@@ -214,6 +214,44 @@ static bool chooseChatNickname(MainWindow &window, QListWidget *list, const QStr
     return waitFor([&] { return answered && QApplication::activeModalWidget() == nullptr; }, 3000);
 }
 
+// Opens the conversation list context menu on the row matching `needle` and
+// triggers the first action whose text contains `actionText` (e.g. "Archive").
+static bool chooseChatAction(MainWindow &window, QListWidget *list, const QString &needle, const QString &actionText)
+{
+    QListWidgetItem *item = nullptr;
+    for (int i = 0; i < list->count(); ++i) {
+        if (list->item(i)->text().contains(needle)) {
+            item = list->item(i);
+            break;
+        }
+    }
+    if (!item) return false;
+
+    const QPoint pos = list->visualItemRect(item).center();
+    bool triggered = false;
+    QTimer::singleShot(0, &window, [actionText, &triggered] {
+        QAction *action = nullptr;
+        QList<QMenu *> menus;
+        for (QWidget *top : QApplication::topLevelWidgets()) {
+            if (auto *menu = qobject_cast<QMenu *>(top)) {
+                menus.append(menu);
+                for (QAction *candidate : menu->actions()) {
+                    if (candidate->text().contains(actionText)) { action = candidate; break; }
+                }
+                if (action) break;
+            }
+        }
+        if (action) {
+            triggered = true;
+            action->trigger();
+        } else {
+            for (QMenu *menu : menus) menu->close(); // nothing matched: don't leave it open
+        }
+    });
+    QMetaObject::invokeMethod(list, "customContextMenuRequested", Qt::DirectConnection, Q_ARG(QPoint, pos));
+    return waitFor([&] { return triggered && QApplication::activeModalWidget() == nullptr; }, 3000);
+}
+
 static bool startConversation(MainWindow &window, const QString &recipient)
 {
     QMenu *fileMenu = nullptr;
@@ -644,6 +682,59 @@ int main(int argc, char **argv)
         CHECK(sendParams["attachments"].toArray().first().toString() == imgPath);
         CHECK(waitFor([&] { return view->messageCount() == 2; }));
         CHECK(html(view).contains("my reply"));
+
+        // --- Note to Self: pinned above every chat (only folder rows above it) and sends to our own account
+        {
+            int selfRow = -1;
+            for (int i = 0; i < list->count(); ++i) {
+                const QString text = list->item(i)->text();
+                if (text == QStringLiteral("Note to Self")) { selfRow = i; break; }
+                CHECK(text.contains(QStringLiteral("✉")) || text.contains(QStringLiteral("🗄")) ||
+                      text.startsWith(QStringLiteral("←"))); // only special rows sit above it
+            }
+            CHECK(selfRow >= 0);
+            selectItem(list, "Note to Self");
+            input->setText("hello me");
+            QTest::keyClick(input, Qt::Key_Return);
+            CHECK(waitFor([&] { return view->messageCount() == 1; }));
+            const QJsonObject selfSend = lastCall(logFile, "send")["params"].toObject();
+            CHECK(selfSend["message"].toString() == "hello me");
+            CHECK(selfSend["recipient"].toArray().first().toString() == "+491234567");
+            selectItem(list, "Alice"); // the following tests expect Alice's chat to be open
+        }
+
+        // --- Note to Self can be archived (like the official client): the row
+        //     moves into the "Archived chats" folder and comes back via the menu.
+        {
+            CHECK(chooseChatAction(w, list, "Note to Self", "Archive"));
+            CHECK(waitFor([&] { return listHas(list, "Archived chats (2)"); })); // Carol + Note to Self
+            CHECK(!listHas(list, "Note to Self")); // gone from the main list
+
+            // Inside the folder the chat shows its notepad glyph and unarchives from there.
+            QListWidgetItem *folder = nullptr;
+            for (int i = 0; i < list->count(); ++i)
+                if (list->item(i)->text().contains("Archived chats")) { folder = list->item(i); break; }
+            CHECK(folder);
+            if (folder) {
+                QMetaObject::invokeMethod(list, "itemClicked", Qt::DirectConnection,
+                                          Q_ARG(QListWidgetItem *, folder)); // open the folder
+                CHECK(waitFor([&] { return listHas(list, "Note to Self"); }));
+                CHECK(listHas(list, "Back to chats"));
+                CHECK(chooseChatAction(w, list, "Note to Self", "Unarchive"));
+                CHECK(waitFor([&] { return !listHas(list, "Note to Self"); })); // left the folder
+                QListWidgetItem *back = nullptr;
+                for (int i = 0; i < list->count(); ++i)
+                    if (list->item(i)->text().contains("Back to chats")) { back = list->item(i); break; }
+                CHECK(back);
+                if (back) {
+                    QMetaObject::invokeMethod(list, "itemClicked", Qt::DirectConnection,
+                                              Q_ARG(QListWidgetItem *, back)); // back to the main list
+                }
+                CHECK(waitFor([&] { return listHas(list, "Note to Self"); })); // pinned again
+                CHECK(listHas(list, "Archived chats (1)")); // only Carol remains archived
+                selectItem(list, "Alice"); // the following tests expect Alice's chat to be open
+            }
+        }
 
         auto *search = w.findChild<QLineEdit *>(QStringLiteral("messageSearchInput"));
         auto *searchCount = w.findChild<QLabel *>(QStringLiteral("messageSearchCount"));

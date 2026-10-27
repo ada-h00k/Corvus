@@ -133,6 +133,7 @@ private:
     void removePendingPreview(const PendingSend &pending);
     Conversation &conv(const QString &key, const QString &title = QString(), bool group = false);
     QString resolveKey(const QString &id) const;
+    bool isNoteToSelf(const QString &key) const; // key is our own account: the "Note to Self" chat
     QString displayName(const QString &key) const;
     QString effectiveAuthor(const Conversation &c, const Message &m) const;
     bool authorMatches(const Conversation &c, const Message &m, const QStringList &authors) const;

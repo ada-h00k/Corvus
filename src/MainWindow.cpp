@@ -511,11 +511,12 @@ MainWindow::MainWindow()
         if (!m_convs.contains(key)) return;
         QMenu menu(this);
         Conversation &conversation = m_convs[key];
+        const bool selfChat = isNoteToSelf(key);
         menu.addAction(tr("Media gallery …"), this, [this, key] { openMediaGallery(key); });
         if (conversation.isGroup)
             menu.addAction(tr("Group settings …"), this, [this, key] { openGroupSettings(key); });
         menu.addSeparator();
-        if (!conversation.isGroup) {
+        if (!conversation.isGroup && !selfChat) {
             menu.addAction(conversation.localNickname.isEmpty() ? tr("Set nickname…") : tr("Change nickname…"),
                            this, [this, key] {
                 const QString current = m_convs.value(key).localNickname;
@@ -531,11 +532,13 @@ MainWindow::MainWindow()
             menu.addSeparator();
         }
         const bool archived = m_convs[key].archived;
+        // Note to Self can be archived, but never deleted (like the official client).
         menu.addAction(archived ? tr("Unarchive") : tr("Archive"), this, [this, key, archived] { setArchived(key, !archived); });
         const bool muted = m_convs[key].muted;
         menu.addAction(muted ? tr("Unmute notifications") : tr("Mute notifications"), this, [this, key, muted] { setMuted(key, !muted); });
         menu.addAction(tr("Disappearing messages …"), this, [this, key] { editExpiration(key); });
-        menu.addAction(tr("Delete conversation …"), this, [this, key] { deleteConversation(key); });
+        if (!selfChat)
+            menu.addAction(tr("Delete conversation …"), this, [this, key] { deleteConversation(key); });
         menu.exec(m_list->viewport()->mapToGlobal(pos));
     });
 
@@ -1227,6 +1230,7 @@ void MainWindow::loadContactsAndGroups()
             const QString key = !number.isEmpty() ? number : uuid;
             if (key.isEmpty()) continue;
             if (!number.isEmpty() && !uuid.isEmpty()) m_alias.insert(uuid, number);
+            if (isNoteToSelf(key)) continue; // Note to Self is managed locally: fixed title, fixed icon
 
             QString title = c.value(QStringLiteral("name")).toString();
             if (title.isEmpty()) title = c.value(QStringLiteral("profileName")).toString();
@@ -1773,6 +1777,7 @@ void MainWindow::persist(const QJsonObject &record)
 
 void MainWindow::learnName(const QString &key, const QString &name)
 {
+    if (isNoteToSelf(key)) return; // the chat with ourselves keeps its fixed title
     Conversation &c = conv(key);
     if (!c.storedName.isEmpty() || c.isGroup) return;
     if (c.title != c.key && c.title != name && c.localNickname.isEmpty()) return; // a saved contact name wins
@@ -1784,6 +1789,7 @@ void MainWindow::learnName(const QString &key, const QString &name)
 
 void MainWindow::setNickname(const QString &key, const QString &nickname)
 {
+    if (isNoteToSelf(key)) return; // nicknames are for contacts, not for ourselves
     auto it = m_convs.find(key);
     if (it == m_convs.end() || it->isGroup) return;
     it->localNickname = nickname;
@@ -1921,6 +1927,7 @@ void MainWindow::changeHistoryProtection()
 void MainWindow::deleteConversation(const QString &key)
 {
     if (!m_convs.contains(key)) return;
+    if (isNoteToSelf(key)) return; // Note to Self cannot be deleted (like the official client)
     if (QMessageBox::question(this, tr("Delete conversation"),
                               tr("Delete “%1” and its stored messages from this computer?").arg(m_convs[key].title))
         != QMessageBox::Yes)
@@ -2022,6 +2029,12 @@ QString MainWindow::resolveKey(const QString &id) const
     return m_alias.value(id, id);
 }
 
+// True for our own account: the "Note to Self" chat (key may be the number or our UUID).
+bool MainWindow::isNoteToSelf(const QString &key) const
+{
+    return !m_account.isEmpty() && (key == m_account || resolveKey(key) == m_account);
+}
+
 Conversation &MainWindow::conv(const QString &key, const QString &title, bool group)
 {
     auto it = m_convs.find(key);
@@ -2030,6 +2043,7 @@ Conversation &MainWindow::conv(const QString &key, const QString &title, bool gr
         c.key = key;
         c.title = title.isEmpty() ? key : title;
         if (c.title == key) c.title = m_contactNames.value(key, key); // saved contact name, if known
+        if (!group && isNoteToSelf(key)) c.title = tr("Note to Self"); // never the raw number (like the official client)
         c.isGroup = group;
         it = m_convs.insert(key, c);
     }
@@ -2521,8 +2535,57 @@ void MainWindow::expireMessages()
     refreshList();
 }
 
+// The Note to Self glyph: Signal-blue circle with a white notepad (spiral
+// binding on top, ruled lines), like the official Signal Desktop client shows
+// for the chat with yourself.
+static QPixmap noteToSelfAvatar(int size = 64)
+{
+    QPixmap out(size, size);
+    out.fill(Qt::transparent);
+    QPainter p(&out);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QColor blue(0x3a, 0x76, 0xf0); // Signal blue
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(blue);
+    p.drawEllipse(QRectF(0, 0, size, size));
+
+    // The paper: a white rounded sheet in the centre of the circle.
+    QRectF paper(size * 0.29, size * 0.26, size * 0.42, size * 0.54);
+    p.setBrush(Qt::white);
+    p.drawRoundedRect(paper, size * 0.05, size * 0.05);
+
+    // Spiral binding: three rings piercing the top edge of the sheet.
+    p.setBrush(Qt::white);
+    for (int i = 0; i < 3; ++i) {
+        const qreal x = paper.left() + paper.width() * (0.22 + 0.28 * i);
+        p.drawEllipse(QPointF(x, paper.top()), size * 0.05, size * 0.05);
+    }
+    p.setBrush(blue); // the hole of each ring
+    for (int i = 0; i < 3; ++i) {
+        const qreal x = paper.left() + paper.width() * (0.22 + 0.28 * i);
+        p.drawEllipse(QPointF(x, paper.top()), size * 0.018, size * 0.018);
+    }
+
+    // Ruled lines, drawn in the same blue as the background.
+    p.setPen(QPen(blue, size * 0.035, Qt::SolidLine, Qt::RoundCap));
+    for (int i = 0; i < 3; ++i) {
+        const qreal y = paper.top() + paper.height() * (0.38 + 0.22 * i);
+        p.drawLine(QPointF(paper.left() + paper.width() * 0.16, y),
+                   QPointF(paper.right() - paper.width() * 0.16, y));
+    }
+    return out;
+}
+
 void MainWindow::refreshList()
 {
+    // Note to Self: exists as soon as the account is known and is always visible,
+    // pinned at the top of the list (like the official Signal Desktop client).
+    if (!m_account.isEmpty()) {
+        Conversation &self = conv(m_account, tr("Note to Self"));
+        if (self.title != tr("Note to Self")) self.title = tr("Note to Self"); // normalise legacy titles
+    }
+
     int archivedCount = 0, archivedUnread = 0;
     for (const Conversation &c : std::as_const(m_convs)) {
         if (c.archived) {
@@ -2533,8 +2596,10 @@ void MainWindow::refreshList()
     if (m_showArchived && archivedCount == 0) m_showArchived = false; // folder became empty
 
     QList<const Conversation *> items;
-    for (const Conversation &c : std::as_const(m_convs))
+    for (const Conversation &c : std::as_const(m_convs)) {
+        if (!c.archived && isNoteToSelf(c.key)) continue; // pinned separately below (an archived one lives in the folder)
         if (c.archived == m_showArchived) items.append(&c);
+    }
 
     const bool alphabetical = m_appearance.sortAlphabetically;
     std::sort(items.begin(), items.end(), [alphabetical](const Conversation *a, const Conversation *b) {
@@ -2564,6 +2629,28 @@ void MainWindow::refreshList()
                    kFolderKey, archivedUnread > 0);
 
     QListWidgetItem *toSelect = nullptr;
+
+    // The pinned "Note to Self" row, directly under the folder rows.
+    if (!m_showArchived && !m_account.isEmpty()) {
+        const auto selfIt = m_convs.constFind(m_account);
+        if (selfIt != m_convs.constEnd() && !selfIt->archived) {
+            const Conversation &self = *selfIt;
+            auto *it = new QListWidgetItem;
+            QString text = (self.muted ? QStringLiteral("🔕 ") : QString()) + self.title;
+            if (self.unread > 0) {
+                text += QStringLiteral(" (%1)").arg(self.unread);
+                QFont f = it->font();
+                f.setBold(true);
+                it->setFont(f);
+            }
+            it->setText(text);
+            it->setData(Qt::UserRole, self.key);
+            if (m_appearance.showAvatars) it->setIcon(QIcon(noteToSelfAvatar()));
+            m_list->addItem(it);
+            if (self.key == m_current) toSelect = it;
+        }
+    }
+
     for (const Conversation *c : items) {
         QString text = (m_safetyChanged.contains(c->key) ? QStringLiteral("⚠ ") : QString()) +
                        (c->muted ? QStringLiteral("🔕 ") : QString()) + (c->isGroup ? QStringLiteral("👥 ") + c->title : c->title);
@@ -2632,6 +2719,7 @@ static QPixmap placeholderAvatar(const QString &key, const QString &title, int s
 
 QPixmap MainWindow::avatarPixmap(const Conversation &c) const
 {
+    if (isNoteToSelf(c.key)) return noteToSelfAvatar(); // fixed glyph, never a profile photo
     const auto it = m_avatars.constFind(c.key);
     return it != m_avatars.constEnd() ? *it : placeholderAvatar(c.key, c.title);
 }
@@ -2669,6 +2757,7 @@ void MainWindow::fetchMissingAvatars()
     const QStringList keys = m_convs.keys();
     for (const QString &key : keys) {
         if (m_avatarInFlight >= kMaxParallel) return; // continues when a request finishes
+        if (isNoteToSelf(key)) continue; // Note to Self keeps its drawn glyph, nothing to fetch
         if (m_avatarTried.contains(key) || m_avatarBusy.contains(key)) continue;
         fetchAvatar(key);
     }
@@ -3023,6 +3112,10 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     const QString srcKey = resolveKey(pe.src);
     const QString key = group ? QStringLiteral("g:") + pe.groupId : (pe.outgoing ? resolveKey(pe.destination) : srcKey);
     if (key.isEmpty()) return;
+
+    // A dataMessage straight from our own number is a note to ourselves: like the official
+    // client we treat it as our own send (no unread badge, no notification for it).
+    if (!pe.outgoing && !group && isNoteToSelf(srcKey)) pe.outgoing = true;
 
     if (pe.kind == ParsedEnvelope::ExpirationUpdate) {
         auto conversation = m_convs.find(key);
