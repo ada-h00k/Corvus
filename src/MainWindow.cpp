@@ -8,6 +8,9 @@
 #include "EmojiPicker.h"
 #include "GiphyPicker.h"
 #include "GiphyApiKeyStore.h"
+#include "GroupDialog.h"
+#include "GroupInfo.h"
+#include "GroupInvitesDialog.h"
 #include "Envelope.h"
 #include "HistoryKeychain.h"
 #include "ImageViewer.h"
@@ -80,6 +83,8 @@
 
 static const QString kFolderKey = QStringLiteral("::archived");
 static const QString kBackKey = QStringLiteral("::back");
+static const QString kInvitesKey = QStringLiteral("::invites");
+static bool isSpecialKey(const QString &key) { return key == kFolderKey || key == kBackKey || key == kInvitesKey; }
 static const qint64 kMaxThumbSource = 30LL * 1024 * 1024;
 static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload limit
 
@@ -350,6 +355,12 @@ MainWindow::MainWindow()
     // Menus
     QMenu *file = menuBar()->addMenu(tr("&File"));
     file->addAction(tr("New conversation …"), QKeySequence::New, this, &MainWindow::newConversation);
+    file->addAction(tr("New group …"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N), this, &MainWindow::newGroup);
+    file->addAction(tr("Join group via link …"), this, &MainWindow::joinGroupByLink);
+    m_groupSettingsAction = file->addAction(tr("Group settings …"), this, [this] { openGroupSettings(m_current); });
+    m_groupSettingsAction->setEnabled(false);
+    m_invitesAction = file->addAction(tr("Group invitations …"), this, &MainWindow::openGroupInvitations);
+    m_invitesAction->setEnabled(false);
     file->addAction(tr("Link device …"), this, &MainWindow::linkDevice);
     file->addAction(tr("Reconnect"), QKeySequence(Qt::CTRL | Qt::Key_R), this, &MainWindow::reconnect);
     file->addSeparator();
@@ -372,7 +383,7 @@ MainWindow::MainWindow()
             for (int row = 0; row < m_list->count(); ++row) {
                 QListWidgetItem *item = m_list->item(row);
                 const QString key = item->data(Qt::UserRole).toString();
-                if (key == kFolderKey || key == kBackKey) continue;
+                if (isSpecialKey(key)) continue;
                 if (conversationIndex++ == index) {
                     m_list->setCurrentItem(item);
                     return;
@@ -395,7 +406,9 @@ MainWindow::MainWindow()
             [this](QListWidgetItem *cur, QListWidgetItem *) { onSelectionChanged(cur); });
     connect(m_list, &QListWidget::itemClicked, this, [this](QListWidgetItem *it) {
         const QString key = it->data(Qt::UserRole).toString();
-        if (key == kFolderKey || key == kBackKey) {
+        if (key == kInvitesKey) {
+            openGroupInvitations();
+        } else if (key == kFolderKey || key == kBackKey) {
             m_showArchived = (key == kFolderKey);
             refreshList();
         }
@@ -409,6 +422,8 @@ MainWindow::MainWindow()
         QMenu menu(this);
         Conversation &conversation = m_convs[key];
         menu.addAction(tr("Media gallery …"), this, [this, key] { openMediaGallery(key); });
+        if (conversation.isGroup)
+            menu.addAction(tr("Group settings …"), this, [this, key] { openGroupSettings(key); });
         menu.addSeparator();
         if (!conversation.isGroup) {
             menu.addAction(conversation.localNickname.isEmpty() ? tr("Set nickname…") : tr("Change nickname…"),
@@ -1141,11 +1156,25 @@ void MainWindow::loadContactsAndGroups()
         checkIdentities(); // any safety number that changed while Corvus was not running
     });
 
-    m_cli.call(QStringLiteral("listGroups"), {}, [this](const QJsonValue &res, const QString &err) {
+    refreshGroups();
+}
+
+void MainWindow::refreshGroups(std::function<void()> done)
+{
+    m_cli.call(QStringLiteral("listGroups"), {}, [this, done](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) return;
+        QList<GroupInfo::Info> invitations;
         for (const QJsonValue &gv : res.toArray()) {
             const QJsonObject g = gv.toObject();
-            if (g.contains(QStringLiteral("isMember")) && !g.value(QStringLiteral("isMember")).toBool()) continue;
+            if (g.contains(QStringLiteral("isMember")) && !g.value(QStringLiteral("isMember")).toBool()) {
+                // not a member: an open invitation if we are on the list of invited people
+                const GroupInfo::Info info = GroupInfo::parseOne(g);
+                bool invited = false;
+                for (const GroupInfo::Member &m : info.pending)
+                    if (m.is(m_account)) invited = true;
+                if (invited && !info.id.isEmpty() && !info.isTerminated) invitations.append(info);
+                continue;
+            }
             const QString id = g.value(QStringLiteral("id")).toString();
             if (id.isEmpty()) continue;
             QString title = g.value(QStringLiteral("name")).toString();
@@ -1158,7 +1187,153 @@ void MainWindow::loadContactsAndGroups()
                 persist(Records::expiration(c.key, expiration));
             }
         }
+        updateInvitations(invitations);
         refreshList();
+        if (m_convs.contains(m_current) && m_convs.value(m_current).isGroup) m_title->setText(m_convs.value(m_current).title);
+        if (done) done();
+    });
+}
+
+QString MainWindow::memberName(const QString &id) const
+{
+    const QString key = resolveKey(id);
+    if (!m_account.isEmpty() && (id == m_account || key == m_account)) return tr("You");
+    const auto it = m_convs.constFind(key);
+    if (it != m_convs.constEnd() && !it->isGroup && it->title != key) return it->title;
+    return m_contactNames.value(key, id);
+}
+
+QList<GroupDialog::Contact> MainWindow::groupContacts() const
+{
+    QHash<QString, QString> people; // key -> name
+    for (auto it = m_contactNames.cbegin(); it != m_contactNames.cend(); ++it) people.insert(it.key(), it.value());
+    for (const Conversation &c : m_convs)
+        if (!c.isGroup) people.insert(c.key, c.title.isEmpty() ? c.key : c.title);
+    QList<GroupDialog::Contact> list;
+    for (auto it = people.cbegin(); it != people.cend(); ++it)
+        if (it.key() != m_account && resolveKey(it.key()) != m_account) list.append({it.key(), it.value()});
+    std::sort(list.begin(), list.end(), [](const GroupDialog::Contact &a, const GroupDialog::Contact &b) {
+        return a.name.localeAwareCompare(b.name) < 0;
+    });
+    return list;
+}
+
+void MainWindow::updateInvitations(const QList<GroupInfo::Info> &invitations)
+{
+    for (const GroupInfo::Info &g : invitations) {
+        bool known = false;
+        for (const GroupInfo::Info &old : std::as_const(m_invitations))
+            if (old.id == g.id) known = true;
+        if (!known)
+            statusBar()->showMessage(tr("You were invited to the group “%1”.").arg(g.name.isEmpty() ? tr("Group") : g.name), 10000);
+    }
+    m_invitations = invitations;
+    if (m_invitesAction) m_invitesAction->setEnabled(!m_invitations.isEmpty());
+}
+
+void MainWindow::openGroupInvitations()
+{
+    if (m_invitations.isEmpty()) return;
+    if (!m_cli.isRunning()) {
+        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
+        return;
+    }
+    auto *dialog = new GroupInvitesDialog(m_cli, m_invitations, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &GroupInvitesDialog::joined, this, [this](const QString &id) {
+        refreshGroups([this, id] {
+            const QString key = QStringLiteral("g:") + id;
+            if (!m_convs.contains(key)) return;
+            m_showArchived = false;
+            switchConversation(key);
+            refreshList();
+            showConversation();
+        });
+    });
+    connect(dialog, &GroupInvitesDialog::declined, this, [this] { refreshGroups(); });
+    dialog->show();
+}
+
+void MainWindow::updateGroupActions()
+{
+    if (m_groupSettingsAction)
+        m_groupSettingsAction->setEnabled(m_convs.contains(m_current) && m_convs.value(m_current).isGroup);
+}
+
+void MainWindow::newGroup()
+{
+    if (!m_cli.isRunning()) {
+        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
+        return;
+    }
+    auto *dialog = new GroupDialog(m_cli, m_account, QString(), groupContacts(),
+                                   [this](const QString &id) { return memberName(id); }, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &GroupDialog::groupCreated, this, [this](const QString &id) {
+        refreshGroups([this, id] {
+            const QString key = QStringLiteral("g:") + id;
+            if (!m_convs.contains(key)) return;
+            m_showArchived = false;
+            switchConversation(key);
+            refreshList();
+            showConversation();
+        });
+    });
+    dialog->show();
+}
+
+void MainWindow::openGroupSettings(const QString &key)
+{
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd() || !it->isGroup) return;
+    if (!m_cli.isRunning()) {
+        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
+        return;
+    }
+    auto *dialog = new GroupDialog(m_cli, m_account, key.mid(2), groupContacts(),
+                                   [this](const QString &id) { return memberName(id); }, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &GroupDialog::groupChanged, this, [this] { refreshGroups(); });
+    connect(dialog, &GroupDialog::groupLeft, this, [this, key] {
+        const QString title = m_convs.contains(key) ? m_convs.value(key).title : tr("the group");
+        statusBar()->showMessage(tr("You left “%1”.").arg(title), 8000);
+        refreshGroups();
+    });
+    dialog->show();
+}
+
+void MainWindow::joinGroupByLink()
+{
+    if (!m_cli.isRunning()) {
+        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
+        return;
+    }
+    bool ok = false;
+    const QString uri = QInputDialog::getText(this, tr("Join group"),
+                                              tr("Group invite link (https://signal.group/#…):"),
+                                              QLineEdit::Normal, QString(), &ok)
+                            .trimmed();
+    if (!ok || uri.isEmpty()) return;
+    m_cli.call(QStringLiteral("joinGroup"), {{QStringLiteral("uri"), uri}},
+               [this](const QJsonValue &res, const QString &err) {
+        if (!err.isEmpty()) {
+            QMessageBox::warning(this, tr("Join group"), tr("Could not join the group: %1").arg(err));
+            return;
+        }
+        const QJsonObject o = res.toObject();
+        if (o.value(QStringLiteral("onlyRequested")).toBool())
+            statusBar()->showMessage(tr("Join request sent. An admin has to approve it."), 10000);
+        else
+            statusBar()->showMessage(tr("Joined the group."), 8000);
+        const QString id = o.value(QStringLiteral("groupId")).toString();
+        refreshGroups([this, id] {
+            const QString key = QStringLiteral("g:") + id;
+            if (id.isEmpty() || !m_convs.contains(key)) return;
+            m_showArchived = false;
+            switchConversation(key);
+            refreshList();
+            showConversation();
+        });
     });
 }
 
@@ -2182,6 +2357,8 @@ void MainWindow::refreshList()
         it->setFont(f);
         m_list->addItem(it);
     };
+    if (!m_showArchived && !m_invitations.isEmpty())
+        addSpecial(tr("✉ Group invitations (%1)").arg(m_invitations.size()), kInvitesKey, true);
     if (m_showArchived)
         addSpecial(tr("← Back to chats"), kBackKey, false);
     else if (archivedCount > 0)
@@ -2373,7 +2550,7 @@ void MainWindow::stepConversation(int delta)
     for (int row = 0; row < m_list->count(); ++row) {
         QListWidgetItem *item = m_list->item(row);
         const QString key = item->data(Qt::UserRole).toString();
-        if (key == kFolderKey || key == kBackKey) continue;
+        if (isSpecialKey(key)) continue;
         if (item == m_list->currentItem()) current = int(rows.size());
         rows.append(item);
     }
@@ -2385,7 +2562,7 @@ void MainWindow::onSelectionChanged(QListWidgetItem *item)
 {
     if (!item) return;
     const QString key = item->data(Qt::UserRole).toString();
-    if (key == kFolderKey || key == kBackKey) return; // handled on click
+    if (isSpecialKey(key)) return; // handled on click
     openConversation(key);
 }
 
@@ -2462,12 +2639,14 @@ void MainWindow::showConversation(bool keepScroll)
         m_title->setText(tr("No conversation selected"));
         m_view->clearView();
         updateSafetyBar();
+        updateGroupActions();
         updateMessageSearch();
         return;
     }
     const Conversation &c = m_convs[m_current];
     m_title->setText(c.title);
     updateSafetyBar();
+    updateGroupActions();
     m_view->setGroupMode(c.isGroup);
     m_view->showMessages(c.msgs, keepScroll);
     updateMessageSearch();

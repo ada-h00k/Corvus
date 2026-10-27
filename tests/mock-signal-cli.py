@@ -9,6 +9,7 @@ Environment:
   MOCK_LOG     file: every JSON-RPC request is appended (one JSON per line)
   MOCK_INJECT  file: JSON lines appended here are emitted as `receive` envelopes
   MOCK_IDENTITY_FILE  file: JSON list replacing the identities of listIdentities (key changes)
+  MOCK_EXTRA_GROUPS   set: also lists a group where we are no admin (permissions only for admins)
 """
 import base64, io, json, os, struct, sys, threading, time, wave, zlib
 
@@ -119,6 +120,140 @@ self_account = args[account_index] if account_index > 0 else ""
 sent = 0
 log = os.environ.get("MOCK_LOG")
 
+
+# ---- groups (JsonGroup of signal-cli: members with isAdmin, pending / requesting / banned addresses) ----
+def addr(who):
+    if who in (self_account, "self-uuid"):
+        return {"number": self_account, "uuid": "self-uuid"}
+    for c in CONTACTS:
+        if who in (c["number"], c["uuid"]):
+            return {"number": c["number"], "uuid": c["uuid"]}
+    if who.startswith("+"):
+        return {"number": who, "uuid": "u-" + who[1:]}
+    return {"number": None, "uuid": who}
+
+
+def same(a, b):
+    return (a.get("number") and a.get("number") == b.get("number")) or (a.get("uuid") and a.get("uuid") == b.get("uuid"))
+
+
+def group_template(gid, name):
+    return {"id": gid, "name": name, "description": "", "isMember": True, "isBlocked": False, "isTerminated": False,
+            "messageExpirationTime": 0, "members": [], "pendingMembers": [], "requestingMembers": [], "admins": [],
+            "banned": [], "permissionAddMember": "EVERY_MEMBER", "permissionEditDetails": "EVERY_MEMBER",
+            "permissionSendMessage": "EVERY_MEMBER", "groupInviteLink": None}
+
+
+def member(who, admin=False):
+    a = addr(who)
+    a["isAdmin"] = admin
+    return a
+
+
+team = GROUPS[0]
+team.update(group_template(team["id"], "Team"))
+team["members"] = [member(self_account, True), member("+49111"), member("+49222", True)]
+team["requestingMembers"] = [addr("+49333")]
+team["pendingMembers"] = [addr("+49444")]
+if os.environ.get("MOCK_EXTRA_GROUPS"):  # a group where we are a plain member and only admins may change things
+    club = group_template("Q0xVQg==", "Club")
+    club["members"] = [member("+49111", True), member(self_account), member("+49222")]
+    club["permissionAddMember"] = "ONLY_ADMINS"
+    club["permissionEditDetails"] = "ONLY_ADMINS"
+    GROUPS.append(club)
+    for gid, title in (("Qk9PSw==", "Book club"), ("SElLRQ==", "Hiking")):  # invitations: we are pending, not members
+        invite = group_template(gid, title)
+        invite["isMember"] = False
+        invite["members"] = [member("+49111", True), member("+49222")]
+        invite["pendingMembers"] = [addr(self_account)]
+        GROUPS.append(invite)
+
+ADMIN_ONLY = ("removeMember", "admin", "removeAdmin", "ban", "unban", "link", "resetLink", "setPermissionAddMember",
+              "setPermissionEditDetails", "setPermissionSendMessages")
+PERMISSION = {"every-member": "EVERY_MEMBER", "only-admins": "ONLY_ADMINS", "everyMember": "EVERY_MEMBER",
+              "onlyAdmins": "ONLY_ADMINS"}
+
+
+def listed(g):
+    out = dict(g)
+    out["admins"] = [{"number": x["number"], "uuid": x["uuid"]} for x in g["members"] if x["isAdmin"]]
+    return out
+
+
+def group_error(rid, message):
+    emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": message}})
+
+
+def update_group(p):
+    """Returns (result, error message)."""
+    gid = p.get("groupId")
+    if gid is None:  # create
+        new_id = base64.b64encode(("NEW-%d" % len(GROUPS)).encode()).decode()
+        g = group_template(new_id, p.get("name", ""))
+        g["description"] = p.get("description", "")
+        g["members"] = [member(self_account, True)] + [member(x) for x in p.get("member", [])]
+        GROUPS.append(g)
+        return {"groupId": new_id, "timestamp": int(time.time() * 1000), "results": []}, None
+    g = next((x for x in GROUPS if x["id"] == gid), None)
+    if g is None:
+        return None, "Group not found"
+    me = next((x for x in g["members"] if same(x, addr(self_account))), None)
+    if me is None and any(same(x, addr(self_account)) for x in g["pendingMembers"]):
+        # like signal-cli: updating a group we are invited to accepts the invitation
+        g["pendingMembers"] = [x for x in g["pendingMembers"] if not same(x, addr(self_account))]
+        g["members"].append(member(self_account))
+        g["isMember"] = True
+        return {"timestamp": int(time.time() * 1000), "results": []}, None
+    if me is None:
+        return None, "You are not a member of this group"
+    for key in ADMIN_ONLY:
+        if key in p and not me["isAdmin"]:
+            return None, "Only admins can do that (%s)" % key
+    if "member" in p and g["permissionAddMember"] == "ONLY_ADMINS" and not me["isAdmin"]:
+        return None, "Only admins can add members"
+    if any(k in p for k in ("name", "description", "avatar")) and g["permissionEditDetails"] == "ONLY_ADMINS" and not me["isAdmin"]:
+        return None, "Only admins can edit the group details"
+    if "name" in p:
+        g["name"] = p["name"]
+    if "description" in p:
+        g["description"] = p["description"]
+    for who in p.get("member", []):
+        a = addr(who)
+        req = [x for x in g["requestingMembers"] if same(x, a)]
+        if req:  # approve a join request
+            g["requestingMembers"].remove(req[0])
+        if not any(same(x, a) for x in g["members"]):
+            g["members"].append(member(who))
+    for who in p.get("removeMember", []):
+        a = addr(who)
+        g["members"] = [x for x in g["members"] if not same(x, a)]
+        g["pendingMembers"] = [x for x in g["pendingMembers"] if not same(x, a)]
+        g["requestingMembers"] = [x for x in g["requestingMembers"] if not same(x, a)]
+    for key, flag in (("admin", True), ("removeAdmin", False)):
+        for who in p.get(key, []):
+            for x in g["members"]:
+                if same(x, addr(who)):
+                    x["isAdmin"] = flag
+    for who in p.get("ban", []):
+        a = addr(who)
+        g["members"] = [x for x in g["members"] if not same(x, a)]
+        if not any(same(x, a) for x in g["banned"]):
+            g["banned"].append(a)
+    for who in p.get("unban", []):
+        g["banned"] = [x for x in g["banned"] if not same(x, addr(who))]
+    if "link" in p:
+        g["groupInviteLink"] = None if p["link"] == "disabled" else "https://signal.group/#MOCK-LINK"
+    if p.get("resetLink") and g["groupInviteLink"]:
+        g["groupInviteLink"] = "https://signal.group/#MOCK-LINK-2"
+    for key, field in (("setPermissionAddMember", "permissionAddMember"),
+                       ("setPermissionEditDetails", "permissionEditDetails"),
+                       ("setPermissionSendMessages", "permissionSendMessage")):
+        if key in p:
+            g[field] = PERMISSION.get(p[key], "EVERY_MEMBER")
+    if "expiration" in p:
+        g["messageExpirationTime"] = p["expiration"]
+    return {"timestamp": int(time.time() * 1000), "results": []}, None
+
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -150,7 +285,8 @@ for line in sys.stdin:
             own_given, own_family = p["givenName"], p.get("familyName", "")
         res = {}
     elif m == "listGroups":
-        res = GROUPS
+        wanted = p.get("groupId")
+        res = [listed(g) for g in GROUPS if not wanted or g["id"] in wanted]
     elif m == "listIdentities":
         reload_identities()
         found = [i for i in IDENTITIES if p.get("number") in (None, i["number"], i["uuid"])]
@@ -175,10 +311,49 @@ for line in sys.stdin:
                 contact["messageExpirationTime"] = p.get("expiration", 0)
         res = {}
     elif m == "updateGroup":
-        for group in GROUPS:
-            if p.get("groupId") == group["id"]:
-                group["messageExpirationTime"] = p.get("expiration", 0)
-        res = {}
+        res, failure = update_group(p)
+        if failure:
+            group_error(rid, failure)
+            continue
+    elif m == "quitGroup":
+        g = next((x for x in GROUPS if x["id"] == p.get("groupId")), None)
+        me = next((x for x in g["members"] if same(x, addr(self_account))), None) if g else None
+        if g and me is None and any(same(x, addr(self_account)) for x in g["pendingMembers"]):
+            # like signal-cli: quitting a group we are invited to declines the invitation
+            g["pendingMembers"] = [x for x in g["pendingMembers"] if not same(x, addr(self_account))]
+            res = {"timestamp": int(time.time() * 1000), "results": []}
+            emit({"jsonrpc": "2.0", "id": rid, "result": res})
+            continue
+        if me is None:
+            group_error(rid, "Group not found or not a member")
+            continue
+        others = [x for x in g["members"] if x is not me]
+        if me["isAdmin"] and not any(x["isAdmin"] for x in others) and others and not p.get("admin"):
+            group_error(rid, "You need to specify a new admin with --admin: only admin")
+            continue
+        for who in p.get("admin", []):
+            for x in g["members"]:
+                if same(x, addr(who)):
+                    x["isAdmin"] = True
+        g["members"] = others
+        g["isMember"] = False
+        res = {"timestamp": int(time.time() * 1000), "results": []}
+    elif m == "joinGroup":
+        uri = p.get("uri", "")
+        if not uri.startswith("https://signal.group/#"):
+            group_error(rid, "Group link is invalid: not a group link")
+            continue
+        new_id = base64.b64encode(("JOIN-%d" % len(GROUPS)).encode()).decode()
+        g = group_template(new_id, "Joined group")
+        requested = uri.endswith("APPROVAL")
+        g["members"] = [member("+49111", True)] + ([] if requested else [member(self_account)])
+        g["isMember"] = not requested
+        if requested:
+            g["requestingMembers"] = [addr(self_account)]
+        GROUPS.append(g)
+        res = {"timestamp": int(time.time() * 1000), "results": [], "groupId": new_id}
+        if requested:
+            res["onlyRequested"] = True
     elif m == "remoteDelete":
         res = {"timestamp": int(time.time() * 1000), "results": []}
     elif m == "send":

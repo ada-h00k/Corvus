@@ -5,6 +5,7 @@
 #include "MediaGallery.h"
 #include "Model.h"
 #include "NotificationSettings.h"
+#include "GroupDialog.h"
 #include "SafetyNumber.h"
 #include "SignalCli.h"
 
@@ -140,6 +141,16 @@ private:
                        const QString &emoji);
     void setArchived(const QString &key, bool archived);
     void editExpiration(const QString &key);
+    // --- Groups
+    void newGroup();                              // File > New group …
+    void joinGroupByLink();                       // File > Join group via link …
+    void openGroupSettings(const QString &key);   // members, permissions, invite link, leave
+    void refreshGroups(std::function<void()> done = {}); // listGroups -> chats, titles, timers
+    QList<GroupDialog::Contact> groupContacts() const;   // people to pick members from
+    QString memberName(const QString &id) const;
+    void updateGroupActions();
+    void openGroupInvitations();                  // accept / decline open invitations
+    void updateInvitations(const QList<GroupInfo::Info> &invitations);
     void showSafetyNumber(const QString &key); // "View safety number …": check / mark the contact as verified
 
     // --- "safety number changed" notice
@@ -250,6 +261,9 @@ private:
     QHash<QString, SafetyChange> m_safetyChanged;  // conversation key -> unacknowledged change
     QHash<QString, qint64> m_identityCheckedMs;    // conversation key -> last check (throttle)
     QWidget *m_safetyBar = nullptr;
+    QAction *m_groupSettingsAction = nullptr;
+    QAction *m_invitesAction = nullptr;
+    QList<GroupInfo::Info> m_invitations;          // groups we are invited to but have not joined
     QLabel *m_safetyLabel = nullptr;
     QHash<QString, PendingSend> m_pendingSends; // visible previews until signal-cli confirms the send
     QHash<QString, QString> m_alias; // uuid -> number

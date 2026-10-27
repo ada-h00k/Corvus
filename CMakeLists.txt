@@ -86,6 +86,12 @@ set(APP_SOURCES
     src/HistoryKeychain.cpp
     src/PassphraseDialog.h
     src/PassphraseDialog.cpp
+    src/GroupInfo.h
+    src/GroupInfo.cpp
+    src/GroupDialog.h
+    src/GroupDialog.cpp
+    src/GroupInvitesDialog.h
+    src/GroupInvitesDialog.cpp
     src/SafetyNumber.h
     src/SafetyNumber.cpp
     src/SafetyNumberDialog.h
@@ -218,6 +224,26 @@ if(CORVUS_TESTS)
         MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
     add_test(NAME safety_change COMMAND safety_change_test)
     set_tests_properties(safety_change PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 180
+    )
+
+    add_executable(group_management_test tests/group_management_test.cpp)
+    target_link_libraries(group_management_test PRIVATE app_core Qt6::Test)
+    target_compile_definitions(group_management_test PRIVATE
+        MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
+    add_test(NAME group_management COMMAND group_management_test)
+    set_tests_properties(group_management PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 180
+    )
+
+    add_executable(group_window_test tests/group_window_test.cpp)
+    target_link_libraries(group_window_test PRIVATE app_core)
+    target_compile_definitions(group_window_test PRIVATE
+        MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
+    add_test(NAME group_window COMMAND group_window_test)
+    set_tests_properties(group_window PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 180
     )
