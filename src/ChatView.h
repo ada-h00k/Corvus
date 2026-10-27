@@ -11,6 +11,7 @@
 #include "Model.h"
 
 class QTextDocument;
+class ApngMovie;
 class QMovie;
 class QMediaPlayer;
 class QAudioOutput;
@@ -102,6 +103,7 @@ private:
         std::shared_ptr<QTextDocument> doc;
         QList<QPixmap> pix;
         QList<QMovie *> movies;
+        QList<ApngMovie *> apngMovies; // Signal's animated stickers are APNG, which QMovie cannot play
         mutable QList<bool> animationRequested;
         QString sender, quoteAuthor, quoteText, timeText, dateLabel;
         QString quoteNote;

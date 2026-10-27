@@ -41,6 +41,8 @@ set(APP_SOURCES
     resources/sounds.qrc
     resources/icons.qrc
 
+    src/ApngMovie.h
+    src/ApngMovie.cpp
     src/Model.h
     src/NotificationSettings.h
     src/NotificationSettings.cpp

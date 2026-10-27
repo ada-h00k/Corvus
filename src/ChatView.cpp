@@ -1,5 +1,7 @@
 #include "ChatView.h"
 
+#include "ApngMovie.h"
+
 #include <QAbstractTextDocumentLayout>
 #include <QApplication>
 #include <QClipboard>
@@ -398,9 +400,12 @@ void ChatView::clearSelection()
 void ChatView::clearView()
 {
     stopVideoPlayback();
-    for (Item &item : m_items)
+    for (Item &item : m_items) {
         for (QMovie *movie : item.movies)
             delete movie;
+        for (ApngMovie *movie : item.apngMovies)
+            delete movie;
+    }
     m_msgs.clear();
     m_items.clear();
     m_renderFirst = m_renderLast = -1;
@@ -417,9 +422,12 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll)
 {
     const bool bottom = atBottom();
     const int old = verticalScrollBar()->value();
-    for (Item &item : m_items)
+    for (Item &item : m_items) {
         for (QMovie *movie : item.movies)
             delete movie;
+        for (ApngMovie *movie : item.apngMovies)
+            delete movie;
+    }
     m_msgs = msgs;
     m_items = QList<Item>(msgs.size());
     m_renderFirst = m_renderLast = -1;
@@ -703,11 +711,26 @@ void ChatView::updateVideoGeometry()
 void ChatView::setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data)
 {
     if (messageIndex < 0 || messageIndex >= m_items.size() || attachmentIndex < 0 ||
-        attachmentIndex >= m_msgs[messageIndex].attachments.size() || !m_msgs[messageIndex].attachments[attachmentIndex].isGif())
+        attachmentIndex >= m_msgs[messageIndex].attachments.size() ||
+        !(m_msgs[messageIndex].attachments[attachmentIndex].isGif() ||
+          m_msgs[messageIndex].attachments[attachmentIndex].isSticker()))
         return;
 
     Item &item = m_items[messageIndex];
-    if (attachmentIndex >= item.movies.size() || item.movies[attachmentIndex]) return;
+    if (attachmentIndex >= item.movies.size() || item.movies[attachmentIndex] ||
+        item.apngMovies[attachmentIndex])
+        return;
+
+    // Signal's animated stickers are APNG, and Qt ships no APNG image plugin:
+    // a QMovie would freeze on frame one. Drive those frames with ApngMovie.
+    if (ApngMovie *apng = ApngMovie::fromData(data, this)) {
+        item.apngMovies[attachmentIndex] = apng;
+        connect(apng, &ApngMovie::updated, this, [this] { viewport()->update(); });
+        apng->start();
+        viewport()->update();
+        return;
+    }
+
     auto *movie = new QMovie(this);
     auto *buffer = new QBuffer(movie);
     buffer->setData(data);
@@ -727,7 +750,9 @@ void ChatView::setAnimatedAttachment(int messageIndex, int attachmentIndex, cons
 bool ChatView::hasAnimatedAttachment(int messageIndex, int attachmentIndex) const
 {
     return messageIndex >= 0 && messageIndex < m_items.size() && attachmentIndex >= 0 &&
-           attachmentIndex < m_items[messageIndex].movies.size() && m_items[messageIndex].movies[attachmentIndex];
+           attachmentIndex < m_items[messageIndex].movies.size() &&
+           (m_items[messageIndex].movies[attachmentIndex] ||
+            m_items[messageIndex].apngMovies[attachmentIndex]);
 }
 
 QString ChatView::selectedText() const
@@ -776,7 +801,10 @@ void ChatView::buildItem(int i)
     if (it.built) return;
     for (QMovie *movie : it.movies)
         delete movie;
+    for (ApngMovie *movie : it.apngMovies)
+        delete movie;
     it.movies.clear();
+    it.apngMovies.clear();
     it.animationRequested.clear();
     it.built = true;
     const Message &m = m_msgs[i];
@@ -793,6 +821,7 @@ void ChatView::buildItem(int i)
 
     for (const Attachment &a : m.attachments) {
         it.movies << nullptr;
+        it.apngMovies << nullptr;
         it.animationRequested << false;
         QSize imageSize(a.width, a.height);
         if ((imageSize.width() <= 0 || imageSize.height() <= 0) && a.isImage() && !a.thumb.isEmpty()) {
@@ -1161,20 +1190,28 @@ void ChatView::paintItem(QPainter &p, int i)
             p.restore();
             continue;
         }
-        if (att.isGif() && !it.movies[a] && !it.animationRequested[a]) {
+        if ((att.isGif() || att.isSticker()) && !it.movies[a] && !it.apngMovies[a] &&
+            !it.animationRequested[a]) {
             it.animationRequested[a] = true;
             emit animatedAttachmentRequested(i, a);
         }
-        if (att.isGif() && it.movies[a]) {
-            QPixmap frame = it.movies[a]->currentPixmap();
+        if (it.movies[a] || it.apngMovies[a]) {
+            QPixmap frame = it.movies[a] ? it.movies[a]->currentPixmap()
+                                         : it.apngMovies[a]->currentPixmap();
             if (!frame.isNull()) {
-                QPainterPath ip;
-                const qreal ir = qMin<qreal>(qMin(m_ap.radius, 14), qMin(rc.width(), rc.height()) / 2.0);
-                ip.addRoundedRect(QRectF(rc), ir, ir);
-                p.save();
-                p.setClipPath(ip);
-                p.drawPixmap(rc, frame);
-                p.restore();
+                if (att.isSticker()) {
+                    // Stickers preserve their transparent edges, unlike regular image
+                    // attachments — draw them without the bubble rounding.
+                    p.drawPixmap(rc, frame);
+                } else {
+                    QPainterPath ip;
+                    const qreal ir = qMin<qreal>(qMin(m_ap.radius, 14), qMin(rc.width(), rc.height()) / 2.0);
+                    ip.addRoundedRect(QRectF(rc), ir, ir);
+                    p.save();
+                    p.setClipPath(ip);
+                    p.drawPixmap(rc, frame);
+                    p.restore();
+                }
             }
         } else if (!it.pix[a].isNull()) {
             p.save();

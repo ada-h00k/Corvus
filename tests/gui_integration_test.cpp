@@ -1,4 +1,5 @@
 // Headless end-to-end test: real MainWindow + encrypted Rust store + mock signal-cli.
+#include "ApngMovie.h"
 #include "ChatView.h"
 #include "EmojiPicker.h"
 #include "GiphyPicker.h"
@@ -1278,6 +1279,27 @@ int main(int argc, char **argv)
             if (movie->state() == QMovie::Running) chatGifPlaying = true;
         CHECK(chatGifPlaying);
 
+        // stickers play like gifs: the chat animation is built from the
+        // full-size sticker data, not from the static first-frame thumbnail.
+        // Sticker 0 of the mock pack is an APNG — Signal's real animated
+        // sticker format, which QMovie cannot play — so this exercises the
+        // ApngMovie path; sticker 1 stays an animated WebP for QMovie.
+        const qint64 stickerTs = QDateTime::currentMSecsSinceEpoch();
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+            {"timestamp", stickerTs},
+            {"dataMessage", QJsonObject{{"timestamp", stickerTs},
+                                        {"sticker", QJsonObject{{"packId", "corvusanim"}, {"stickerId", 0}}}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 6; }));
+        CHECK(waitFor([&] { return view->hasAnimatedAttachment(5, 0); }, 5000));
+        CHECK(!view->findChildren<ApngMovie *>().isEmpty());
+        bool stickerPlaying = false;
+        for (QMovie *movie : view->findChildren<QMovie *>())
+            if (movie->state() == QMovie::Running) stickerPlaying = true;
+        for (ApngMovie *apng : view->findChildren<ApngMovie *>())
+            if (apng->isRunning()) stickerPlaying = true;
+        CHECK(stickerPlaying);
+
         CHECK(chooseChatNickname(w, list, "Bob", "Bobby"));
         CHECK(listHas(list, "Bobby"));
 
@@ -1301,7 +1323,7 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return listHas(list, "Bobby"); }));
         CHECK(waitFor([&] { return w.findChild<QLabel *>() != nullptr; }));
         selectItem(list, "Alice");
-        CHECK(waitFor([&] { return view->messageCount() == 5; }));
+        CHECK(waitFor([&] { return view->messageCount() == 6; })); // incl. Alice's animated sticker
         const QString h = html(view);
         CHECK(h.contains("look at this"));
         CHECK(h.contains("earlier question"));

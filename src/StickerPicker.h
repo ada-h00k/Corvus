@@ -14,10 +14,12 @@
 class SignalCli;
 class QGridLayout;
 class QHBoxLayout;
+class QHideEvent;
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QScrollArea;
+class QShowEvent;
 class QToolButton;
 class QWidget;
 
@@ -55,7 +57,15 @@ private:
     void installPack(const QString &uri);
     void updateCategorySelection();
     void loadSticker(const QString &packId, int stickerId, QPointer<QPushButton> button = {});
+    void applyStickerImage(QPushButton *button, const QByteArray &bytes); // icon + QMovie playback
     void setMessage(const QString &text, bool error = false);
+
+protected:
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+
+private:
+    void setMoviesPaused(bool paused);
 
     SignalCli *m_cli = nullptr;
     QGridLayout *m_grid = nullptr;

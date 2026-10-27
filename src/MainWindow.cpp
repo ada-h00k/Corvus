@@ -3846,7 +3846,8 @@ void MainWindow::loadAnimatedAttachment(int messageIndex, int attachmentIndex)
     const Message &message = conversation.msgs[messageIndex];
     if (attachmentIndex < 0 || attachmentIndex >= message.attachments.size()) return;
     const Attachment attachment = message.attachments[attachmentIndex];
-    if (!attachment.isGif() || attachment.size > kMaxThumbSource) return;
+    // GIFs and stickers (animated WebP) play in the chat; everything else stays static.
+    if ((!attachment.isGif() && !attachment.isSticker()) || attachment.size > kMaxThumbSource) return;
 
     const QString key = conversation.key;
     const QString author = effectiveAuthor(conversation, message);

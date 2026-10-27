@@ -1,11 +1,14 @@
 #include "StickerPicker.h"
 
 #include "Attachments.h"
+#include "ApngMovie.h"
 #include "SignalCli.h"
 
+#include <QBuffer>
 #include <QFrame>
 #include <QFont>
 #include <QJsonArray>
+#include <QMovie>
 #include <QPixmap>
 #include <QRegularExpression>
 #include <QGridLayout>
@@ -354,10 +357,8 @@ void StickerPicker::showPacks()
             const QString key = cacheKey(pack.id, sticker.id);
             m_stickerButtons.insert(key, button);
             const QByteArray cached = m_imageCache.value(key);
-            if (!cached.isEmpty()) {
-                const QImage image = QImage::fromData(cached);
-                if (!image.isNull()) button->setIcon(QPixmap::fromImage(image));
-            }
+            if (!cached.isEmpty())
+                applyStickerImage(button, cached); // plays, once the sticker is animated
             connect(button, &QPushButton::clicked, this, [this, packId = pack.id, stickerId = sticker.id] {
                 const QString key = cacheKey(packId, stickerId);
                 const QByteArray data = m_imageCache.value(key);
@@ -436,6 +437,43 @@ void StickerPicker::loadVisibleStickers()
     }
 }
 
+void StickerPicker::applyStickerImage(QPushButton *button, const QByteArray &bytes)
+{
+    if (!button || bytes.isEmpty()) return;
+    // Show the first frame immediately, then play the animation on top of it.
+    const QImage firstFrame = QImage::fromData(bytes);
+    if (!firstFrame.isNull()) button->setIcon(QPixmap::fromImage(firstFrame));
+
+    // Signal's animated stickers are APNG, which QMovie cannot play (Qt ships
+    // no APNG image plugin) — drive those frames with ApngMovie instead.
+    if (ApngMovie *apng = ApngMovie::fromData(bytes, button)) {
+        connect(apng, &ApngMovie::updated, button, [button, apng] {
+            button->setIcon(apng->currentPixmap());
+        });
+        apng->start();
+        button->setIcon(apng->currentPixmap());
+        return;
+    }
+
+    // Animated WebP or GIF stickers still go through QMovie, like the GIF tab.
+    // A single-frame sticker just stays on its first frame.
+    auto *movie = new QMovie(button);
+    auto *buffer = new QBuffer(movie);
+    buffer->setData(bytes);
+    buffer->open(QIODevice::ReadOnly);
+    movie->setDevice(buffer);
+    movie->setCacheMode(QMovie::CacheAll);
+    movie->setScaledSize(button->iconSize());
+    if (movie->isValid()) {
+        connect(movie, &QMovie::frameChanged, button, [button, movie] {
+            button->setIcon(QIcon(movie->currentPixmap()));
+        });
+        movie->start();
+    } else {
+        delete movie; // no WebP/GIF plugin: the static first frame stays
+    }
+}
+
 void StickerPicker::loadSticker(const QString &packId, int stickerId, QPointer<QPushButton> button)
 {
     const QString key = cacheKey(packId, stickerId);
@@ -455,8 +493,8 @@ void StickerPicker::loadSticker(const QString &packId, int stickerId, QPointer<Q
         const QByteArray bytes = QByteArray::fromBase64(encoded.toLatin1());
         if (bytes.isEmpty()) return;
         m_imageCache.insert(key, bytes);
+        applyStickerImage(button, bytes);
         const QImage image = QImage::fromData(bytes);
-        if (button && !image.isNull()) button->setIcon(QPixmap::fromImage(image));
         if (!image.isNull()) {
             const QPointer<QToolButton> category = m_categoryButtons.value(packId);
             const auto packIt = std::find_if(m_packList.cbegin(), m_packList.cend(), [packId](const Pack &candidate) {
@@ -474,6 +512,29 @@ void StickerPicker::loadSticker(const QString &packId, int stickerId, QPointer<Q
         }
         loadVisibleStickers();
     });
+}
+
+// ---------------------------------------------------------------- visibility
+
+// No point in decoding animations nobody can see (same as the GIF tab).
+void StickerPicker::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    setMoviesPaused(false);
+}
+
+void StickerPicker::hideEvent(QHideEvent *event)
+{
+    QWidget::hideEvent(event);
+    setMoviesPaused(true);
+}
+
+void StickerPicker::setMoviesPaused(bool paused)
+{
+    const auto movies = findChildren<QMovie *>();
+    for (QMovie *movie : movies) movie->setPaused(paused);
+    const auto apngs = findChildren<ApngMovie *>();
+    for (ApngMovie *apng : apngs) apng->setPaused(paused);
 }
 
 void StickerPicker::addPack()
