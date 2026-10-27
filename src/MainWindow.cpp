@@ -61,6 +61,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QShowEvent>
 #include <QSplitter>
@@ -81,6 +82,50 @@ static const QString kFolderKey = QStringLiteral("::archived");
 static const QString kBackKey = QStringLiteral("::back");
 static const qint64 kMaxThumbSource = 30LL * 1024 * 1024;
 static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload limit
+
+static QJsonArray styleRangesToJson(const QList<TextStyleRange> &styles)
+{
+    QJsonArray arr;
+    for (const TextStyleRange &r : styles)
+        if (r.start >= 0 && r.length > 0 && !r.style.isEmpty())
+            arr.append(QStringLiteral("%1:%2:%3").arg(r.start).arg(r.length).arg(r.style));
+    return arr;
+}
+
+static QList<TextStyleRange> styleRangesFromJson(const QJsonArray &arr)
+{
+    QList<TextStyleRange> styles;
+    for (const QJsonValue &v : arr) {
+        const QStringList p = v.toString().split(QLatin1Char(':'));
+        if (p.size() != 3) continue;
+        bool ok1 = false, ok2 = false;
+        TextStyleRange r;
+        r.start = p.at(0).toInt(&ok1);
+        r.length = p.at(1).toInt(&ok2);
+        r.style = p.at(2);
+        if (ok1 && ok2 && r.start >= 0 && r.length > 0 && !r.style.isEmpty()) styles.append(r);
+    }
+    return styles;
+}
+
+static QJsonArray normalizedStyles(const QJsonArray &styles, int lead, int end)
+{
+    QJsonArray out;
+    for (const QJsonValue &v : styles) {
+        const QStringList p = v.toString().split(QLatin1Char(':'));
+        if (p.size() != 3) continue;
+        bool ok1 = false, ok2 = false;
+        const int start = p.at(0).toInt(&ok1);
+        const int length = p.at(1).toInt(&ok2);
+        if (!ok1 || !ok2 || length <= 0) continue;
+        const int a = qMax(start, lead);
+        const int b = qMin(start + length, end);
+        if (a < b)
+            out.append(QStringLiteral("%1:%2:%3").arg(a - lead).arg(b - a).arg(p.at(2)));
+    }
+    return out;
+}
+
 
 static AppIcon::Mode iconMode(const Appearance &a)
 {
@@ -1830,7 +1875,7 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
 }
 
 bool MainWindow::applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text,
-                           qint64 newTs)
+                           qint64 newTs, const QList<TextStyleRange> &textStyles)
 {
     auto it = m_convs.find(key);
     if (it == m_convs.end()) return false;
@@ -1840,6 +1885,7 @@ bool MainWindow::applyEdit(const QString &key, qint64 targetTs, const QStringLis
     Message &m = c.msgs[i];
     if (newTs <= m.latestTs()) return false; // already applied / outdated revision
     m.text = text;
+    m.textStyles = textStyles;
     m.editTs = newTs;
     m.editCount++;
     persist(Records::edit(key, m));
@@ -2348,6 +2394,7 @@ void MainWindow::saveDraft(const QString &key)
     if (key.isEmpty()) return;
     Draft d;
     d.text = m_input->text();
+    d.richText = m_input->richText();
     d.cursor = m_input->textCursor().position();
     d.reply = m_replyQuote;
     d.files = m_pendingFiles;
@@ -2361,7 +2408,8 @@ void MainWindow::saveDraft(const QString &key)
 void MainWindow::loadDraft(const QString &key)
 {
     const Draft d = m_drafts.take(key); // the composer owns it while the chat is open
-    m_input->setText(d.text);
+    if (!d.richText.isEmpty()) m_input->setRichText(d.richText);
+    else m_input->setText(d.text);
     m_input->setCursorPosition(d.cursor);
     m_replyQuote = d.reply;
     m_pendingFiles = d.files;
@@ -2622,7 +2670,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         // Like the official clients: an edit is only applied to a known message written by the
         // same author. Anything else (unknown target, someone else's message) is dropped.
         const QString author = pe.outgoing ? m_account : srcKey;
-        applyEdit(key, pe.targetTs, {author}, pe.msg.text, pe.msg.ts());
+        applyEdit(key, pe.targetTs, {author}, pe.msg.text, pe.msg.ts(), pe.msg.textStyles);
         return;
     }
 
@@ -2742,10 +2790,22 @@ void MainWindow::startReply(int idx)
 void MainWindow::sendMessage()
 {
     if (!m_editKey.isEmpty()) {
-        sendEdit(m_input->text().trimmed());
+        const QString raw = m_input->text();
+        const QString text = raw.trimmed();
+        const int first = raw.indexOf(QRegularExpression(QStringLiteral("\\S")));
+        const int lead = first < 0 ? raw.size() : first;
+        const int last = raw.lastIndexOf(QRegularExpression(QStringLiteral("\\S")));
+        const int end = last < 0 ? lead : last + 1;
+        sendEdit(text, normalizedStyles(m_input->textStyles(), lead, end));
         return;
     }
-    const QString text = m_input->text().trimmed();
+    const QString rawText = m_input->text();
+    const QString text = rawText.trimmed();
+    const int first = rawText.indexOf(QRegularExpression(QStringLiteral("\\S")));
+    const int lead = first < 0 ? rawText.size() : first;
+    const int last = rawText.lastIndexOf(QRegularExpression(QStringLiteral("\\S")));
+    const int end = last < 0 ? lead : last + 1;
+    const QJsonArray textStyles = normalizedStyles(m_input->textStyles(), lead, end);
     if ((text.isEmpty() && m_pendingFiles.isEmpty()) || !m_convs.contains(m_current)) return;
 
     const Conversation c = m_convs[m_current];
@@ -2754,7 +2814,10 @@ void MainWindow::sendMessage()
     const QUrl giphySentAnalyticsUrl = m_pendingGifAnalyticsUrl;
 
     QJsonObject p;
-    if (!text.isEmpty()) p[QStringLiteral("message")] = text;
+    if (!text.isEmpty()) {
+        p[QStringLiteral("message")] = text;
+        if (!textStyles.isEmpty()) p[QStringLiteral("textStyle")] = textStyles;
+    }
 
     QList<Attachment> atts;
     QStringList paths;
@@ -2807,6 +2870,7 @@ void MainWindow::sendMessage()
     // encrypted history until the send succeeds, so a failed send leaves no stale record.
     Message preview;
     preview.time = QDateTime::currentDateTime();
+    preview.textStyles = styleRangesFromJson(textStyles);
     qint64 temporaryTimestamp = preview.ts();
     Conversation &target = m_convs[m_current];
     while (findMessage(target, temporaryTimestamp, {}) >= 0) {
@@ -2842,7 +2906,7 @@ void MainWindow::sendMessage()
     if (key == m_current) showConversation(true);
 
     m_cli.call(QStringLiteral("send"), p,
-               [this, pendingId, key, text, files, quote, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
+               [this, pendingId, key, text, textStyles, files, quote, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
         QDir(stageDir).removeRecursively();
         auto pendingIt = m_pendingSends.find(pendingId);
         if (pendingIt == m_pendingSends.end()) return;
@@ -2908,7 +2972,10 @@ void MainWindow::startEdit(int idx)
         statusBar()->showMessage(tr("This message can no longer be edited (3 hours / 10 edits)."), 6000);
         return;
     }
-    if (m_editKey.isEmpty()) m_editDraft = m_input->text(); // keep an already running edit's draft
+    if (m_editKey.isEmpty()) {
+        m_editDraft = m_input->text();
+        m_editDraftRichText = m_input->richText();
+    } // keep an already running edit's draft
     m_editKey = c.key;
     m_editTs = m.ts();
     // A multi-line message needs the expanded field, otherwise only one line would be visible.
@@ -2950,8 +3017,12 @@ void MainWindow::cancelEdit(bool restoreDraft)
     if (m_editKey.isEmpty()) return;
     m_editKey.clear();
     m_editTs = 0;
-    if (restoreDraft) m_input->setText(m_editDraft);
+    if (restoreDraft) {
+        if (!m_editDraftRichText.isEmpty()) m_input->setRichText(m_editDraftRichText);
+        else m_input->setText(m_editDraft);
+    }
     m_editDraft.clear();
+    m_editDraftRichText.clear();
     if (m_editExpandedInput) {
         m_editExpandedInput = false;
         m_input->setExpanded(false);
@@ -2971,7 +3042,7 @@ void MainWindow::updateEditBar()
     m_editBar->show();
 }
 
-void MainWindow::sendEdit(const QString &text)
+void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles)
 {
     auto it = m_convs.find(m_editKey);
     if (it == m_convs.end()) {
@@ -2989,7 +3060,7 @@ void MainWindow::sendEdit(const QString &text)
         statusBar()->showMessage(tr("A message cannot be empty."), 6000);
         return;
     }
-    if (text == m.text) { // nothing changed
+    if (text == m.text && textStyles == styleRangesToJson(m.textStyles)) { // nothing changed
         cancelEdit();
         return;
     }
@@ -3002,6 +3073,7 @@ void MainWindow::sendEdit(const QString &text)
     // signal-cli: `send --edit-timestamp <ts>`; the target is the latest revision the peers know.
     QJsonObject p{{QStringLiteral("message"), text},
                   {QStringLiteral("editTimestamp"), QJsonValue(static_cast<qint64>(m.latestTs()))}};
+    if (!textStyles.isEmpty()) p[QStringLiteral("textStyle")] = textStyles;
     if (m.quote.valid && !m.quote.authorKey.isEmpty()) { // an edit keeps the reply it belongs to
         p[QStringLiteral("quoteTimestamp")] = QJsonValue(static_cast<qint64>(m.quote.id));
         p[QStringLiteral("quoteAuthor")] = m.quote.authorKey;
@@ -3011,7 +3083,7 @@ void MainWindow::sendEdit(const QString &text)
 
     const QString key = c.key;
     const qint64 origTs = m.ts();
-    m_cli.call(QStringLiteral("send"), p, [this, key, origTs, text](const QJsonValue &res, const QString &err) {
+    m_cli.call(QStringLiteral("send"), p, [this, key, origTs, text, textStyles](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
             // stay in edit mode with the typed text so nothing is lost
             statusBar()->showMessage(tr("Editing failed: %1").arg(err), 10000);
@@ -3020,7 +3092,7 @@ void MainWindow::sendEdit(const QString &text)
         statusBar()->clearMessage();
         qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
         if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
-        applyEdit(key, origTs, {m_account}, text, ts);
+        applyEdit(key, origTs, {m_account}, text, ts, styleRangesFromJson(textStyles));
         if (m_editKey == key && m_editTs == origTs) cancelEdit();
     });
 }

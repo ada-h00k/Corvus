@@ -50,6 +50,12 @@ struct Quote {
     QString attachmentNote; // e.g. "image/png"
 };
 
+struct TextStyleRange {
+    int start = 0;       // UTF-16 offset, as used by signal-cli
+    int length = 0;      // UTF-16 length
+    QString style;       // BOLD, ITALIC, STRIKETHROUGH, MONOSPACE or SPOILER
+};
+
 struct Message {
     QDateTime time;
     // Local timeline order is independent from Signal's sender timestamp (`time`). A sender's
@@ -58,6 +64,7 @@ struct Message {
     qint64 orderTs = 0;
     QString sender;       // display name at the time of receiving
     QString text;
+    QList<TextStyleRange> textStyles;
     bool outgoing = false;
     QString authorKey;    // number/UUID of the author (own number for outgoing)
     Quote quote;

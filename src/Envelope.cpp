@@ -2,6 +2,23 @@
 
 #include <QJsonArray>
 
+
+static QList<TextStyleRange> parseTextStyles(const QJsonArray &arr)
+{
+    QList<TextStyleRange> styles;
+    for (const QJsonValue &v : arr) {
+        const QStringList p = v.toString().split(QLatin1Char(':'));
+        if (p.size() != 3) continue;
+        bool ok1 = false, ok2 = false;
+        TextStyleRange r;
+        r.start = p.at(0).toInt(&ok1);
+        r.length = p.at(1).toInt(&ok2);
+        r.style = p.at(2);
+        if (ok1 && ok2 && r.start >= 0 && r.length > 0 && !r.style.isEmpty()) styles.append(r);
+    }
+    return styles;
+}
+
 static QList<Attachment> parseAttachments(const QJsonObject &dm)
 {
     QList<Attachment> list;
@@ -64,6 +81,7 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
     }
 
     out.msg.text = dm["message"].toString();
+    out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());
     out.msg.attachments = parseAttachments(dm);
     out.msg.quote = parseQuote(dm);
     out.msg.expiresInSeconds = out.expirationSeconds;
@@ -89,6 +107,7 @@ static bool parseEdit(const QJsonObject &edit, ParsedEnvelope &out, qint64 envel
     out.kind = ParsedEnvelope::Edit;
     out.targetTs = target;
     out.msg.text = text;
+    out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());
     out.msg.time = ts > 0 ? QDateTime::fromMSecsSinceEpoch(ts) : QDateTime::currentDateTime();
     out.groupId = dm["groupInfo"].toObject()["groupId"].toString();
     return true;

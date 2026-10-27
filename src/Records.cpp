@@ -33,6 +33,33 @@ static Attachment attachmentFromJson(const QJsonObject &o)
     return a;
 }
 
+
+static QJsonArray textStylesToJson(const QList<TextStyleRange> &styles)
+{
+    QJsonArray arr;
+    for (const TextStyleRange &r : styles) {
+        if (r.start >= 0 && r.length > 0 && !r.style.isEmpty())
+            arr.append(QStringLiteral("%1:%2:%3").arg(r.start).arg(r.length).arg(r.style));
+    }
+    return arr;
+}
+
+static QList<TextStyleRange> textStylesFromJson(const QJsonArray &arr)
+{
+    QList<TextStyleRange> styles;
+    for (const QJsonValue &v : arr) {
+        const QStringList p = v.toString().split(QLatin1Char(':'));
+        if (p.size() != 3) continue;
+        bool ok1 = false, ok2 = false;
+        TextStyleRange r;
+        r.start = p.at(0).toInt(&ok1);
+        r.length = p.at(1).toInt(&ok2);
+        r.style = p.at(2);
+        if (ok1 && ok2 && r.start >= 0 && r.length > 0 && !r.style.isEmpty()) styles.append(r);
+    }
+    return styles;
+}
+
 static QJsonArray attachmentsToJson(const QList<Attachment> &list)
 {
     QJsonArray arr;
@@ -43,7 +70,9 @@ static QJsonArray attachmentsToJson(const QList<Attachment> &list)
 // Edit state: x = current text, et = timestamp of the latest revision, ec = number of edits.
 static QJsonObject editToJson(const Message &m)
 {
-    return {{"x", m.text}, {"et", QJsonValue(static_cast<qint64>(m.editTs))}, {"ec", m.editCount}};
+    QJsonObject e{{"x", m.text}, {"et", QJsonValue(static_cast<qint64>(m.editTs))}, {"ec", m.editCount}};
+    if (!m.textStyles.isEmpty()) e["st"] = textStylesToJson(m.textStyles);
+    return e;
 }
 
 QJsonObject message(const QString &conv, const Message &m)
@@ -62,6 +91,7 @@ QJsonObject message(const QString &conv, const Message &m)
                              {"n", m.quote.attachmentNote}};
     }
     if (!m.attachments.isEmpty() && !m.deleted) d["at"] = attachmentsToJson(m.attachments);
+    if (!m.textStyles.isEmpty() && !m.deleted) d["st"] = textStylesToJson(m.textStyles);
 
     QJsonObject rec{{"t", "m"},
                     {"c", conv},
@@ -119,6 +149,7 @@ void applyExtras(Message &m, const QJsonObject &d)
     if (d.contains("ed")) {
         const QJsonObject e = d["ed"].toObject();
         if (e.contains("x")) m.text = e["x"].toString();
+        if (e.contains("st")) m.textStyles = textStylesFromJson(e["st"].toArray());
         m.editTs = e["et"].toVariant().toLongLong();
         m.editCount = e["ec"].toInt();
     }
@@ -126,6 +157,7 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.expiresInSeconds = d["ex"].toInt();
         m.expirationStartMs = d["es"].toVariant().toLongLong();
     }
+    if (d.contains("st")) m.textStyles = textStylesFromJson(d["st"].toArray());
     if (d.contains("at")) {
         m.attachments.clear();
         for (const QJsonValue &v : d["at"].toArray()) m.attachments.append(attachmentFromJson(v.toObject()));
@@ -133,6 +165,7 @@ void applyExtras(Message &m, const QJsonObject &d)
     if (d["dl"].toBool()) { // last: wins over anything else in the same record
         m.deleted = true;
         m.text.clear();
+        m.textStyles.clear();
         m.attachments.clear();
         m.quote = Quote();
         m.reactions.clear();

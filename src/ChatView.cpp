@@ -18,6 +18,8 @@
 #include <QPainterPath>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QSet>
+#include <QVector>
 #include <QSlider>
 #include <QStyle>
 #include <QStyleOptionSlider>
@@ -76,6 +78,42 @@ QString linkify(const QString &text)
     esc.replace(re, QStringLiteral("<a href=\"\\1\">\\1</a>"));
     esc.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
     return esc;
+}
+
+QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styles, const QColor &fg)
+{
+    if (text.isEmpty()) return QString();
+    const int n = text.size();
+    QVector<QSet<QString>> active(n);
+    for (const TextStyleRange &r : styles) {
+        const int a = qMax(0, r.start);
+        const int b = qMin(n, r.start + r.length);
+        for (int i = a; i < b; ++i) active[i].insert(r.style);
+    }
+
+    QString html;
+    int runStart = 0;
+    auto runHtml = [&](int a, int b) {
+        if (a >= b) return QString();
+        QString css;
+        const QSet<QString> &set = active[a];
+        if (set.contains(QStringLiteral("BOLD"))) css += QStringLiteral("font-weight:600;");
+        if (set.contains(QStringLiteral("ITALIC"))) css += QStringLiteral("font-style:italic;");
+        if (set.contains(QStringLiteral("STRIKETHROUGH"))) css += QStringLiteral("text-decoration:line-through;");
+        if (set.contains(QStringLiteral("MONOSPACE"))) css += QStringLiteral("font-family:monospace;");
+        if (set.contains(QStringLiteral("SPOILER")))
+            css += QStringLiteral("background-color:%1;color:%1;").arg(fg.name());
+        const QString piece = linkify(text.mid(a, b - a));
+        return css.isEmpty() ? piece : QStringLiteral("<span style=\"%1\">%2</span>").arg(css, piece);
+    };
+
+    for (int i = 1; i <= n; ++i) {
+        if (i == n || active[i] != active[runStart]) {
+            html += runHtml(runStart, i);
+            runStart = i;
+        }
+    }
+    return html;
 }
 
 // Shorten `text` so it fits into at most `maxLines` lines of the given width.
@@ -788,7 +826,7 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
         it.doc->setDocumentMargin(0);
         it.doc->setDefaultFont(font());
         it.doc->setDefaultStyleSheet(QStringLiteral("a { color: %1; text-decoration: underline; }").arg(fg.name()));
-        it.doc->setHtml(linkify(m.text));
+        it.doc->setHtml(styledMessageHtml(m.text, m.textStyles, fg));
         if (it.textRect.width() > 0) it.doc->setTextWidth(it.textRect.width());
     }
     it.pix.clear();

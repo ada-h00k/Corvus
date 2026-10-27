@@ -9,6 +9,7 @@
 #include "SignalCli.h"
 
 #include <QHash>
+#include <QJsonArray>
 #include <QMainWindow>
 #include <QMediaPlayer>
 #include <QNetworkAccessManager>
@@ -205,10 +206,11 @@ private:
     void saveDraft(const QString &key);
     void loadDraft(const QString &key);
     void switchConversation(const QString &key);
-    void sendEdit(const QString &text);
+    void sendEdit(const QString &text, const QJsonArray &textStyles = {});
     // Applies an edit (own or received). author = who must have written the message.
     bool applyDelete(const QString &key, qint64 targetTs, const QStringList &authors);
-    bool applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text, qint64 newTs);
+    bool applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text, qint64 newTs,
+                   const QList<TextStyleRange> &textStyles = {});
     void updateEditBar();
     void sendReaction(int idx, const QString &emoji);
     void addRecipient(QJsonObject &params, const Conversation &c) const;
@@ -276,6 +278,7 @@ private:
 
     struct Draft {
         QString text;
+        QString richText;
         int cursor = 0;
         Quote reply;
         QStringList files;
@@ -288,6 +291,7 @@ private:
     QString m_editKey;
     qint64 m_editTs = 0;
     QString m_editDraft; // what was typed before editing started
+    QString m_editDraftRichText;
     bool m_editExpandedInput = false; // the edit expanded the field itself (multi-line) and collapses it again
     QStringList m_pendingFiles;
     QSet<QString> m_thumbPending;
