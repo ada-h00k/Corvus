@@ -83,6 +83,25 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
     out.msg.text = dm["message"].toString();
     out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());
     out.msg.attachments = parseAttachments(dm);
+    const QJsonObject sticker = dm["sticker"].toObject();
+    if (!sticker.isEmpty()) {
+        QString packId = sticker["packId"].toString();
+        if (packId.isEmpty()) packId = sticker["packID"].toString();
+        if (packId.isEmpty()) packId = sticker["pack_id"].toString();
+        QJsonValue stickerIdValue = sticker["stickerId"];
+        if (stickerIdValue.isUndefined()) stickerIdValue = sticker["sticker_id"];
+        if (stickerIdValue.isUndefined()) stickerIdValue = sticker["id"];
+        bool idOk = false;
+        int stickerId = stickerIdValue.toInt(-1);
+        if (stickerId < 0 && stickerIdValue.isString()) stickerId = stickerIdValue.toString().toInt(&idOk);
+        else idOk = stickerId >= 0;
+        if (idOk && stickerId >= 0 && !packId.isEmpty()) {
+            Attachment a;
+            a.contentType = QStringLiteral("image/webp");
+            a.filename = QStringLiteral("signal-sticker:%1:%2.webp").arg(packId).arg(stickerId);
+            out.msg.attachments.append(a);
+        }
+    }
     out.msg.quote = parseQuote(dm);
     out.msg.expiresInSeconds = out.expirationSeconds;
     if (out.msg.text.isEmpty() && out.msg.attachments.isEmpty()) return; // receipts, typing, sessions, ...

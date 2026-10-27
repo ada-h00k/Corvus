@@ -72,6 +72,8 @@ set(APP_SOURCES
     src/GiphyPicker.cpp
     src/GiphyApiKeyStore.h
     src/GiphyApiKeyStore.cpp
+    src/StickerPicker.h
+    src/StickerPicker.cpp
     src/ChatView.h
     src/ChatView.cpp
     src/ImageViewer.h

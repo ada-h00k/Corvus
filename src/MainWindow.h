@@ -233,6 +233,7 @@ private:
     void toggleAudioAttachment(int msgIdx, int attIdx);
     void updateAudioPlaybackView();
     void downloadAndSendGif(const QString &conversationKey, const QUrl &url, const QUrl &sentAnalyticsUrl);
+    void sendSticker(const QString &packId, int stickerId, const QByteArray &imageData);
     void registerGiphyAnalytics(const QUrl &url);
     void saveAttachment(int msgIdx, int attIdx);
     void openMediaGallery(const QString &key);

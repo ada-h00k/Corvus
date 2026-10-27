@@ -258,7 +258,7 @@ MainWindow::MainWindow()
     m_attachBtn->setFixedSize(40, 40);
     m_emojiBtn = new QToolButton;
     m_emojiBtn->setText(QStringLiteral("😊"));
-    m_emojiBtn->setToolTip(tr("Emoji and GIFs"));
+    m_emojiBtn->setToolTip(tr("Emoji, GIFs and stickers"));
     m_emojiBtn->setFixedSize(40, 40);
 #ifdef Q_OS_MACOS
     // Flat, borderless buttons next to the input field, as in Messages.
@@ -341,6 +341,7 @@ MainWindow::MainWindow()
     setCentralWidget(split);
 
     m_picker = new EmojiPicker(this);
+    m_picker->setSignalCli(&m_cli);
 
     // Status bar
     m_statusLabel = new QLabel(tr("Not connected"));
@@ -456,7 +457,8 @@ MainWindow::MainWindow()
     connect(m_view, &ChatView::reactionChosen, this, &MainWindow::sendReaction);
     connect(m_view, &ChatView::moreReactionsRequested, this, [this](int idx, const QPoint &gp) {
         m_pickAction = [this, idx](const QString &e) { sendReaction(idx, e); };
-        m_picker->setGifsAvailable(false); // a GIF cannot be a reaction
+        m_picker->setGifsAvailable(false); // GIFs and stickers cannot be reactions
+        m_picker->setStickersAvailable(false);
         m_picker->popup(gp);
     });
     connect(m_view, &ChatView::attachmentActivated, this, &MainWindow::openAttachment);
@@ -505,6 +507,17 @@ MainWindow::MainWindow()
     connect(m_picker, &EmojiPicker::giphyConfigureRequested, this, [this] {
         configureGiphyApiKey();
         showComposerPicker(); // back to the GIF tab, now with the new key
+    });
+    connect(m_picker, &EmojiPicker::stickerSelected, this, [this](const QString &packId, int stickerId, const QByteArray &data) {
+        if (!m_editKey.isEmpty()) {
+            statusBar()->showMessage(tr("Send a sticker after finishing the current edit."), 5000);
+            return;
+        }
+        if (m_current.isEmpty() || !m_convs.contains(m_current)) {
+            statusBar()->showMessage(tr("Open a conversation before sending a sticker."), 5000);
+            return;
+        }
+        sendSticker(packId, stickerId, data);
     });
     connect(m_picker, &EmojiPicker::gifSelected, this, [this](const QUrl &url, const QUrl &analytics) {
         if (m_current.isEmpty() || !m_convs.contains(m_current)) {
@@ -3315,25 +3328,38 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
 
     for (int a = 0; a < m.attachments.size(); ++a) {
         const Attachment &att = m.attachments[a];
-        if (!att.isImage() || !att.thumb.isEmpty() || att.id.isEmpty() || att.size > kMaxThumbSource) continue;
+        if (!att.isImage() || !att.thumb.isEmpty() || (!att.isSticker() && att.id.isEmpty()) || att.size > kMaxThumbSource) continue;
+        if (att.isSticker() && (att.stickerPackId().isEmpty() || att.stickerId() < 0)) continue;
         const QString token = QStringLiteral("%1|%2|%3|%4").arg(key).arg(ts).arg(author).arg(a);
         if (m_thumbPending.contains(token)) continue;
         m_thumbPending.insert(token);
 
-        QJsonObject p{{QStringLiteral("id"), att.id}};
-        addRecipient(p, c);
-        m_cli.call(QStringLiteral("getAttachment"), p,
+        QJsonObject p;
+        QString method;
+        if (att.isSticker()) {
+            p = QJsonObject{{QStringLiteral("packId"), att.stickerPackId()},
+                            {QStringLiteral("stickerId"), att.stickerId()}};
+            method = QStringLiteral("getSticker");
+        } else {
+            p = QJsonObject{{QStringLiteral("id"), att.id}};
+            addRecipient(p, c);
+            method = QStringLiteral("getAttachment");
+        }
+        m_cli.call(method, p,
                    [this, key, ts, author, a, attempt, token](const QJsonValue &res, const QString &err) {
                        m_thumbPending.remove(token);
                        if (!err.isEmpty()) {
-                           // signal-cli may still be downloading it: retry a few times
+                           // signal-cli may still be downloading the image or sticker: retry a few times
                            if (attempt < 3)
                                QTimer::singleShot(2000 * (attempt + 1), this,
                                                   [this, key, ts, author, attempt] { fetchThumbnails(key, ts, author, attempt + 1); });
                            return;
                        }
-                       const QByteArray data =
-                           QByteArray::fromBase64(res.toObject().value(QStringLiteral("data")).toString().toLatin1());
+                       const QJsonObject object = res.toObject();
+                       QString encoded = object.value(QStringLiteral("data")).toString();
+                       if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
+                       if (encoded.isEmpty() && res.isString()) encoded = res.toString();
+                       const QByteArray data = QByteArray::fromBase64(encoded.toLatin1());
                        const QImage img = AttachmentUtil::imageFromData(data);
                        auto cit = m_convs.find(key);
                        if (img.isNull() || cit == m_convs.end()) return;
@@ -3344,6 +3370,7 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
                        at.width = img.width();
                        at.height = img.height();
                        at.thumb = AttachmentUtil::makeThumbnail(img);
+                       if (at.thumb.isEmpty()) at.thumb = data;
                        persist(Records::attachmentsUpdate(key, mm));
                        if (key == m_current) showConversation(true);
                    });
@@ -3388,6 +3415,26 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
             return;
         }
     }
+    if (att.isSticker()) {
+        if (att.stickerPackId().isEmpty() || att.stickerId() < 0) {
+            cb({}, tr("This sticker reference is invalid."));
+            return;
+        }
+        QJsonObject p{{QStringLiteral("packId"), att.stickerPackId()},
+                      {QStringLiteral("stickerId"), att.stickerId()}};
+        m_cli.call(QStringLiteral("getSticker"), p, [cb](const QJsonValue &res, const QString &err) {
+            if (!err.isEmpty()) {
+                cb({}, err);
+                return;
+            }
+            const QJsonObject object = res.toObject();
+            QString encoded = object.value(QStringLiteral("data")).toString();
+            if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
+            if (encoded.isEmpty() && res.isString()) encoded = res.toString();
+            cb(QByteArray::fromBase64(encoded.toLatin1()), QString());
+        });
+        return;
+    }
     if (att.id.isEmpty() || !m_convs.contains(key)) {
         cb({}, tr("The attachment is no longer available."));
         return;
@@ -3399,7 +3446,11 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
             cb({}, err);
             return;
         }
-        cb(QByteArray::fromBase64(res.toObject().value(QStringLiteral("data")).toString().toLatin1()), QString());
+        const QJsonObject object = res.toObject();
+        QString encoded = object.value(QStringLiteral("data")).toString();
+        if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
+        if (encoded.isEmpty() && res.isString()) encoded = res.toString();
+        cb(QByteArray::fromBase64(encoded.toLatin1()), QString());
     });
 }
 
@@ -4080,7 +4131,96 @@ void MainWindow::showComposerPicker()
         m_input->setFocus();
     };
     m_picker->setGifsAvailable(true);
+    m_picker->setStickersAvailable(true);
     m_picker->popup(m_emojiBtn->mapToGlobal(QPoint(0, -m_picker->height() - 4)));
+}
+
+void MainWindow::sendSticker(const QString &packId, int stickerId, const QByteArray &imageData)
+{
+    if (packId.isEmpty() || stickerId < 0 || imageData.isEmpty() || !m_convs.contains(m_current)) return;
+    const Conversation c = m_convs[m_current];
+    if (m_editKey.size() > 0) return;
+
+    const Quote quote = m_replyQuote;
+    QJsonObject params{{QStringLiteral("message"), QString()},
+                       {QStringLiteral("sticker"), packId + QLatin1Char(':') + QString::number(stickerId)}};
+    if (quote.valid && !quote.authorKey.isEmpty()) {
+        params[QStringLiteral("quoteTimestamp")] = QJsonValue(static_cast<qint64>(quote.id));
+        params[QStringLiteral("quoteAuthor")] = quote.authorKey;
+        params[QStringLiteral("quoteMessage")] = quote.text;
+    }
+    addRecipient(params, c);
+
+    Attachment attachment;
+    attachment.contentType = QStringLiteral("image/webp");
+    attachment.filename = QStringLiteral("signal-sticker:%1:%2.webp").arg(packId).arg(stickerId);
+    const QImage image = AttachmentUtil::imageFromData(imageData);
+    if (!image.isNull()) {
+        attachment.width = image.width();
+        attachment.height = image.height();
+        attachment.thumb = AttachmentUtil::makeThumbnail(image);
+    } else {
+        attachment.thumb = imageData;
+    }
+
+    Message preview;
+    preview.time = QDateTime::currentDateTime();
+    preview.outgoing = true;
+    preview.authorKey = m_account;
+    preview.expiresInSeconds = c.expirationSeconds;
+    preview.quote = quote;
+    preview.attachments.append(attachment);
+    Conversation &target = m_convs[m_current];
+    qint64 temporaryTimestamp = preview.ts();
+    while (findMessage(target, temporaryTimestamp, {}) >= 0) {
+        ++temporaryTimestamp;
+        preview.time = QDateTime::fromMSecsSinceEpoch(temporaryTimestamp);
+    }
+    preview.orderTs = std::max(preview.ts(), (target.msgs.isEmpty() ? qint64(0) : target.msgs.last().sortTs()) + 1);
+
+    const QString key = c.key;
+    const QString pendingId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    PendingSend pending;
+    pending.conversationKey = key;
+    pending.temporaryTimestamp = temporaryTimestamp;
+    pending.message = preview;
+    m_pendingSends.insert(pendingId, pending);
+    int at = target.msgs.size();
+    while (at > 0 && target.msgs[at - 1].sortTs() > preview.sortTs()) --at;
+    target.msgs.insert(at, preview);
+    m_replyQuote = Quote();
+    updateReplyBar();
+    showConversation(true);
+
+    m_cli.call(QStringLiteral("send"), params,
+               [this, pendingId, key, quote](const QJsonValue &result, const QString &error) {
+        auto it = m_pendingSends.find(pendingId);
+        if (it == m_pendingSends.end()) return;
+        if (!error.isEmpty() && !it->echoReceived) {
+            const PendingSend pending = it.value();
+            removePendingPreview(pending);
+            m_pendingSends.erase(it);
+            statusBar()->showMessage(tr("Sticker could not be sent: %1").arg(error), 9000);
+            if (key == m_current && !m_replyQuote.valid && quote.valid) {
+                m_replyQuote = quote;
+                updateReplyBar();
+            } else if (key != m_current && quote.valid && !m_drafts.value(key).reply.valid) {
+                m_drafts[key].reply = quote;
+            }
+            if (SafetyNumber::isUntrustedIdentityError(error)) checkIdentities(key, true);
+            return;
+        }
+        if (it->echoReceived) {
+            m_pendingSends.erase(it);
+            statusBar()->clearMessage();
+            return;
+        }
+        qint64 timestamp = result.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
+        if (timestamp <= 0) timestamp = QDateTime::currentMSecsSinceEpoch();
+        finalizePendingSend(pendingId, timestamp);
+        statusBar()->clearMessage();
+        checkSendResults(result);
+    });
 }
 
 void MainWindow::downloadAndSendGif(const QString &conversationKey, const QUrl &url, const QUrl &sentAnalyticsUrl)

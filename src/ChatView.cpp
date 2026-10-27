@@ -911,13 +911,15 @@ void ChatView::layoutItem(int i, int y)
         QSize sz;
         const QSize imageSize = it.attachmentImageSizes[a];
         if (att.isImage() && !att.thumb.isEmpty() && imageSize.width() > 0 && imageSize.height() > 0) {
-            int pw = qMin(qMin(kMaxImage, innerMax), imageSize.width());
+            const int maxDim = att.isSticker() ? 180 : kMaxImage;
+            const int maxHeight = att.isSticker() ? 180 : 360;
+            int pw = qMin(qMin(maxDim, innerMax), imageSize.width());
             int ph = imageSize.height() * pw / qMax(1, imageSize.width());
-            if (ph > 360) {
-                pw = pw * 360 / ph;
-                ph = 360;
+            if (ph > maxHeight) {
+                pw = pw * maxHeight / ph;
+                ph = maxHeight;
             }
-            sz = QSize(qMax(40, pw), qMax(30, ph));
+            sz = QSize(qMax(att.isSticker() ? 1 : 40, pw), qMax(att.isSticker() ? 1 : 30, ph));
         } else if (att.isVideo()) {
             const int width = qMin(320, innerMax);
             sz = QSize(width, qMax(76, width * 9 / 16));
@@ -1175,12 +1177,18 @@ void ChatView::paintItem(QPainter &p, int i)
                 p.restore();
             }
         } else if (!it.pix[a].isNull()) {
-            QPainterPath ip;
-            const qreal ir = qMin<qreal>(qMin(m_ap.radius, 14), qMin(rc.width(), rc.height()) / 2.0);
-            ip.addRoundedRect(QRectF(rc), ir, ir);
             p.save();
-            p.setClipPath(ip);
-            p.drawPixmap(rc, it.pix[a]);
+            p.setRenderHint(QPainter::SmoothPixmapTransform);
+            if (att.isSticker()) {
+                // Stickers preserve their transparent edges, unlike regular image attachments.
+                p.drawPixmap(rc, it.pix[a]);
+            } else {
+                QPainterPath ip;
+                const qreal ir = qMin<qreal>(qMin(m_ap.radius, 14), qMin(rc.width(), rc.height()) / 2.0);
+                ip.addRoundedRect(QRectF(rc), ir, ir);
+                p.setClipPath(ip);
+                p.drawPixmap(rc, it.pix[a]);
+            }
             p.restore();
         } else {
             QPainterPath fp;

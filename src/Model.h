@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 struct Attachment {
     QString id;          // signal-cli attachment id (for getAttachment)
@@ -17,6 +18,24 @@ struct Attachment {
     QByteArray thumb;    // JPEG/PNG preview (<= 480 px), kept in the encrypted history
 
     bool isImage() const { return contentType.startsWith(QLatin1String("image/")); }
+    bool isSticker() const { return filename.startsWith(QLatin1String("signal-sticker:")); }
+    QString stickerPackId() const
+    {
+        if (!isSticker()) return {};
+        const QString rest = filename.mid(QStringLiteral("signal-sticker:").size());
+        QString id = rest.section(QLatin1Char(':'), 0, 0);
+        if (id.isEmpty()) return {};
+        return id;
+    }
+    int stickerId() const
+    {
+        if (!isSticker()) return -1;
+        const QString rest = filename.mid(QStringLiteral("signal-sticker:").size());
+        const QString idPart = rest.section(QLatin1Char(':'), 1, 1).section(QLatin1Char('.'), 0, 0);
+        bool ok = false;
+        const int id = idPart.toInt(&ok);
+        return ok && id >= 0 ? id : -1;
+    }
     bool isAudio() const
     {
         if (contentType.startsWith(QLatin1String("audio/"))) return true;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QFrame>
 #include <QHash>
 #include <QStringList>
@@ -7,6 +8,8 @@
 #include <QVector>
 
 class GiphyPicker;
+class StickerPicker;
+class SignalCli;
 class QLineEdit;
 class QStackedWidget;
 
@@ -35,8 +38,10 @@ public:
 
     static QStringList quickReactions();
 
-    // Shows the "Emoji | GIF" tabs. Off for reactions, where a GIF makes no sense.
+    // Shows the available Emoji, GIF and Sticker tabs. Tabs are disabled for reactions.
     void setGifsAvailable(bool available);
+    void setStickersAvailable(bool available);
+    void setSignalCli(SignalCli *cli);
     // The GIF tab asks for the key (giphyKeyRequested) whenever it is opened; the
     // answer goes here. `error` is shown instead of the usual hint if it is set.
     void setGiphyApiKey(const QString &apiKey, const QString &error = QString());
@@ -58,6 +63,8 @@ signals:
     void emojiSelected(const QString &emoji);
     // A GIF was chosen; the popup closes.
     void gifSelected(const QUrl &originalUrl, const QUrl &sentAnalyticsUrl);
+    // A sticker was chosen; the popup closes.
+    void stickerSelected(const QString &packId, int stickerId, const QByteArray &imageData);
     // The GIF tab was opened: answer with setGiphyApiKey().
     void giphyKeyRequested();
     // "Configure API key …" was clicked in the GIF tab; the popup closes.
@@ -68,15 +75,18 @@ private:
     void showTonePopup(const emojipicker::Entry &entry, const QRect &globalCellRect);
     void updateSearchResults(const QString &query);
 
-    enum class Mode { Emoji, Gif };
+    enum class Mode { Emoji, Gif, Sticker };
     void setMode(Mode mode);
+    void updateModeBar();
 
     QLineEdit *m_searchEdit = nullptr;
     emojipicker::ModeBar *m_modeBar = nullptr;
     QStackedWidget *m_pages = nullptr;
     GiphyPicker *m_gif = nullptr;
+    StickerPicker *m_sticker = nullptr;
     Mode m_mode = Mode::Emoji;
     bool m_gifsAvailable = false;
+    bool m_stickersAvailable = false;
     emojipicker::Grid *m_grid = nullptr;
     emojipicker::CategoryBar *m_bar = nullptr;
     QVector<emojipicker::Section> *m_browse = nullptr; // categories (+ recent)
