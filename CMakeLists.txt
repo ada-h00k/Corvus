@@ -94,6 +94,8 @@ set(APP_SOURCES
     src/GroupDialog.cpp
     src/GroupInvitesDialog.h
     src/GroupInvitesDialog.cpp
+    src/VoiceRecorder.h
+    src/VoiceRecorder.cpp
     src/SafetyNumber.h
     src/SafetyNumber.cpp
     src/SafetyNumberDialog.h
@@ -249,6 +251,18 @@ if(CORVUS_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 180
     )
+
+    add_executable(voice_recorder_test tests/voice_recorder_test.cpp)
+    target_link_libraries(voice_recorder_test PRIVATE app_core Qt6::Test)
+    add_test(NAME voice_recorder COMMAND voice_recorder_test)
+    set_tests_properties(voice_recorder PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+    add_executable(voice_window_test tests/voice_window_test.cpp)
+    target_link_libraries(voice_window_test PRIVATE app_core)
+    target_compile_definitions(voice_window_test PRIVATE
+        MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
+    add_test(NAME voice_window COMMAND voice_window_test)
+    set_tests_properties(voice_window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)
 
     add_executable(migration_test tests/migration_test.cpp)
     target_link_libraries(migration_test PRIVATE app_core Qt6::Test)

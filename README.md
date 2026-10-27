@@ -23,6 +23,7 @@ Corvus is a desktop interface for [signal-cli](https://github.com/AsamK/signal-c
 - Desktop notifications, notification sounds and a tray/menu-bar icon.
 - Encrypted local chat history, protected by the system keychain or a passphrase.
 - View a contact's safety number and mark the contact as verified (Qt version; right-click a chat → *View safety number …*).
+- Record and send voice messages (Qt version; 🎤 button next to the attach button; needs signal-cli 0.14.2 or newer to arrive as a voice note).
 - Customisable chat colours and appearance.
 
 Corvus is a graphical client, not a replacement for `signal-cli`. You must have `signal-cli` installed and linked to your Signal account. The Windows installer can download it for you.

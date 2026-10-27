@@ -7,6 +7,7 @@
 #include "NotificationSettings.h"
 #include "GroupDialog.h"
 #include "SafetyNumber.h"
+#include "VoiceRecorder.h"
 #include "SignalCli.h"
 
 #include <QHash>
@@ -149,6 +150,14 @@ private:
     QList<GroupDialog::Contact> groupContacts() const;   // people to pick members from
     QString memberName(const QString &id) const;
     void updateGroupActions();
+
+    // --- Voice messages (mic button next to the attach button)
+    void startVoiceRecording();
+    void stopVoiceRecording(bool sendWhenDone); // sendWhenDone: send it right away, else attach it
+    void cancelVoiceRecording();
+    void onVoiceRecorded(const QString &path, qint64 durationMs);
+    void updateRecordingUi();
+    bool allVoiceNotes(const QStringList &files) const;
     void openGroupInvitations();                  // accept / decline open invitations
     void updateInvitations(const QList<GroupInfo::Info> &invitations);
     void showSafetyNumber(const QString &key); // "View safety number …": check / mark the contact as verified
@@ -263,6 +272,16 @@ private:
     QHash<QString, qint64> m_identityCheckedMs;    // conversation key -> last check (throttle)
     QWidget *m_safetyBar = nullptr;
     QAction *m_groupSettingsAction = nullptr;
+    VoiceRecorder *m_recorder = nullptr;
+    QWidget *m_recordBar = nullptr;
+    QLabel *m_recordDot = nullptr;
+    QLabel *m_recordTime = nullptr;
+    QToolButton *m_micBtn = nullptr;
+    QTimer *m_recordBlink = nullptr;
+    QString m_recordKey;                    // chat the running recording belongs to
+    bool m_recordSendWhenDone = false;
+    bool m_composerConnected = false;
+    QHash<QString, qint64> m_voiceFiles;    // recorded, not yet sent files -> duration in ms
     QAction *m_invitesAction = nullptr;
     QList<GroupInfo::Info> m_invitations;          // groups we are invited to but have not joined
     QLabel *m_safetyLabel = nullptr;
