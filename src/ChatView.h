@@ -70,6 +70,7 @@ public:
 
 signals:
     void replyRequested(int idx);
+    void forwardRequested(int idx);
     void editRequested(int idx); // own text message within the edit window
     void deleteRequested(int idx);
     void reactionChosen(int idx, const QString &emoji);

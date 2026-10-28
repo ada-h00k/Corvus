@@ -24,6 +24,7 @@
 #include <QTimer>
 #include <QTemporaryDir>
 #include <functional>
+#include <memory>
 
 class ChatView;
 class EmojiPicker;
@@ -90,6 +91,7 @@ private slots:
     void onEnvelope(const QJsonObject &env);
     void onSelectionChanged(QListWidgetItem *item);
     void sendMessage();
+    void forwardMessage(int idx);
     void newConversation();
     void linkDevice();
     void reconnect();
@@ -250,6 +252,17 @@ private:
     void loadAnimatedAttachment(int messageIndex, int attachmentIndex);
     void fetchAttachmentData(const QString &key, const Attachment &att,
                              std::function<void(const QByteArray &, const QString &)> cb);
+    struct ForwardOperation {
+        QString sourceKey;
+        Message source;
+        QStringList destinations;
+        QString note;
+        QString stageDir;
+        QList<QByteArray> attachmentData;
+        QStringList stagedPaths;
+    };
+    void fetchForwardAttachment(const std::shared_ptr<ForwardOperation> &operation, int index);
+    void sendForwardedMessage(const std::shared_ptr<ForwardOperation> &operation);
     void consumeViewOnce(const QString &key, qint64 timestamp, const QString &author, bool expired = false);
     void openAttachment(int msgIdx, int attIdx);
     void toggleAudioAttachment(int msgIdx, int attIdx);

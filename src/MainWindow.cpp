@@ -36,6 +36,7 @@
 #include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QFrame>
 #include <QProcess>
 #ifdef HAVE_QT_DBUS
@@ -43,6 +44,7 @@
 #include <QDBusInterface>
 #endif
 #include <QDir>
+#include <QDialogButtonBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QEvent>
@@ -604,6 +606,7 @@ MainWindow::MainWindow()
 
     // Chat view actions
     connect(m_view, &ChatView::replyRequested, this, &MainWindow::startReply);
+    connect(m_view, &ChatView::forwardRequested, this, &MainWindow::forwardMessage);
     connect(m_view, &ChatView::editRequested, this, &MainWindow::startEdit);
     connect(m_view, &ChatView::deleteRequested, this, &MainWindow::deleteMessage);
     connect(m_view, &ChatView::reactionChosen, this, &MainWindow::sendReaction);
@@ -3511,6 +3514,305 @@ void MainWindow::startReply(int idx)
     if (m_viewOnceBtn) m_viewOnceBtn->setChecked(false);
     updateReplyBar();
     m_input->setFocus();
+}
+
+void MainWindow::forwardMessage(int idx)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Conversation &sourceConversation = m_convs[m_current];
+    const QString sourceKey = sourceConversation.key;
+    const Message source = sourceConversation.msgs.at(idx);
+    // A consumed or unopened View Once message must never be re-uploaded from the desktop client.
+    if (source.deleted || source.viewOnce) return;
+    if (source.text.isEmpty() && source.attachments.isEmpty()) {
+        statusBar()->showMessage(tr("This message cannot be forwarded."), 5000);
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Forward message"));
+    dialog.setMinimumSize(420, 500);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *description = new QLabel(tr("Choose up to 5 chats to forward this message to."), &dialog);
+    description->setWordWrap(true);
+    layout->addWidget(description);
+
+    auto *search = new QLineEdit(&dialog);
+    search->setPlaceholderText(tr("Search chats"));
+    layout->addWidget(search);
+
+    auto *list = new QListWidget(&dialog);
+    layout->addWidget(list, 1);
+
+    QList<const Conversation *> destinations;
+    destinations.reserve(m_convs.size());
+    for (const Conversation &c : std::as_const(m_convs)) {
+        if (c.blocked) continue;
+        destinations.append(&c);
+    }
+    std::sort(destinations.begin(), destinations.end(), [](const Conversation *a, const Conversation *b) {
+        const int cmp = a->title.compare(b->title, Qt::CaseInsensitive);
+        return cmp == 0 ? a->key < b->key : cmp < 0;
+    });
+    for (const Conversation *c : destinations) {
+        QString label = c->isGroup ? QStringLiteral("👥 ") + c->title : c->title;
+        if (label.trimmed().isEmpty()) label = c->key;
+        auto *item = new QListWidgetItem(label, list);
+        item->setData(Qt::UserRole, c->key);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+        item->setCheckState(Qt::Unchecked);
+        item->setToolTip(c->key);
+    }
+    QObject::connect(search, &QLineEdit::textChanged, list, [list](const QString &needle) {
+        for (int i = 0; i < list->count(); ++i) {
+            QListWidgetItem *item = list->item(i);
+            item->setHidden(!item->text().contains(needle, Qt::CaseInsensitive) &&
+                            !item->data(Qt::UserRole).toString().contains(needle, Qt::CaseInsensitive));
+        }
+    });
+
+    auto *countLabel = new QLabel(tr("0 of 5 chats selected"), &dialog);
+    layout->addWidget(countLabel);
+    auto *note = new QLineEdit(&dialog);
+    note->setPlaceholderText(tr("Add a message (optional)"));
+    layout->addWidget(note);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("Forward"));
+    buttons->button(QDialogButtonBox::Ok)->setEnabled(false);
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(list, &QListWidget::itemChanged, &dialog, [list, countLabel, buttons](QListWidgetItem *changed) {
+        int checked = 0;
+        for (int i = 0; i < list->count(); ++i)
+            if (list->item(i)->checkState() == Qt::Checked) ++checked;
+        if (checked > 5 && changed->checkState() == Qt::Checked) {
+            QSignalBlocker blocker(list);
+            changed->setCheckState(Qt::Unchecked);
+            --checked;
+            countLabel->setText(QObject::tr("Select no more than 5 chats."));
+        } else {
+            countLabel->setText(QObject::tr("%1 of 5 chats selected").arg(checked));
+        }
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(checked > 0 && checked <= 5);
+    });
+
+    if (dialog.exec() != QDialog::Accepted) return;
+    QStringList targetKeys;
+    for (int i = 0; i < list->count(); ++i) {
+        const QListWidgetItem *item = list->item(i);
+        if (item->checkState() == Qt::Checked) targetKeys.append(item->data(Qt::UserRole).toString());
+    }
+    if (targetKeys.isEmpty() || targetKeys.size() > 5) return;
+
+    auto operation = std::make_shared<ForwardOperation>();
+    operation->sourceKey = sourceKey;
+    operation->source = source;
+    operation->destinations = targetKeys;
+    operation->note = note->text().trimmed();
+    operation->stageDir = m_tmp.path() + QStringLiteral("/forward-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    if (!QDir().mkpath(operation->stageDir)) {
+        statusBar()->showMessage(tr("Could not prepare the forwarded message."), 7000);
+        return;
+    }
+
+    if (source.attachments.isEmpty()) {
+        sendForwardedMessage(operation);
+    } else {
+        statusBar()->showMessage(tr("Preparing message for forwarding …"));
+        fetchForwardAttachment(operation, 0);
+    }
+}
+
+void MainWindow::fetchForwardAttachment(const std::shared_ptr<ForwardOperation> &operation, int index)
+{
+    if (!operation || index < 0 || index >= operation->source.attachments.size()) {
+        if (operation) sendForwardedMessage(operation);
+        return;
+    }
+    const Attachment attachment = operation->source.attachments.at(index);
+    if (attachment.size > kMaxAttachment) {
+        statusBar()->showMessage(tr("An attachment is too large to forward."), 8000);
+        QDir(operation->stageDir).removeRecursively();
+        return;
+    }
+    fetchAttachmentData(operation->sourceKey, attachment,
+                        [this, operation, index](const QByteArray &data, const QString &error) {
+        if (!error.isEmpty() || data.isEmpty() || data.size() > kMaxAttachment) {
+            const Message &source = operation->source;
+            const bool canForwardStickerByReference = source.text.isEmpty() && source.attachments.size() == 1 &&
+                source.attachments.first().isSticker() &&
+                !source.attachments.first().stickerPackId().isEmpty() &&
+                source.attachments.first().stickerId() >= 0 && operation->note.isEmpty();
+            if (canForwardStickerByReference) {
+                // The pack/id reference is enough to forward the sticker even if its preview
+                // cannot be downloaded on this device.
+                sendForwardedMessage(operation);
+                return;
+            }
+            statusBar()->showMessage(tr("Could not prepare attachment for forwarding: %1")
+                                         .arg(error.isEmpty() ? tr("invalid or oversized file") : error), 9000);
+            QDir(operation->stageDir).removeRecursively();
+            return;
+        }
+        qint64 totalBytes = data.size();
+        for (const QByteArray &previous : std::as_const(operation->attachmentData)) totalBytes += previous.size();
+        if (totalBytes > kMaxAttachment) {
+            statusBar()->showMessage(tr("The attachments are too large to forward together."), 8000);
+            QDir(operation->stageDir).removeRecursively();
+            return;
+        }
+        operation->attachmentData.append(data);
+        if (index + 1 < operation->source.attachments.size())
+            fetchForwardAttachment(operation, index + 1);
+        else
+            sendForwardedMessage(operation);
+    });
+}
+
+void MainWindow::sendForwardedMessage(const std::shared_ptr<ForwardOperation> &operation)
+{
+    if (!operation || operation->destinations.isEmpty()) return;
+    const Message &source = operation->source;
+    const QString prefix = operation->note.isEmpty() ? QString() : operation->note + QStringLiteral("\n\n");
+    const QString forwardedText = prefix + source.text;
+    QJsonArray styles;
+    for (const TextStyleRange &style : source.textStyles) {
+        if (style.start < 0 || style.length <= 0 || style.style.isEmpty()) continue;
+        styles.append(QStringLiteral("%1:%2:%3").arg(style.start + prefix.size()).arg(style.length).arg(style.style));
+    }
+
+    const bool directSticker = source.text.isEmpty() && source.attachments.size() == 1 &&
+                               source.attachments.first().isSticker() &&
+                               !source.attachments.first().stickerPackId().isEmpty() &&
+                               source.attachments.first().stickerId() >= 0 && operation->note.isEmpty();
+    operation->stagedPaths.clear();
+    for (int i = 0; i < source.attachments.size() && !directSticker; ++i) {
+        if (i >= operation->attachmentData.size()) {
+            statusBar()->showMessage(tr("An attachment could not be prepared for forwarding."), 7000);
+            QDir(operation->stageDir).removeRecursively();
+            return;
+        }
+        const Attachment &attachment = source.attachments.at(i);
+        QString filename = QFileInfo(attachment.filename).fileName();
+        if (filename.isEmpty() || filename.contains(QLatin1Char('/')) || filename.contains(QLatin1Char('\\')) ||
+            filename == QStringLiteral(".") || filename == QStringLiteral("..")) {
+            filename = AttachmentUtil::genericFileName(attachment.contentType, QStringLiteral("attachment"), source.time);
+        }
+        if (attachment.isSticker()) filename = QStringLiteral("sticker.webp");
+        const QString fileDir = operation->stageDir + QStringLiteral("/named-") + QString::number(i);
+        if (!QDir().mkpath(fileDir)) {
+            statusBar()->showMessage(tr("Could not prepare attachment for forwarding."), 7000);
+            QDir(operation->stageDir).removeRecursively();
+            return;
+        }
+        const QString path = fileDir + QLatin1Char('/') + filename;
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(operation->attachmentData.at(i)) != operation->attachmentData.at(i).size()) {
+            statusBar()->showMessage(tr("Could not write attachment for forwarding."), 7000);
+            QDir(operation->stageDir).removeRecursively();
+            return;
+        }
+        file.close();
+        operation->stagedPaths.append(path);
+    }
+
+    const QStringList staged = SignalCli::stageFiles(operation->stagedPaths,
+                                                      operation->stageDir + QStringLiteral("/cli-stage"));
+    int started = 0;
+    for (const QString &key : operation->destinations) {
+        if (!m_convs.contains(key) || m_convs.value(key).blocked) continue;
+        const Conversation targetConversation = m_convs.value(key);
+        QJsonObject params;
+        if (!forwardedText.isEmpty()) {
+            params[QStringLiteral("message")] = forwardedText;
+            if (!styles.isEmpty()) params[QStringLiteral("textStyle")] = styles;
+        }
+        if (directSticker) {
+            const Attachment &sticker = source.attachments.first();
+            params[QStringLiteral("sticker")] = sticker.stickerPackId() + QLatin1Char(':') + QString::number(sticker.stickerId());
+        } else if (!staged.isEmpty()) {
+            params[QStringLiteral("attachments")] = QJsonArray::fromStringList(staged);
+        }
+        addRecipient(params, targetConversation);
+
+        Message preview;
+        preview.time = QDateTime::currentDateTime();
+        preview.text = forwardedText;
+        preview.textStyles = source.textStyles;
+        for (TextStyleRange &style : preview.textStyles) style.start += prefix.size();
+        preview.outgoing = true;
+        preview.authorKey = m_account;
+        preview.expiresInSeconds = targetConversation.expirationSeconds;
+        preview.orderTs = std::max(preview.ts(), (targetConversation.msgs.isEmpty() ? qint64(0) : targetConversation.msgs.last().sortTs()) + 1);
+        for (int i = 0; i < source.attachments.size(); ++i) {
+            Attachment copy = source.attachments.at(i);
+            copy.id.clear();
+            copy.path = directSticker ? QString() : operation->stagedPaths.value(i);
+            if (i < operation->attachmentData.size()) {
+                copy.size = operation->attachmentData.at(i).size();
+                if (copy.isImage() && copy.thumb.isEmpty()) {
+                    const QImage image = AttachmentUtil::imageFromData(operation->attachmentData.at(i));
+                    if (!image.isNull()) {
+                        copy.width = image.width();
+                        copy.height = image.height();
+                        copy.thumb = AttachmentUtil::makeThumbnail(image);
+                    }
+                }
+            }
+            if (!directSticker && copy.isSticker()) copy.filename = QStringLiteral("sticker.webp");
+            preview.attachments.append(copy);
+        }
+
+        qint64 temporaryTimestamp = preview.ts();
+        while (findMessage(m_convs[key], temporaryTimestamp, {}) >= 0) {
+            ++temporaryTimestamp;
+            preview.time = QDateTime::fromMSecsSinceEpoch(temporaryTimestamp);
+        }
+        const QString pendingId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        PendingSend pending;
+        pending.conversationKey = key;
+        pending.temporaryTimestamp = temporaryTimestamp;
+        pending.message = preview;
+        m_pendingSends.insert(pendingId, pending);
+
+        Conversation &target = m_convs[key];
+        int at = target.msgs.size();
+        while (at > 0 && target.msgs.at(at - 1).sortTs() > preview.sortTs()) --at;
+        target.msgs.insert(at, preview);
+        if (key == m_current) showConversation(true);
+        refreshList();
+        ++started;
+
+        m_cli.call(QStringLiteral("send"), params,
+                   [this, pendingId, key](const QJsonValue &result, const QString &error) {
+            auto it = m_pendingSends.find(pendingId);
+            if (it == m_pendingSends.end()) return;
+            if (!error.isEmpty() && !it->echoReceived) {
+                const PendingSend pending = it.value();
+                removePendingPreview(pending);
+                m_pendingSends.erase(it);
+                statusBar()->showMessage(tr("Forwarding to %1 failed: %2").arg(displayName(key), error), 10000);
+                if (SafetyNumber::isUntrustedIdentityError(error)) checkIdentities(key, true);
+                return;
+            }
+            if (it->echoReceived) {
+                m_pendingSends.erase(it);
+                return;
+            }
+            qint64 timestamp = result.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
+            if (timestamp <= 0) timestamp = QDateTime::currentMSecsSinceEpoch();
+            finalizePendingSend(pendingId, timestamp);
+            checkSendResults(result);
+        });
+    }
+    if (started == 0) {
+        statusBar()->showMessage(tr("No available destination chat was selected."), 7000);
+        QDir(operation->stageDir).removeRecursively();
+    } else {
+        statusBar()->showMessage(tr("Forwarding message to %1 chat(s) …").arg(started), 5000);
+    }
 }
 
 void MainWindow::sendMessage()

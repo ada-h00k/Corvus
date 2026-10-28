@@ -1584,6 +1584,7 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
         return;
     }
     menu.addAction(tr("Reply"), this, [this, idx] { emit replyRequested(idx); });
+    menu.addAction(tr("Forward…"), this, [this, idx] { emit forwardRequested(idx); });
     QMenu *react = menu.addMenu(tr("React"));
     const QString own = m.reactions.value(m_self);
     for (const QString &emoji : EmojiPicker::quickReactions()) {
