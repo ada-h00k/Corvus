@@ -68,7 +68,9 @@ Collection collect(const QList<Message> &messages)
     // Newest message first; inside one message the original order is kept.
     for (int mi = int(messages.size()) - 1; mi >= 0; --mi) {
         const Message &m = messages[mi];
-        if (m.deleted) continue;
+        // View Once media must stay out of the gallery: rendering a tile can
+        // fetch its bytes before the user explicitly opens the message.
+        if (m.deleted || m.viewOnce) continue;
         for (int i = 0; i < m.attachments.size(); ++i) {
             const Attachment &a = m.attachments[i];
             MediaItem item;

@@ -80,6 +80,7 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
         return;
     }
 
+    out.msg.viewOnce = dm["viewOnce"].toBool();
     out.msg.text = dm["message"].toString();
     out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());
     out.msg.attachments = parseAttachments(dm);

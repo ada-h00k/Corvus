@@ -8,7 +8,7 @@ class ImageViewer : public QDialog
 {
     Q_OBJECT
 public:
-    ImageViewer(const QByteArray &data, const QString &filename, QWidget *parent = nullptr);
+    ImageViewer(const QByteArray &data, const QString &filename, QWidget *parent = nullptr, bool allowSave = true);
     bool isValid() const { return m_valid; }
 
 signals:

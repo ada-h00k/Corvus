@@ -93,6 +93,25 @@ private slots:
         QCOMPARE(c.links.size(), 3);
     }
 
+    void viewOnceNeverAppearsInGallery()
+    {
+        QList<Message> msgs;
+        msgs << message(QDateTime(QDate(2026, 10, 1), QTime(12, 0)), {},
+                        {attachment("image/png", "ordinary.png")});
+        Message once = message(QDateTime(QDate(2026, 10, 2), QTime(12, 0)),
+                               QStringLiteral("https://secret-once.example/"),
+                               {attachment("image/png", "private-once.png")});
+        once.viewOnce = true;
+        msgs << once;
+
+        const MediaGallery::Collection c = MediaGallery::collect(msgs);
+        QCOMPARE(c.media.size(), 1);
+        QCOMPARE(c.media.first().att.filename, QStringLiteral("ordinary.png"));
+        QVERIFY(c.audio.isEmpty());
+        QVERIFY(c.files.isEmpty());
+        QVERIFY(c.links.isEmpty());
+    }
+
     void newestFirst()
     {
         const MediaGallery::Collection c = MediaGallery::collect(sampleConversation());

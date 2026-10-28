@@ -97,6 +97,10 @@ struct Message {
     int editCount = 0;
     int expiresInSeconds = 0;
     qint64 expirationStartMs = 0;
+    // Signal View Once media. The attachment reference is kept only until it is opened.
+    bool viewOnce = false;
+    bool viewOnceViewed = false;
+    bool viewOnceExpired = false;
 
     // "Delete for everyone" (by us or by the author): like the official clients the message stays
     // in the chat as a placeholder. Text, attachments, quote and reactions are gone for good.

@@ -297,6 +297,7 @@ MainWindow::MainWindow()
         }
         m_pendingFiles.clear();
         m_pendingGifAnalyticsUrl.clear();
+        if (m_viewOnceBtn) m_viewOnceBtn->setChecked(false);
         updateAttachBar();
     });
     m_attachThumb = new QLabel;
@@ -310,6 +311,15 @@ MainWindow::MainWindow()
     m_attachBtn->setText(QStringLiteral("📎"));
     m_attachBtn->setToolTip(tr("Attach files"));
     m_attachBtn->setFixedSize(40, 40);
+    m_viewOnceBtn = new QToolButton;
+    m_viewOnceBtn->setText(QStringLiteral("1×"));
+    m_viewOnceBtn->setCheckable(true);
+    m_viewOnceBtn->setToolTip(tr("Send one photo that can be viewed once"));
+    m_viewOnceBtn->setAccessibleName(tr("View Once"));
+    m_viewOnceBtn->setFixedSize(40, 40);
+    m_viewOnceBtn->setEnabled(false);
+    m_viewOnceBtn->hide(); // Shown only while an eligible image is staged in the composer.
+    m_viewOnceBtn->setStyleSheet(QStringLiteral("QToolButton:checked { background: palette(highlight); color: palette(highlighted-text); border-radius: 8px; }"));
     m_micBtn = new MirroredToolButton; // paints the mic emoji mirrored
     m_micBtn->setObjectName(QStringLiteral("voiceButton"));
     m_micBtn->setText(QStringLiteral("🎤"));
@@ -322,7 +332,7 @@ MainWindow::MainWindow()
     m_emojiBtn->setFixedSize(40, 40);
 #ifdef Q_OS_MACOS
     // Flat, borderless buttons next to the input field, as in Messages.
-    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_micBtn})
+    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_micBtn, m_viewOnceBtn})
         b->setAutoRaise(true);
 #endif
     m_input = new MessageInput;
@@ -357,6 +367,7 @@ MainWindow::MainWindow()
     // The voice recording button sits to the LEFT of the attach-files button.
     h->addWidget(m_micBtn);
     h->addWidget(m_attachBtn);
+    h->addWidget(m_viewOnceBtn);
 
     // Shown instead of the message field while a voice message is being recorded.
     m_recordBar = new QWidget;
@@ -633,6 +644,8 @@ MainWindow::MainWindow()
     connect(m_attachBtn, &QToolButton::clicked, this, [this] {
         addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
     });
+    connect(m_viewOnceBtn, &QToolButton::toggled, this, [this] { updateAttachBar(); });
+    connect(m_input, &QTextEdit::textChanged, this, [this] { updateAttachBar(); });
     connect(m_emojiBtn, &QToolButton::clicked, this, &MainWindow::showComposerPicker);
     connect(m_picker, &EmojiPicker::emojiSelected, this, [this](const QString &e) {
         if (m_pickAction) m_pickAction(e);
@@ -1256,6 +1269,7 @@ void MainWindow::setConnected(bool connected, const QString &info)
     m_attachBtn->setEnabled(connected);
     m_emojiBtn->setEnabled(connected);
     m_composerConnected = connected;
+    updateAttachBar();
     updateRecordingUi();
     if (connected) {
         m_statusLabel->setText(tr("Connected · signal-cli %1").arg(m_version));
@@ -2206,6 +2220,13 @@ void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const 
     Message confirmed = pending.message;
     confirmed.time = QDateTime::fromMSecsSinceEpoch(timestamp);
     if (echo && echo->expiresInSeconds > 0) confirmed.expiresInSeconds = echo->expiresInSeconds;
+    if (echo && echo->viewOnce) confirmed.viewOnce = true;
+    if (confirmed.viewOnce) {
+        confirmed.text.clear();
+        confirmed.textStyles.clear();
+        confirmed.quote = Quote();
+        confirmed.attachments.clear();
+    }
     if (confirmed.expiresInSeconds > 0) confirmed.expirationStartMs = timestamp;
     if (echo) {
         // Keep the local file paths and thumbnails, but copy the remote attachment IDs
@@ -2330,6 +2351,11 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     m.attachments.clear();
     m.quote = Quote();
     m.reactions.clear();
+    // A remotely deleted View Once message must render as a deleted-message placeholder,
+    // not as an unopened item that suggests the photo can still be viewed.
+    m.viewOnce = false;
+    m.viewOnceViewed = false;
+    m.viewOnceExpired = false;
     m.editTs = 0;
     m.editCount = 0;
 
@@ -2602,7 +2628,17 @@ void MainWindow::expireMessages()
     bool changed = false;
     for (Conversation &conversation : m_convs) {
         for (int i = conversation.msgs.size() - 1; i >= 0; --i) {
-            const Message &message = conversation.msgs[i];
+            Message &message = conversation.msgs[i];
+            if (message.viewOnce && !message.viewOnceViewed && !message.viewOnceExpired &&
+                now - message.ts() >= 45LL * 24 * 60 * 60 * 1000) {
+                message.viewOnceExpired = true;
+                message.attachments.clear();
+                message.text.clear();
+                message.textStyles.clear();
+                message.quote = Quote();
+                changed = true;
+                continue;
+            }
             if (message.expiresInSeconds <= 0 || message.expirationStartMs <= 0) continue;
             if (now - message.expirationStartMs < static_cast<qint64>(message.expiresInSeconds) * 1000) continue;
             conversation.msgs.removeAt(i);
@@ -2993,7 +3029,8 @@ void MainWindow::saveDraft(const QString &key)
     d.reply = m_replyQuote;
     d.files = m_pendingFiles;
     d.gifAnalyticsUrl = m_pendingGifAnalyticsUrl;
-    if (d.text.isEmpty() && !d.reply.valid && d.files.isEmpty())
+    d.viewOnce = m_viewOnceBtn && m_viewOnceBtn->isChecked();
+    if (d.text.isEmpty() && !d.reply.valid && d.files.isEmpty() && !d.viewOnce)
         m_drafts.remove(key);
     else
         m_drafts.insert(key, d);
@@ -3008,6 +3045,7 @@ void MainWindow::loadDraft(const QString &key)
     m_replyQuote = d.reply;
     m_pendingFiles = d.files;
     m_pendingGifAnalyticsUrl = d.gifAnalyticsUrl;
+    if (m_viewOnceBtn) m_viewOnceBtn->setChecked(d.viewOnce);
     updateReplyBar();
     updateAttachBar();
 }
@@ -3175,6 +3213,33 @@ void MainWindow::updateReplyBar()
 
 void MainWindow::updateAttachBar()
 {
+    bool imageEligible = m_pendingFiles.size() == 1 && m_editKey.isEmpty() && m_voiceFiles.isEmpty();
+    if (imageEligible) {
+        const QString path = m_pendingFiles.first();
+        const QString mime = AttachmentUtil::mimeTypeForFile(path);
+        imageEligible = mime.startsWith(QLatin1String("image/"), Qt::CaseInsensitive) &&
+                        QFileInfo(path).suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) != 0 &&
+                        !m_voiceFiles.contains(QFileInfo(path).absoluteFilePath());
+    }
+    const QVersionNumber viewOnceVersion(0, 13, 18);
+    const QVersionNumber cliVersion = QVersionNumber::fromString(m_version);
+    const bool cliSupportsViewOnce = !cliVersion.isNull() && cliVersion >= viewOnceVersion;
+    if (m_viewOnceBtn) {
+        // View Once is a contextual composer action: keep it out of the toolbar unless
+        // exactly one eligible static image is staged for sending.
+        m_viewOnceBtn->setVisible(imageEligible);
+        const bool composerEligible = imageEligible && cliSupportsViewOnce && m_composerConnected &&
+                                      !m_replyQuote.valid && m_input->text().trimmed().isEmpty();
+        // Do not leave the mode checked-but-disabled when the user adds a caption, starts
+        // replying, changes the attachment, or disconnects. Otherwise the next send would be
+        // rejected while the only way to clear the mode is to undo that unrelated edit.
+        if (m_viewOnceBtn->isChecked() && !composerEligible)
+            m_viewOnceBtn->setChecked(false);
+        m_viewOnceBtn->setEnabled(composerEligible);
+        m_viewOnceBtn->setToolTip(cliSupportsViewOnce
+            ? tr("Send one photo that can be viewed once (one image, no caption)")
+            : tr("View Once requires signal-cli 0.13.18 or newer"));
+    }
     if (m_pendingFiles.isEmpty()) {
         m_attachBar->hide();
         return;
@@ -3324,6 +3389,15 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     m.outgoing = pe.outgoing;
     m.authorKey = pe.outgoing ? m_account : srcKey;
     if (m.outgoing && m.expiresInSeconds > 0) m.expirationStartMs = m.ts();
+    if (m.viewOnce) {
+        // Signal View Once messages contain only the photo: never surface a caption or quote,
+        // including if a non-conformant sender included one. The sender also cannot reopen the
+        // media on this device, so discard the own-device attachment reference immediately.
+        m.text.clear();
+        m.textStyles.clear();
+        m.quote = Quote();
+        if (m.outgoing) m.attachments.clear();
+    }
     if (m.quote.valid) m.quote.authorKey = resolveKey(m.quote.authorKey);
 
     if (!pe.outgoing) {
@@ -3366,8 +3440,13 @@ void MainWindow::onEnvelope(const QJsonObject &env)
                 const PendingSend &pending = it.value();
                 if (pending.echoReceived || pending.conversationKey != key || pending.message.text != m.text)
                     continue;
-                if (!pending.message.attachments.isEmpty() && !m.attachments.isEmpty() &&
-                    pending.message.attachments.size() != m.attachments.size())
+                // The outgoing View Once envelope has its attachment reference cleared above.
+                // Match on the protocol flag before comparing attachment counts, or a one-time
+                // photo can accidentally confirm an ordinary image send with the same empty text.
+                if (pending.message.viewOnce != m.viewOnce)
+                    continue;
+                if (!pending.message.viewOnce && !pending.message.attachments.isEmpty() &&
+                    !m.attachments.isEmpty() && pending.message.attachments.size() != m.attachments.size())
                     continue;
                 if (pendingId.isEmpty() || pending.temporaryTimestamp < oldestPendingTimestamp) {
                     pendingId = it.key();
@@ -3406,7 +3485,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         alertIncoming(key, m);
         if (!group) refreshAvatar(key); // the contact may have changed the picture
     }
-    fetchThumbnails(key, m.ts(), m.authorKey);
+    if (!m.viewOnce) fetchThumbnails(key, m.ts(), m.authorKey);
 }
 
 void MainWindow::addRecipient(QJsonObject &params, const Conversation &c) const
@@ -3429,6 +3508,7 @@ void MainWindow::startReply(int idx)
     m_replyQuote.authorKey = effectiveAuthor(c, m);
     m_replyQuote.text = m.text;
     if (m.text.isEmpty() && !m.attachments.isEmpty()) m_replyQuote.attachmentNote = m.attachments.first().contentType;
+    if (m_viewOnceBtn) m_viewOnceBtn->setChecked(false);
     updateReplyBar();
     m_input->setFocus();
 }
@@ -3462,6 +3542,21 @@ void MainWindow::sendMessage()
     const QStringList files = m_pendingFiles;
     const Quote quote = m_replyQuote;
     const QUrl giphySentAnalyticsUrl = m_pendingGifAnalyticsUrl;
+    const bool viewOnce = m_viewOnceBtn && m_viewOnceBtn->isChecked();
+    if (viewOnce) {
+        const bool oneStaticImage = files.size() == 1 &&
+            AttachmentUtil::mimeTypeForFile(files.first()).startsWith(QLatin1String("image/"), Qt::CaseInsensitive) &&
+            QFileInfo(files.first()).suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) != 0 &&
+            !m_voiceFiles.contains(QFileInfo(files.first()).absoluteFilePath());
+        if (!oneStaticImage || !text.isEmpty() || quote.valid) {
+            statusBar()->showMessage(tr("View Once requires exactly one photo without text or a reply."), 7000);
+            return;
+        }
+        if (QVersionNumber::fromString(m_version) < QVersionNumber(0, 13, 18)) {
+            statusBar()->showMessage(tr("View Once requires signal-cli 0.13.18 or newer."), 7000);
+            return;
+        }
+    }
 
     QJsonObject p;
     if (!text.isEmpty()) {
@@ -3508,6 +3603,7 @@ void MainWindow::sendMessage()
     }
     if (!paths.isEmpty())
         p[QStringLiteral("attachments")] = QJsonArray::fromStringList(SignalCli::stageFiles(paths, stageDir));
+    if (viewOnce) p[QStringLiteral("viewOnce")] = true;
     // Recorded voice messages go out as voice notes (shown inline by the Signal apps) when this
     // signal-cli can do that and nothing but recordings is attached.
     if (allVoiceNotes(files) && VoiceRecording::supportsVoiceNote(m_version))
@@ -3536,6 +3632,7 @@ void MainWindow::sendMessage()
     preview.authorKey = m_account;
     preview.expiresInSeconds = c.expirationSeconds;
     preview.quote = quote;
+    preview.viewOnce = viewOnce;
     preview.attachments = atts;
     preview.orderTs = std::max(preview.ts(), (target.msgs.isEmpty() ? qint64(0) : target.msgs.last().sortTs()) + 1);
 
@@ -3553,6 +3650,7 @@ void MainWindow::sendMessage()
 
     m_input->clear();
     m_pendingFiles.clear();
+    if (m_viewOnceBtn) m_viewOnceBtn->setChecked(false);
     m_replyQuote = Quote();
     updateAttachBar();
     updateReplyBar();
@@ -3560,7 +3658,7 @@ void MainWindow::sendMessage()
     if (key == m_current) showConversation(true);
 
     m_cli.call(QStringLiteral("send"), p,
-               [this, pendingId, key, text, textStyles, files, quote, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
+               [this, pendingId, key, text, textStyles, files, quote, viewOnce, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
         QDir(stageDir).removeRecursively();
         auto pendingIt = m_pendingSends.find(pendingId);
         if (pendingIt == m_pendingSends.end()) return;
@@ -3580,6 +3678,7 @@ void MainWindow::sendMessage()
                     d.cursor = text.size();
                     d.files = files;
                     d.reply = quote;
+                    d.viewOnce = viewOnce;
                 }
                 if (d.text.isEmpty() && d.files.isEmpty() && !d.reply.valid) m_drafts.remove(key);
                 return;
@@ -3588,6 +3687,7 @@ void MainWindow::sendMessage()
             if (draftWasEmpty) m_input->setText(text); // don't overwrite a newer draft
             if (draftWasEmpty && m_pendingFiles.isEmpty() && !files.isEmpty()) {
                 m_pendingFiles = files;
+                if (m_viewOnceBtn) m_viewOnceBtn->setChecked(viewOnce);
                 updateAttachBar();
             }
             if (draftWasEmpty && !m_replyQuote.valid && quote.valid) {
@@ -3787,6 +3887,7 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
     const int mi = findMessage(c, ts, QStringList{author});
     if (mi < 0) return;
     const Message &m = c.msgs[mi];
+    if (m.viewOnce) return; // fetching a thumbnail would consume/cache one-time media prematurely
 
     for (int a = 0; a < m.attachments.size(); ++a) {
         const Attachment &att = m.attachments[a];
@@ -3919,14 +4020,82 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
 
 static bool isRiskyFile(const QString &name) { return AttachmentUtil::isRiskyFileName(name); }
 
+void MainWindow::consumeViewOnce(const QString &key, qint64 timestamp, const QString &author, bool expired)
+{
+    auto conversation = m_convs.find(key);
+    if (conversation == m_convs.end()) return;
+    const int index = findMessage(conversation.value(), timestamp, QStringList{author});
+    if (index < 0) return;
+    Message &message = conversation->msgs[index];
+    if (!message.viewOnce || message.viewOnceViewed || message.viewOnceExpired) return;
+
+    // Remove signal-cli's downloaded copy as best-effort, then persist only the consumed state.
+    for (const Attachment &attachment : std::as_const(message.attachments)) {
+        if (!attachment.path.isEmpty()) QFile::remove(attachment.path);
+    }
+    message.viewOnceViewed = !expired;
+    message.viewOnceExpired = expired;
+    message.attachments.clear();
+    message.text.clear();
+    message.textStyles.clear();
+    message.quote = Quote();
+    persist(Records::viewOnceUpdate(key, message));
+
+    if (!expired) {
+        QJsonObject receipt{{QStringLiteral("recipient"), author},
+                            {QStringLiteral("targetTimestamps"), QJsonArray{QJsonValue(static_cast<qint64>(timestamp))}},
+                            {QStringLiteral("type"), QStringLiteral("viewed")}};
+        m_cli.call(QStringLiteral("sendReceipt"), receipt, [this](const QJsonValue &, const QString &err) {
+            if (!err.isEmpty()) qWarning() << "Could not send View Once viewed receipt:" << err;
+        });
+    }
+    if (m_current == key) showConversation(true);
+    refreshList();
+}
+
 void MainWindow::openAttachment(int msgIdx, int attIdx)
 {
     if (!m_convs.contains(m_current)) return;
     const Conversation &c = m_convs[m_current];
     if (msgIdx < 0 || msgIdx >= c.msgs.size() || attIdx < 0 || attIdx >= c.msgs[msgIdx].attachments.size()) return;
-    const Attachment att = c.msgs[msgIdx].attachments[attIdx];
-    const QString viewerName = AttachmentUtil::displayFileName(att, c.msgs[msgIdx].time);
+    const Message selectedMessage = c.msgs[msgIdx];
+    const Attachment att = selectedMessage.attachments[attIdx];
+    const QString viewerName = selectedMessage.viewOnce ? tr("View Once photo")
+                                                        : AttachmentUtil::displayFileName(att, selectedMessage.time);
     const QString key = m_current;
+
+    if (selectedMessage.viewOnce) {
+        if (selectedMessage.outgoing || selectedMessage.viewOnceViewed || selectedMessage.viewOnceExpired || attIdx != 0)
+            return;
+        const QString author = effectiveAuthor(c, selectedMessage);
+        const qint64 timestamp = selectedMessage.ts();
+        const QString token = QStringLiteral("%1|%2|%3").arg(key).arg(timestamp).arg(author);
+        if (m_viewOnceOpening.contains(token)) return;
+        m_viewOnceOpening.insert(token);
+        statusBar()->showMessage(tr("Opening View Once photo …"));
+        fetchAttachmentData(key, att, [this, key, author, timestamp, token, viewerName, att]
+                            (const QByteArray &data, const QString &error) {
+            m_viewOnceOpening.remove(token);
+            if (m_current != key || !m_convs.contains(key)) return;
+            statusBar()->clearMessage();
+            if (!error.isEmpty() || data.isEmpty() || QImage::fromData(data).isNull()) {
+                statusBar()->showMessage(error.isEmpty() ? tr("The View Once photo could not be displayed.") : error, 8000);
+                return;
+            }
+            auto *viewer = new ImageViewer(data, viewerName, this, false);
+            if (!viewer->isValid()) {
+                delete viewer;
+                statusBar()->showMessage(tr("The View Once photo could not be displayed."), 8000);
+                return;
+            }
+            viewer->setAttribute(Qt::WA_DeleteOnClose);
+            consumeViewOnce(key, timestamp, author, false);
+            viewer->show();
+            viewer->raise();
+            viewer->activateWindow();
+        });
+        return;
+    }
 
     if (att.isAudio()) {
         toggleAudioAttachment(msgIdx, attIdx);
@@ -4120,6 +4289,7 @@ void MainWindow::saveAttachment(int msgIdx, int attIdx)
     if (!m_convs.contains(m_current)) return;
     const Conversation &c = m_convs[m_current];
     if (msgIdx < 0 || msgIdx >= c.msgs.size() || attIdx < 0 || attIdx >= c.msgs[msgIdx].attachments.size()) return;
+    if (c.msgs[msgIdx].viewOnce) return;
     const Attachment att = c.msgs[msgIdx].attachments[attIdx];
     const QString suggestedName = AttachmentUtil::displayFileName(att, c.msgs[msgIdx].time);
 
@@ -4268,9 +4438,10 @@ void MainWindow::alertIncoming(const QString &key, const Message &m)
 
     // Notification and sound are independent switches.
     if (m_notify.notifications) {
-        QString preview = m.text.simplified();
+        QString preview = m.viewOnce ? (m.viewOnceExpired ? tr("[View Once expired]") : tr("[View Once photo]"))
+                                     : m.text.simplified();
         if (preview.size() > 240) preview = preview.left(240) + QStringLiteral("…");
-        if (preview.isEmpty() && !m.attachments.isEmpty()) {
+        if (!m.viewOnce && preview.isEmpty() && !m.attachments.isEmpty()) {
             const Attachment &a = m.attachments.first();
             preview = a.isImage() ? tr("[Image]") : tr("[File] %1").arg(a.filename);
         }

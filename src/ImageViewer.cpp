@@ -51,7 +51,7 @@ private:
 };
 } // namespace
 
-ImageViewer::ImageViewer(const QByteArray &data, const QString &filename, QWidget *parent)
+ImageViewer::ImageViewer(const QByteArray &data, const QString &filename, QWidget *parent, bool allowSave)
     : QDialog(parent), m_data(data), m_filename(filename)
 {
     setWindowTitle(filename.isEmpty() ? tr("Image") : filename);
@@ -77,7 +77,8 @@ ImageViewer::ImageViewer(const QByteArray &data, const QString &filename, QWidge
     lay->addWidget(scroll, 1);
 
     auto *box = new QDialogButtonBox(QDialogButtonBox::Close);
-    auto *save = box->addButton(tr("Save as …"), QDialogButtonBox::ActionRole);
+    QPushButton *save = nullptr;
+    if (allowSave) save = box->addButton(tr("Save as …"), QDialogButtonBox::ActionRole);
     lay->addWidget(box);
     connect(box, &QDialogButtonBox::rejected, this, &QDialog::accept);
     auto saveAs = [this] {
@@ -91,21 +92,25 @@ ImageViewer::ImageViewer(const QByteArray &data, const QString &filename, QWidge
         f.close();
         emit saved(path);
     };
-    connect(save, &QPushButton::clicked, this, saveAs);
+    if (save) connect(save, &QPushButton::clicked, this, saveAs);
 
-    // Right-click menu on the image, and Ctrl+C, to copy the full-size image.
-    auto copyImage = [img] {
-        if (!img.isNull()) QGuiApplication::clipboard()->setImage(img);
-    };
-    label->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(label, &QWidget::customContextMenuRequested, this,
-            [this, label, copyImage, saveAs](const QPoint &pos) {
-        QMenu menu(this);
-        QAction *copy = menu.addAction(tr("Copy image"), copyImage);
-        copy->setEnabled(m_valid);
-        menu.addAction(tr("Save as …"), saveAs);
-        menu.exec(label->mapToGlobal(pos));
-    });
-    new QShortcut(QKeySequence::Copy, this, copyImage);
+    // View Once disables ordinary copy/save affordances in the viewer.
+    if (allowSave) {
+        auto copyImage = [img] {
+            if (!img.isNull()) QGuiApplication::clipboard()->setImage(img);
+        };
+        label->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(label, &QWidget::customContextMenuRequested, this,
+                [this, label, copyImage, saveAs](const QPoint &pos) {
+            QMenu menu(this);
+            QAction *copy = menu.addAction(tr("Copy image"), copyImage);
+            copy->setEnabled(m_valid);
+            menu.addAction(tr("Save as …"), saveAs);
+            menu.exec(label->mapToGlobal(pos));
+        });
+        new QShortcut(QKeySequence::Copy, this, copyImage);
+    } else {
+        label->setContextMenuPolicy(Qt::NoContextMenu);
+    }
     resize(qMin(img.width() + 60, maxSize.width()), qMin(img.height() + 110, maxSize.height()));
 }

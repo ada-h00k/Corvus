@@ -331,6 +331,14 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(view_once_test tests/view_once_test.cpp)
+    target_link_libraries(view_once_test PRIVATE app_core Qt6::Test)
+    add_test(NAME view_once COMMAND view_once_test)
+    set_tests_properties(view_once PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(conversation_order_test tests/conversation_order_test.cpp)
     target_link_libraries(conversation_order_test PRIVATE app_core Qt6::Test)
     add_test(NAME conversation_order COMMAND conversation_order_test)

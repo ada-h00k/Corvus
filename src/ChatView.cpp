@@ -769,6 +769,13 @@ QString ChatView::plainText() const
     QStringList lines;
     for (const Message &m : m_msgs) {
         const QString who = m.outgoing ? tr("You") : (m.sender.isEmpty() ? nameOf(m.authorKey) : m.sender);
+        if (m.viewOnce) {
+            QString once = m.viewOnceExpired ? tr("View Once media expired")
+                           : m.viewOnceViewed ? tr("Viewed")
+                           : m.outgoing ? tr("View Once photo sent") : tr("View Once photo");
+            lines << (who + QStringLiteral(": ") + once);
+            continue;
+        }
         if (m.quote.valid) lines << QStringLiteral("> %1: %2").arg(nameOf(m.quote.authorKey), m.quote.text);
         for (const Attachment &a : m.attachments) {
             const QString n = a.filename.isEmpty() ? a.contentType : a.filename;
@@ -935,31 +942,39 @@ void ChatView::layoutItem(int i, int y)
         contentW = qMax(contentW, qMin(innerMax, qMax(quoteAuthW, br.width()) + 16));
     }
     QList<QSize> attSizes;
-    for (int a = 0; a < m.attachments.size(); ++a) {
-        const Attachment &att = m.attachments[a];
-        QSize sz;
-        const QSize imageSize = it.attachmentImageSizes[a];
-        if (att.isImage() && !att.thumb.isEmpty() && imageSize.width() > 0 && imageSize.height() > 0) {
-            const int maxDim = att.isSticker() ? 180 : kMaxImage;
-            const int maxHeight = att.isSticker() ? 180 : 360;
-            int pw = qMin(qMin(maxDim, innerMax), imageSize.width());
-            int ph = imageSize.height() * pw / qMax(1, imageSize.width());
-            if (ph > maxHeight) {
-                pw = pw * maxHeight / ph;
-                ph = maxHeight;
+    if (m.viewOnce) {
+        const QString label = (m.viewOnceViewed || m.viewOnceExpired)
+                                  ? (m.viewOnceExpired ? tr("View Once media expired") : tr("Viewed"))
+                                  : (m.outgoing ? tr("View Once photo sent") : tr("View Once photo · Tap to view"));
+        attSizes << QSize(qMin(innerMax, qMax(210, fmb.horizontalAdvance(label) + 58)), 54);
+        contentW = qMax(contentW, attSizes.last().width());
+    } else {
+        for (int a = 0; a < m.attachments.size(); ++a) {
+            const Attachment &att = m.attachments[a];
+            QSize sz;
+            const QSize imageSize = it.attachmentImageSizes[a];
+            if (att.isImage() && !att.thumb.isEmpty() && imageSize.width() > 0 && imageSize.height() > 0) {
+                const int maxDim = att.isSticker() ? 180 : kMaxImage;
+                const int maxHeight = att.isSticker() ? 180 : 360;
+                int pw = qMin(qMin(maxDim, innerMax), imageSize.width());
+                int ph = imageSize.height() * pw / qMax(1, imageSize.width());
+                if (ph > maxHeight) {
+                    pw = pw * maxHeight / ph;
+                    ph = maxHeight;
+                }
+                sz = QSize(qMax(att.isSticker() ? 1 : 40, pw), qMax(att.isSticker() ? 1 : 30, ph));
+            } else if (att.isVideo()) {
+                const int width = qMin(320, innerMax);
+                sz = QSize(width, qMax(76, width * 9 / 16));
+            } else {
+                const QString name = att.filename.isEmpty() ? att.contentType : att.filename;
+                const int tw = qMax(fm.horizontalAdvance(fm.elidedText(name, Qt::ElideMiddle, innerMax - 44)),
+                                    fms.horizontalAdvance(AttachmentUtil::humanSize(att.size)));
+                sz = QSize(qMin(innerMax, qMax(170, tw + (att.isAudio() ? 64 : 44))), att.isAudio() ? 56 : 40);
             }
-            sz = QSize(qMax(att.isSticker() ? 1 : 40, pw), qMax(att.isSticker() ? 1 : 30, ph));
-        } else if (att.isVideo()) {
-            const int width = qMin(320, innerMax);
-            sz = QSize(width, qMax(76, width * 9 / 16));
-        } else {
-            const QString name = att.filename.isEmpty() ? att.contentType : att.filename;
-            const int tw = qMax(fm.horizontalAdvance(fm.elidedText(name, Qt::ElideMiddle, innerMax - 44)),
-                                fms.horizontalAdvance(AttachmentUtil::humanSize(att.size)));
-            sz = QSize(qMin(innerMax, qMax(170, tw + (att.isAudio() ? 64 : 44))), att.isAudio() ? 56 : 40);
+            attSizes << sz;
+            contentW = qMax(contentW, sz.width());
         }
-        attSizes << sz;
-        contentW = qMax(contentW, sz.width());
     }
     QSize textSz;
     if (it.doc) {
@@ -1169,7 +1184,25 @@ void ChatView::paintItem(QPainter &p, int i)
         }
     }
 
-    for (int a = 0; a < m.attachments.size() && a < it.attRects.size(); ++a) {
+    if (m.viewOnce && !it.attRects.isEmpty()) {
+        const QRect rc = it.attRects.first();
+        QPainterPath oncePath;
+        oncePath.addRoundedRect(QRectF(rc), 10, 10);
+        p.fillPath(oncePath, alpha(fg, 30));
+        p.setPen(fg);
+        QFont iconFont = base;
+        iconFont.setBold(true);
+        p.setFont(iconFont);
+        p.drawText(QRect(rc.left() + 10, rc.top(), 38, rc.height()), Qt::AlignCenter, QStringLiteral("1×"));
+        p.setFont(smallBold);
+        QString onceLabel;
+        if (m.viewOnceExpired) onceLabel = tr("View Once media expired");
+        else if (m.viewOnceViewed) onceLabel = tr("Viewed");
+        else if (m.outgoing) onceLabel = tr("View Once photo sent");
+        else onceLabel = tr("View Once photo · Tap to view");
+        p.drawText(QRect(rc.left() + 48, rc.top() + 3, rc.width() - 56, rc.height() - 6),
+                   Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(smallBold).elidedText(onceLabel, Qt::ElideRight, rc.width() - 56));
+    } else for (int a = 0; a < m.attachments.size() && a < it.attRects.size(); ++a) {
         const QRect rc = it.attRects[a];
         const Attachment &att = m.attachments[a];
         if (att.isVideo() && m_videoSink && m_videoMessageTs == m.ts() && m_videoAttachment == a) {
@@ -1351,12 +1384,21 @@ ChatView::Hit ChatView::hitTest(const QPoint &vp) const
         h.kind = Hit::Quote;
         return h;
     }
-    for (int a = 0; a < it.attRects.size(); ++a)
-        if (it.attRects[a].contains(p)) {
+    if (m_msgs[i].viewOnce) {
+        if (!m_msgs[i].outgoing && !m_msgs[i].viewOnceViewed && !m_msgs[i].viewOnceExpired &&
+            !it.attRects.isEmpty() && it.attRects.first().contains(p)) {
             h.kind = Hit::Attachment;
-            h.index = a;
+            h.index = 0;
             return h;
         }
+    } else {
+        for (int a = 0; a < it.attRects.size(); ++a)
+            if (it.attRects[a].contains(p)) {
+                h.kind = Hit::Attachment;
+                h.index = a;
+                return h;
+            }
+    }
     if (it.doc && it.textRect.adjusted(0, 0, 0, 2).contains(p)) {
         const QPointF local = QPointF(p - it.textRect.topLeft());
         h.textPos = it.doc->documentLayout()->hitTest(local, Qt::FuzzyHit);
@@ -1532,6 +1574,11 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
     const Message m = m_msgs[idx];
     if (!menu.isEmpty()) menu.addSeparator();
     if (m.deleted) { // placeholder: only removing it from this device is left
+        menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });
+        menu.exec(e->globalPos());
+        return;
+    }
+    if (m.viewOnce) {
         menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });
         menu.exec(e->globalPos());
         return;

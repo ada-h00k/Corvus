@@ -84,13 +84,25 @@ QJsonObject message(const QString &conv, const Message &m)
         d["ex"] = m.expiresInSeconds;
         d["es"] = QJsonValue(static_cast<qint64>(m.expirationStartMs));
     }
+    if (m.viewOnce) {
+        d["vo"] = true;
+        if (m.viewOnceViewed) d["vv"] = true;
+        if (m.viewOnceExpired) d["ve"] = true;
+    }
     if (m.quote.valid && !m.deleted) {
         d["q"] = QJsonObject{{"id", QJsonValue(static_cast<qint64>(m.quote.id))},
                              {"a", m.quote.authorKey},
                              {"t", m.quote.text},
                              {"n", m.quote.attachmentNote}};
     }
-    if (!m.attachments.isEmpty() && !m.deleted) d["at"] = attachmentsToJson(m.attachments);
+    // Never retain sent or consumed View Once media in local history. For an incoming
+    // unopened item only the opaque signal-cli attachment reference is persisted.
+    const bool keepViewOnceRef = !m.viewOnce || (!m.outgoing && !m.viewOnceViewed && !m.viewOnceExpired);
+    if (!m.attachments.isEmpty() && !m.deleted && keepViewOnceRef) {
+        QList<Attachment> safeAttachments = m.attachments;
+        if (m.viewOnce) for (Attachment &a : safeAttachments) { a.thumb.clear(); a.path.clear(); }
+        d["at"] = attachmentsToJson(safeAttachments);
+    }
     if (!m.textStyles.isEmpty() && !m.deleted) d["st"] = textStylesToJson(m.textStyles);
 
     QJsonObject rec{{"t", "m"},
@@ -157,11 +169,15 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.expiresInSeconds = d["ex"].toInt();
         m.expirationStartMs = d["es"].toVariant().toLongLong();
     }
+    if (d.contains("vo")) m.viewOnce = d["vo"].toBool();
+    if (d.contains("vv")) m.viewOnceViewed = d["vv"].toBool();
+    if (d.contains("ve")) m.viewOnceExpired = d["ve"].toBool();
     if (d.contains("st")) m.textStyles = textStylesFromJson(d["st"].toArray());
     if (d.contains("at")) {
         m.attachments.clear();
         for (const QJsonValue &v : d["at"].toArray()) m.attachments.append(attachmentFromJson(v.toObject()));
     }
+    if (m.viewOnce && (m.viewOnceViewed || m.viewOnceExpired)) m.attachments.clear();
     if (d["dl"].toBool()) { // last: wins over anything else in the same record
         m.deleted = true;
         m.text.clear();
@@ -169,6 +185,9 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.attachments.clear();
         m.quote = Quote();
         m.reactions.clear();
+        m.viewOnce = false;
+        m.viewOnceViewed = false;
+        m.viewOnceExpired = false;
     }
 }
 
@@ -191,6 +210,16 @@ QJsonObject attachmentsUpdate(const QString &conv, const Message &m)
             {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
             {"au", m.authorKey},
             {"d", QJsonObject{{"at", attachmentsToJson(m.attachments)}}}};
+}
+
+QJsonObject viewOnceUpdate(const QString &conv, const Message &m)
+{
+    QJsonObject d{{"vv", m.viewOnceViewed}, {"ve", m.viewOnceExpired}, {"at", QJsonArray{}}};
+    return {{"t", "u"},
+            {"c", conv},
+            {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
+            {"au", m.authorKey},
+            {"d", d}};
 }
 
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji)

@@ -490,8 +490,16 @@ for line in sys.stdin:
             continue
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}
+        # View Once has a local 45-day expiry. Give this specific send a current timestamp
+        # so the feature test doesn't immediately age out the item using the mock's legacy time.
+        if p.get("viewOnce"):
+            res["timestamp"] = int(time.time() * 1000)
         if "editTimestamp" in p:  # an edit gets a newer timestamp than the revision it edits
             res["timestamp"] = int(p["editTimestamp"]) + 1000
+    elif m == "sendReceipt":
+        # Read/viewed receipts share the same JSON-RPC method; accept them so UI tests can
+        # assert the exact targetTimestamps + type payload without generating mock errors.
+        res = {}
     elif m == "sendReaction":
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}

@@ -250,6 +250,7 @@ private:
     void loadAnimatedAttachment(int messageIndex, int attachmentIndex);
     void fetchAttachmentData(const QString &key, const Attachment &att,
                              std::function<void(const QByteArray &, const QString &)> cb);
+    void consumeViewOnce(const QString &key, qint64 timestamp, const QString &author, bool expired = false);
     void openAttachment(int msgIdx, int attIdx);
     void toggleAudioAttachment(int msgIdx, int attIdx);
     void updateAudioPlaybackView();
@@ -332,6 +333,7 @@ private:
         Quote reply;
         QStringList files;
         QUrl gifAnalyticsUrl;
+        bool viewOnce = false;
     };
     QHash<QString, Draft> m_drafts; // conversation key -> unsent composer state
 
@@ -345,6 +347,7 @@ private:
     QStringList m_pendingFiles;
     QSet<QString> m_thumbPending;
     QSet<QString> m_gifPending;
+    QSet<QString> m_viewOnceOpening;
     QHash<QString, QPixmap> m_avatars;   // conversation key -> circular avatar (64 px)
     QSet<QString> m_avatarTried;         // already requested since the last (re)connect
     int m_avatarInFlight = 0;
@@ -381,6 +384,7 @@ private:
     QLabel *m_attachThumb;
     QPointer<MessageInput> m_input;
     QToolButton *m_attachBtn;
+    QToolButton *m_viewOnceBtn = nullptr;
     QToolButton *m_emojiBtn;
     QPointer<QToolButton> m_expandInputBtn;
     QPushButton *m_sendBtn;

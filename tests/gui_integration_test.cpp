@@ -344,6 +344,14 @@ static QJsonObject lastCall(const QString &log, const QString &method)
     return last;
 }
 
+static int countCalls(const QString &log, const QString &method)
+{
+    int count = 0;
+    for (const QJsonObject &o : readLog(log))
+        if (o["method"].toString() == method) ++count;
+    return count;
+}
+
 // Settings → "Configure Corvus …" opens the settings window; the Profile page lives in it.
 static QAction *settingsAction(MainWindow &window)
 {
@@ -1304,7 +1312,71 @@ int main(int argc, char **argv)
         CHECK(listHas(list, "Bobby"));
 
         CHECK(startConversation(w, QStringLiteral("alice.1234")));
-                CHECK(listHas(list, "alice.1234"));
+        CHECK(listHas(list, "alice.1234"));
+
+        // --- View Once: send one image with the protocol flag, then receive and open one.
+        // Run this after the other Alice assertions so it does not change their fixture counts.
+        selectItem(list, "Alice");
+        CHECK(waitFor([&] { return view->messageCount() == 6; }));
+        // Disable the five-minute timer configured above so the mock CLI's intentionally old
+        // send timestamps cannot immediately expire this View Once regression fixture.
+        CHECK(chooseChatExpiration(w, list, "Alice", 0));
+        CHECK(waitFor([&] { return lastCall(logFile, "updateContact")["params"].toObject()["expiration"].toInt() == 0; }));
+        QToolButton *viewOnceButton = nullptr;
+        for (QToolButton *button : w.findChildren<QToolButton *>())
+            if (button->text() == QStringLiteral("1×")) { viewOnceButton = button; break; }
+        CHECK(viewOnceButton != nullptr);
+        CHECK(viewOnceButton && !viewOnceButton->isVisible());
+        const int sendsBeforeViewOnce = countCalls(logFile, "send");
+        w.addPendingFiles({imgPath});
+        CHECK(waitFor([&] { return viewOnceButton && viewOnceButton->isVisible() && viewOnceButton->isEnabled(); }));
+        if (viewOnceButton && viewOnceButton->isEnabled()) viewOnceButton->click();
+        CHECK(viewOnceButton && viewOnceButton->isChecked());
+        input->setText(QStringLiteral("caption should disable View Once"));
+        CHECK(viewOnceButton && !viewOnceButton->isChecked());
+        CHECK(viewOnceButton && !viewOnceButton->isEnabled());
+        input->clear();
+        CHECK(waitFor([&] { return viewOnceButton && viewOnceButton->isEnabled(); }));
+        if (viewOnceButton && viewOnceButton->isEnabled()) viewOnceButton->click();
+        CHECK(viewOnceButton && viewOnceButton->isChecked());
+        QTest::keyClick(input, Qt::Key_Return);
+        CHECK(waitFor([&] {
+            const QJsonObject call = findCall(logFile, "send", sendsBeforeViewOnce);
+            return !call.isEmpty() && call["params"].toObject()["viewOnce"].toBool();
+        }));
+        CHECK(waitFor([&] { return viewOnceButton && !viewOnceButton->isVisible(); }));
+        const QJsonObject viewOnceSend = findCall(logFile, "send", sendsBeforeViewOnce)["params"].toObject();
+        CHECK(viewOnceSend["viewOnce"].toBool());
+        CHECK(viewOnceSend["message"].toString().isEmpty());
+        CHECK(viewOnceSend["quoteTimestamp"].isUndefined());
+        CHECK(waitFor([&] { return view->messageCount() == 7 && html(view).contains("View Once photo sent"); }));
+
+        const qint64 oneTimeTs = QDateTime::currentMSecsSinceEpoch();
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+            {"timestamp", oneTimeTs},
+            {"dataMessage", QJsonObject{{"timestamp", oneTimeTs}, {"message", "should not be shown"},
+                                         {"viewOnce", true}, {"attachments", QJsonArray{
+                QJsonObject{{"id", "view-once-photo"}, {"contentType", "image/png"},
+                            {"filename", "one-time.png"}, {"size", 128}}}}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 8 && html(view).contains("View Once photo"); }));
+        CHECK(!html(view).contains("should not be shown"));
+        CHECK(!loggedAttachmentFetch(logFile, QStringLiteral("view-once-photo"))); // never thumbnail-prefetched
+        view->scrollToMessage(7);
+        const QRect oneTimeRect = view->attachmentRect(7, 0);
+        CHECK(!oneTimeRect.isEmpty());
+        if (!oneTimeRect.isEmpty())
+            QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, oneTimeRect.center());
+        CHECK(waitFor([&] { return loggedAttachmentFetch(logFile, QStringLiteral("view-once-photo")); }));
+        CHECK(waitFor([&] { return html(view).contains("Viewed"); }));
+        const QJsonObject receipt = lastCall(logFile, "sendReceipt");
+        const QJsonObject receiptParams = receipt["params"].toObject();
+        CHECK(receiptParams["recipient"].toString() == QStringLiteral("+49111"));
+        CHECK(receiptParams["type"].toString() == QStringLiteral("viewed"));
+        CHECK(receiptParams["targetTimestamps"].toArray().size() == 1);
+        CHECK(receiptParams["targetTimestamps"].toArray().first().toVariant().toLongLong() == oneTimeTs);
+        for (QWidget *top : QApplication::topLevelWidgets())
+            if (auto *viewer = qobject_cast<ImageViewer *>(top)) viewer->close();
 
         CHECK(g_unexpectedBox.isEmpty());
         w.close();
@@ -1323,7 +1395,7 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return listHas(list, "Bobby"); }));
         CHECK(waitFor([&] { return w.findChild<QLabel *>() != nullptr; }));
         selectItem(list, "Alice");
-        CHECK(waitFor([&] { return view->messageCount() == 6; })); // incl. Alice's animated sticker
+        CHECK(waitFor([&] { return view->messageCount() == 8; })); // incl. Alice's animated sticker + View Once pair
         const QString h = html(view);
         CHECK(h.contains("look at this"));
         CHECK(h.contains("earlier question"));
@@ -1331,6 +1403,9 @@ int main(int argc, char **argv)
         CHECK(h.contains("sent from phone"));
         CHECK(h.contains("[file: voice.wav]"));
         CHECK(h.contains("[image: animated.gif]"));
+        CHECK(h.contains("View Once photo sent"));
+        CHECK(h.contains("Viewed"));
+        CHECK(!h.contains("should not be shown"));
         CHECK(!h.contains("delete only here"));
         CHECK(!h.contains("delete for everyone"));
         CHECK(h.contains("❤"));
