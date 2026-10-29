@@ -6,6 +6,7 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+#include <QUrl>
 
 struct Attachment {
     QString id;          // signal-cli attachment id (for getAttachment)
@@ -75,6 +76,25 @@ struct TextStyleRange {
     QString style;       // BOLD, ITALIC, STRIKETHROUGH, MONOSPACE or SPOILER
 };
 
+struct LinkPreview {
+    QString url;             // HTTPS URL represented by the preview
+    QString title;
+    QString description;
+    QString imageId;          // signal-cli attachment id for an incoming preview image
+    QString imageContentType;
+    QString imageFilename;
+    qint64 imageSize = 0;
+    QString imagePath;        // transient local file used by signal-cli when sending
+    QByteArray imageThumb;    // small image cached in the encrypted chat history
+
+    bool isValid() const
+    {
+        const QUrl parsed(url, QUrl::StrictMode);
+        return parsed.isValid() && parsed.scheme().compare(QLatin1String("https"), Qt::CaseInsensitive) == 0 &&
+               !parsed.host().isEmpty() && !title.trimmed().isEmpty();
+    }
+};
+
 struct Message {
     QDateTime time;
     // Local timeline order is independent from Signal's sender timestamp (`time`). A sender's
@@ -87,6 +107,7 @@ struct Message {
     bool outgoing = false;
     QString authorKey;    // number/UUID of the author (own number for outgoing)
     Quote quote;
+    LinkPreview linkPreview;
     QList<Attachment> attachments;
     QHash<QString, QString> reactions; // reactor key -> emoji
 

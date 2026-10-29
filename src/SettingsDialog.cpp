@@ -67,11 +67,15 @@ GeneralPage::GeneralPage(const Appearance &ap, const NotificationSettings &ns, b
     m_alwaysShowSend->setObjectName(QStringLiteral("alwaysShowSend"));
     m_alwaysShowSend->setToolTip(
         tr("Show the Send button next to the message field, not only when the field is expanded"));
+    m_generateLinkPreviews = new QCheckBox(tr("Generate link previews"));
+    m_generateLinkPreviews->setObjectName(QStringLiteral("generateLinkPreviews"));
+    m_generateLinkPreviews->setToolTip(tr("Fetch metadata only for HTTPS links and attach a preview when sending a message"));
     il->addWidget(m_alwaysShowSend);
+    il->addWidget(m_generateLinkPreviews);
     lay->addWidget(inputBox);
     lay->addStretch(1);
 
-    for (QCheckBox *c : {m_tray, m_closeToTray, m_startMinimizedInTray, m_showAvatars, m_sortAlphabetically, m_alwaysShowSend})
+    for (QCheckBox *c : {m_tray, m_closeToTray, m_startMinimizedInTray, m_showAvatars, m_sortAlphabetically, m_alwaysShowSend, m_generateLinkPreviews})
         connect(c, &QCheckBox::toggled, this, [this] {
             refreshEnabled();
             emit changed();
@@ -82,13 +86,14 @@ GeneralPage::GeneralPage(const Appearance &ap, const NotificationSettings &ns, b
 void GeneralPage::load(const Appearance &ap, const NotificationSettings &ns)
 {
     const QSignalBlocker b1(m_tray), b2(m_closeToTray), b3(m_startMinimizedInTray), b4(m_showAvatars),
-        b5(m_sortAlphabetically), b6(m_alwaysShowSend);
+        b5(m_sortAlphabetically), b6(m_alwaysShowSend), b7(m_generateLinkPreviews);
     m_tray->setChecked(ns.trayIcon);
     m_closeToTray->setChecked(ns.closeToTray);
     m_startMinimizedInTray->setChecked(ns.startMinimizedInTray);
     m_showAvatars->setChecked(ap.showAvatars);
     m_sortAlphabetically->setChecked(ap.sortAlphabetically);
     m_alwaysShowSend->setChecked(ap.alwaysShowSend);
+    m_generateLinkPreviews->setChecked(ap.generateLinkPreviews);
     refreshEnabled();
 }
 
@@ -104,6 +109,7 @@ void GeneralPage::applyTo(Appearance &ap) const
     ap.showAvatars = m_showAvatars->isChecked();
     ap.sortAlphabetically = m_sortAlphabetically->isChecked();
     ap.alwaysShowSend = m_alwaysShowSend->isChecked();
+    ap.generateLinkPreviews = m_generateLinkPreviews->isChecked();
 }
 
 void GeneralPage::applyTo(NotificationSettings &ns) const

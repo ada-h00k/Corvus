@@ -103,6 +103,8 @@ private:
         // content (built once)
         std::shared_ptr<QTextDocument> doc;
         QList<QPixmap> pix;
+        QPixmap linkPreviewPixmap;
+        QString linkPreviewTitle, linkPreviewDescription, linkPreviewHost;
         QList<QMovie *> movies;
         QList<ApngMovie *> apngMovies; // Signal's animated stickers are APNG, which QMovie cannot play
         mutable QList<bool> animationRequested;
@@ -113,6 +115,7 @@ private:
         // layout (item-local coordinates, valid for m_layoutWidth)
         int y = 0, height = 0;
         QRect dateRect, bubble, senderRect, quoteBox, quoteAuthorRect, quoteTextRect, textRect, timeRect, pillsRect;
+        QRect linkPreviewRect, linkPreviewImageRect, linkPreviewTitleRect, linkPreviewDescriptionRect, linkPreviewHostRect;
         QList<QRect> attRects;
         QList<Pill> pills;
     };

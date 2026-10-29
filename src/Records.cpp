@@ -60,6 +60,35 @@ static QList<TextStyleRange> textStylesFromJson(const QJsonArray &arr)
     return styles;
 }
 
+static QJsonObject linkPreviewToJson(const LinkPreview &lp)
+{
+    QJsonObject o;
+    if (!lp.url.isEmpty()) o["u"] = lp.url;
+    if (!lp.title.isEmpty()) o["t"] = lp.title;
+    if (!lp.description.isEmpty()) o["d"] = lp.description;
+    if (!lp.imageId.isEmpty()) o["id"] = lp.imageId;
+    if (!lp.imageContentType.isEmpty()) o["ct"] = lp.imageContentType;
+    if (!lp.imageFilename.isEmpty()) o["fn"] = lp.imageFilename;
+    if (lp.imageSize > 0) o["sz"] = QJsonValue(static_cast<qint64>(lp.imageSize));
+    if (!lp.imageThumb.isEmpty()) o["th"] = QString::fromLatin1(lp.imageThumb.toBase64());
+    return o;
+}
+
+static LinkPreview linkPreviewFromJson(const QJsonObject &o)
+{
+    LinkPreview lp;
+    lp.url = o["u"].toString();
+    lp.title = o["t"].toString();
+    lp.description = o["d"].toString();
+    lp.imageId = o["id"].toString();
+    lp.imageContentType = o["ct"].toString();
+    lp.imageFilename = o["fn"].toString();
+    lp.imageSize = o["sz"].toVariant().toLongLong();
+    lp.imageThumb = QByteArray::fromBase64(o["th"].toString().toLatin1());
+    if (!lp.isValid()) return {};
+    return lp;
+}
+
 static QJsonArray attachmentsToJson(const QList<Attachment> &list)
 {
     QJsonArray arr;
@@ -84,6 +113,7 @@ QJsonObject message(const QString &conv, const Message &m)
         d["ex"] = m.expiresInSeconds;
         d["es"] = QJsonValue(static_cast<qint64>(m.expirationStartMs));
     }
+    if (m.linkPreview.isValid() && !m.deleted) d["lp"] = linkPreviewToJson(m.linkPreview);
     if (m.viewOnce) {
         d["vo"] = true;
         if (m.viewOnceViewed) d["vv"] = true;
@@ -125,7 +155,7 @@ QJsonObject edit(const QString &conv, const Message &m)
             {"c", conv},
             {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
             {"au", m.authorKey},
-            {"d", QJsonObject{{"ed", editToJson(m)}}}};
+            {"d", QJsonObject{{"ed", editToJson(m)}, {"lp", QJsonObject{}}}}};
 }
 
 QJsonObject deletion(const QString &conv, const Message &m)
@@ -169,6 +199,7 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.expiresInSeconds = d["ex"].toInt();
         m.expirationStartMs = d["es"].toVariant().toLongLong();
     }
+    if (d.contains("lp")) m.linkPreview = linkPreviewFromJson(d["lp"].toObject());
     if (d.contains("vo")) m.viewOnce = d["vo"].toBool();
     if (d.contains("vv")) m.viewOnceViewed = d["vv"].toBool();
     if (d.contains("ve")) m.viewOnceExpired = d["ve"].toBool();
@@ -184,6 +215,7 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.textStyles.clear();
         m.attachments.clear();
         m.quote = Quote();
+        m.linkPreview = LinkPreview();
         m.reactions.clear();
         m.viewOnce = false;
         m.viewOnceViewed = false;
@@ -210,6 +242,15 @@ QJsonObject attachmentsUpdate(const QString &conv, const Message &m)
             {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
             {"au", m.authorKey},
             {"d", QJsonObject{{"at", attachmentsToJson(m.attachments)}}}};
+}
+
+QJsonObject linkPreviewUpdate(const QString &conv, const Message &m)
+{
+    return {{"t", "u"},
+            {"c", conv},
+            {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
+            {"au", m.authorKey},
+            {"d", QJsonObject{{"lp", linkPreviewToJson(m.linkPreview)}}}};
 }
 
 QJsonObject viewOnceUpdate(const QString &conv, const Message &m)

@@ -36,6 +36,25 @@ static QList<Attachment> parseAttachments(const QJsonObject &dm)
     return list;
 }
 
+static LinkPreview parseLinkPreview(const QJsonObject &dm)
+{
+    const QJsonArray previews = dm["previews"].toArray();
+    for (const QJsonValue &value : previews) {
+        const QJsonObject o = value.toObject();
+        LinkPreview lp;
+        lp.url = o["url"].toString();
+        lp.title = o["title"].toString();
+        lp.description = o["description"].toString();
+        const QJsonObject image = o["image"].toObject();
+        lp.imageId = image["id"].toString();
+        lp.imageContentType = image["contentType"].toString();
+        lp.imageFilename = image["filename"].toString();
+        lp.imageSize = image["size"].toVariant().toLongLong();
+        if (lp.isValid()) return lp;
+    }
+    return {};
+}
+
 static Quote parseQuote(const QJsonObject &dm)
 {
     Quote q;
@@ -84,6 +103,7 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
     out.msg.text = dm["message"].toString();
     out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());
     out.msg.attachments = parseAttachments(dm);
+    out.msg.linkPreview = out.msg.viewOnce ? LinkPreview() : parseLinkPreview(dm);
     const QJsonObject sticker = dm["sticker"].toObject();
     if (!sticker.isEmpty()) {
         QString packId = sticker["packId"].toString();

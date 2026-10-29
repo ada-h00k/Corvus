@@ -19,6 +19,7 @@ QJsonObject edit(const QString &conv, const Message &m);
 QJsonObject deletion(const QString &conv, const Message &m);
 QJsonObject expirationUpdate(const QString &conv, const Message &m);
 QJsonObject attachmentsUpdate(const QString &conv, const Message &m);
+QJsonObject linkPreviewUpdate(const QString &conv, const Message &m);
 // Consumes a View Once media item (or expires it) and removes its attachment reference.
 QJsonObject viewOnceUpdate(const QString &conv, const Message &m);
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji);

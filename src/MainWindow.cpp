@@ -52,6 +52,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QHostAddress>
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -75,6 +76,7 @@
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QTextDocument>
 #include <QStyleHints>
 #include <QStyleOptionToolButton>
 #include <QSystemTrayIcon>
@@ -99,6 +101,92 @@ static bool isSpecialKey(const QString &key)
 }
 static const qint64 kMaxThumbSource = 30LL * 1024 * 1024;
 static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload limit
+
+
+static QString firstHttpsLink(const QString &text)
+{
+    static const QRegularExpression re(QStringLiteral(R"(https://[^\s<>"']+)"), QRegularExpression::CaseInsensitiveOption);
+    const auto match = re.match(text);
+    if (!match.hasMatch()) return {};
+    QString candidate = match.captured(0);
+    while (!candidate.isEmpty() && QStringLiteral(".,!?;:").contains(candidate.back())) candidate.chop(1);
+    // Strip only unmatched closing punctuation. Parentheses inside URLs are legal.
+    while (candidate.endsWith(QLatin1Char(')')) && candidate.count(QLatin1Char(')')) > candidate.count(QLatin1Char('('))) candidate.chop(1);
+    while (candidate.endsWith(QLatin1Char(']')) && candidate.count(QLatin1Char(']')) > candidate.count(QLatin1Char('['))) candidate.chop(1);
+    const QUrl url(candidate, QUrl::StrictMode);
+    if (!url.isValid() || url.scheme().compare(QLatin1String("https"), Qt::CaseInsensitive) != 0 || url.host().isEmpty())
+        return {};
+    // Keep the exact spelling of the URL from the message body. signal-cli requires
+    // previewUrl to also appear in the body; canonicalizing it can break that match.
+    return candidate;
+}
+
+static bool safeHttpsPreviewUrl(const QUrl &url)
+{
+    if (!url.isValid() || url.scheme().compare(QLatin1String("https"), Qt::CaseInsensitive) != 0 ||
+        url.host().isEmpty() || !url.userName().isEmpty() || !url.password().isEmpty()) return false;
+    const QString host = url.host().toLower();
+    if (host == QLatin1String("localhost") || host.endsWith(QLatin1String(".localhost")) ||
+        host.endsWith(QLatin1String(".local")) || host.endsWith(QLatin1String(".internal")) ||
+        host.endsWith(QLatin1String(".test")) || !host.contains(QLatin1Char('.'))) return false;
+    QHostAddress address;
+    if (address.setAddress(host)) return false; // never fetch an IP literal (local/private or otherwise)
+    return true;
+}
+
+static QString htmlUnescape(const QString &value)
+{
+    QTextDocument doc;
+    doc.setHtml(QStringLiteral("<div>%1</div>").arg(value));
+    return doc.toPlainText().simplified();
+}
+
+static QString htmlAttribute(const QString &tag, const QString &name)
+{
+    const QRegularExpression re(QStringLiteral("(?:^|\\s)%1\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+                                   .arg(QRegularExpression::escape(name)),
+                               QRegularExpression::CaseInsensitiveOption);
+    const auto m = re.match(tag);
+    if (!m.hasMatch()) return {};
+    for (int i = 1; i <= 3; ++i) if (!m.captured(i).isNull()) return htmlUnescape(m.captured(i));
+    return {};
+}
+
+static QString htmlMetaValue(const QByteArray &html, const QStringList &wantedNames)
+{
+    const QString source = QString::fromUtf8(html);
+    static const QRegularExpression tagRe(QStringLiteral("<meta\\b[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    auto it = tagRe.globalMatch(source);
+    while (it.hasNext()) {
+        const QString tag = it.next().captured(0);
+        const QString name = htmlAttribute(tag, QStringLiteral("property")).toLower();
+        const QString named = htmlAttribute(tag, QStringLiteral("name")).toLower();
+        if (wantedNames.contains(name) || wantedNames.contains(named)) {
+            const QString value = htmlAttribute(tag, QStringLiteral("content")).trimmed();
+            if (!value.isEmpty()) return value.left(1000);
+        }
+    }
+    return {};
+}
+
+static QString htmlTitleValue(const QByteArray &html)
+{
+    const QString source = QString::fromUtf8(html);
+    const QRegularExpression re(QStringLiteral("<title\\b[^>]*>(.*?)</title\\s*>"),
+                                QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    const auto m = re.match(source);
+    return m.hasMatch() ? htmlUnescape(m.captured(1)).left(240) : QString();
+}
+
+static QString previewImageSuffix(const QString &contentType)
+{
+    const QString ct = contentType.section(QLatin1Char(';'), 0, 0).trimmed().toLower();
+    if (ct == QLatin1String("image/jpeg") || ct == QLatin1String("image/jpg")) return QStringLiteral("jpg");
+    if (ct == QLatin1String("image/png")) return QStringLiteral("png");
+    if (ct == QLatin1String("image/webp")) return QStringLiteral("webp");
+    if (ct == QLatin1String("image/gif")) return QStringLiteral("gif");
+    return {};
+}
 
 static QJsonArray styleRangesToJson(const QList<TextStyleRange> &styles)
 {
@@ -307,6 +395,55 @@ MainWindow::MainWindow()
     m_attachThumb->setAlignment(Qt::AlignCenter);
     m_attachThumb->hide();
     static_cast<QHBoxLayout *>(m_attachBar->layout())->insertWidget(0, m_attachThumb);
+
+    m_linkPreviewBar = new QWidget;
+    m_linkPreviewBar->setObjectName(QStringLiteral("linkPreviewBar"));
+    auto *previewBarLayout = new QHBoxLayout(m_linkPreviewBar);
+    previewBarLayout->setContentsMargins(8, 6, 4, 6);
+    previewBarLayout->setSpacing(8);
+    m_linkPreviewImageLabel = new QLabel;
+    m_linkPreviewImageLabel->setFixedSize(64, 56);
+    m_linkPreviewImageLabel->setAlignment(Qt::AlignCenter);
+    previewBarLayout->addWidget(m_linkPreviewImageLabel);
+    auto *previewTextLayout = new QVBoxLayout;
+    previewTextLayout->setContentsMargins(0, 0, 0, 0);
+    previewTextLayout->setSpacing(1);
+    m_linkPreviewTitleLabel = new QLabel;
+    m_linkPreviewTitleLabel->setObjectName(QStringLiteral("linkPreviewTitle"));
+    m_linkPreviewTitleLabel->setTextFormat(Qt::PlainText);
+    m_linkPreviewTitleLabel->setStyleSheet(QStringLiteral("font-weight: 600;"));
+    m_linkPreviewTitleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_linkPreviewDescriptionLabel = new QLabel;
+    m_linkPreviewDescriptionLabel->setObjectName(QStringLiteral("linkPreviewDescription"));
+    m_linkPreviewDescriptionLabel->setTextFormat(Qt::PlainText);
+    m_linkPreviewDescriptionLabel->setWordWrap(true);
+    m_linkPreviewDescriptionLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_linkPreviewUrlLabel = new QLabel;
+    m_linkPreviewUrlLabel->setObjectName(QStringLiteral("linkPreviewUrl"));
+    m_linkPreviewUrlLabel->setTextFormat(Qt::PlainText);
+    m_linkPreviewUrlLabel->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
+    previewTextLayout->addWidget(m_linkPreviewTitleLabel);
+    previewTextLayout->addWidget(m_linkPreviewDescriptionLabel);
+    previewTextLayout->addWidget(m_linkPreviewUrlLabel);
+    previewBarLayout->addLayout(previewTextLayout, 1);
+    m_linkPreviewCloseButton = new QToolButton;
+    m_linkPreviewCloseButton->setText(QStringLiteral("✕"));
+    m_linkPreviewCloseButton->setToolTip(tr("Remove link preview"));
+    m_linkPreviewCloseButton->setAccessibleName(tr("Remove link preview"));
+    m_linkPreviewCloseButton->setAutoRaise(true);
+    previewBarLayout->addWidget(m_linkPreviewCloseButton, 0, Qt::AlignTop);
+    m_linkPreviewBar->hide();
+    v->addWidget(m_linkPreviewBar);
+    connect(m_linkPreviewCloseButton, &QToolButton::clicked, this, [this] {
+        m_dismissedPreviewUrl = m_draftLinkPreview.url.isEmpty() ? m_previewRequestedUrl : m_draftLinkPreview.url;
+        ++m_linkPreviewGeneration;
+        if (m_linkPreviewReply) { m_linkPreviewReply->abort(); m_linkPreviewReply = nullptr; }
+        if (m_linkPreviewImageReply) { m_linkPreviewImageReply->abort(); m_linkPreviewImageReply = nullptr; }
+        m_linkPreviewLoading = false;
+        m_draftLinkPreview = LinkPreview();
+        refreshLinkPreviewBar();
+        finishPendingLinkPreviewSend();
+    });
 
     auto *h = new QHBoxLayout;
     m_attachBtn = new QToolButton;
@@ -648,7 +785,7 @@ MainWindow::MainWindow()
         addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
     });
     connect(m_viewOnceBtn, &QToolButton::toggled, this, [this] { updateAttachBar(); });
-    connect(m_input, &QTextEdit::textChanged, this, [this] { updateAttachBar(); });
+    connect(m_input, &QTextEdit::textChanged, this, [this] { updateAttachBar(); updateDraftLinkPreview(); });
     connect(m_emojiBtn, &QToolButton::clicked, this, &MainWindow::showComposerPicker);
     connect(m_picker, &EmojiPicker::emojiSelected, this, [this](const QString &e) {
         if (m_pickAction) m_pickAction(e);
@@ -2353,6 +2490,7 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     m.text.clear();
     m.attachments.clear();
     m.quote = Quote();
+    m.linkPreview = LinkPreview();
     m.reactions.clear();
     // A remotely deleted View Once message must render as a deleted-message placeholder,
     // not as an unopened item that suggests the photo can still be viewed.
@@ -2385,6 +2523,8 @@ bool MainWindow::applyEdit(const QString &key, qint64 targetTs, const QStringLis
     if (newTs <= m.latestTs()) return false; // already applied / outdated revision
     m.text = text;
     m.textStyles = textStyles;
+    // The preview belongs to the old body; edits do not currently regenerate it.
+    m.linkPreview = LinkPreview();
     m.editTs = newTs;
     m.editCount++;
     persist(Records::edit(key, m));
@@ -3269,6 +3409,298 @@ void MainWindow::updateAttachBar()
     m_attachBar->show();
 }
 
+
+void MainWindow::refreshLinkPreviewBar()
+{
+    if (!m_linkPreviewBar) return;
+    if (!m_appearance.generateLinkPreviews || !m_draftLinkPreview.isValid() ||
+        m_draftLinkPreview.url == m_dismissedPreviewUrl) {
+        m_linkPreviewBar->hide();
+        return;
+    }
+    m_linkPreviewTitleLabel->setText(m_draftLinkPreview.title);
+    m_linkPreviewDescriptionLabel->setText(m_draftLinkPreview.description);
+    m_linkPreviewDescriptionLabel->setVisible(!m_draftLinkPreview.description.isEmpty());
+    m_linkPreviewUrlLabel->setText(QUrl(m_draftLinkPreview.url).host());
+    if (!m_draftLinkPreview.imageThumb.isEmpty()) {
+        const QImage img = QImage::fromData(m_draftLinkPreview.imageThumb);
+        m_linkPreviewImageLabel->setPixmap(img.isNull() ? QPixmap() : QPixmap::fromImage(
+            img.scaled(m_linkPreviewImageLabel->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation)));
+        m_linkPreviewImageLabel->setText(QString());
+    } else {
+        m_linkPreviewImageLabel->setPixmap(QPixmap());
+        m_linkPreviewImageLabel->setText(QStringLiteral("↗"));
+    }
+    m_linkPreviewBar->show();
+}
+
+void MainWindow::updateDraftLinkPreview()
+{
+    if (!m_input) return;
+    const QString rawText = m_input->text();
+    const QString url = firstHttpsLink(rawText);
+
+    if (m_sendAfterLinkPreview && rawText != m_pendingPreviewSendText) {
+        m_sendAfterLinkPreview = false;
+        m_pendingPreviewSendText.clear();
+    }
+
+    if (!m_appearance.generateLinkPreviews || !m_editKey.isEmpty() || url.isEmpty()) {
+        ++m_linkPreviewGeneration;
+        if (m_linkPreviewReply) { m_linkPreviewReply->abort(); m_linkPreviewReply = nullptr; }
+        if (m_linkPreviewImageReply) { m_linkPreviewImageReply->abort(); m_linkPreviewImageReply = nullptr; }
+        m_linkPreviewLoading = false;
+        m_previewRequestedUrl.clear();
+        m_previewRequestedText.clear();
+        m_draftLinkPreview = LinkPreview();
+        if (url.isEmpty()) m_dismissedPreviewUrl.clear();
+        refreshLinkPreviewBar();
+        if (m_sendAfterLinkPreview) finishPendingLinkPreviewSend();
+        return;
+    }
+
+    if (url != m_dismissedPreviewUrl && m_draftLinkPreview.isValid() && m_draftLinkPreview.url == url) {
+        refreshLinkPreviewBar();
+        return;
+    }
+    if (url == m_dismissedPreviewUrl) {
+        refreshLinkPreviewBar();
+        return;
+    }
+    if (url == m_previewRequestedUrl &&
+        (m_linkPreviewLoading || m_draftLinkPreview.isValid() || !m_previewRequestedText.isEmpty())) return;
+
+    ++m_linkPreviewGeneration;
+    if (m_linkPreviewReply) { m_linkPreviewReply->abort(); m_linkPreviewReply = nullptr; }
+    if (m_linkPreviewImageReply) { m_linkPreviewImageReply->abort(); m_linkPreviewImageReply = nullptr; }
+    m_draftLinkPreview = LinkPreview();
+    m_previewRequestedUrl = url;
+    m_previewRequestedText = rawText;
+    m_linkPreviewLoading = true;
+    refreshLinkPreviewBar();
+
+    const QUrl parsed(url, QUrl::StrictMode);
+    if (!safeHttpsPreviewUrl(parsed)) {
+        m_linkPreviewLoading = false;
+        finishPendingLinkPreviewSend();
+        return;
+    }
+    requestLinkPreviewPage(url, 0, m_linkPreviewGeneration);
+}
+
+void MainWindow::requestLinkPreviewPage(const QString &url, int redirects, quint64 generation)
+{
+    const QUrl parsed(url, QUrl::StrictMode);
+    if (generation != m_linkPreviewGeneration || !safeHttpsPreviewUrl(parsed)) {
+        if (generation == m_linkPreviewGeneration) {
+            m_linkPreviewLoading = false;
+            finishPendingLinkPreviewSend();
+        }
+        return;
+    }
+
+    QNetworkRequest request(parsed);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    request.setTransferTimeout(10000);
+    request.setRawHeader(QByteArrayLiteral("User-Agent"), QByteArrayLiteral("Corvus/0.2.0 (link preview)"));
+    request.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("text/html,application/xhtml+xml"));
+    QNetworkReply *reply = m_nam.get(request);
+    m_linkPreviewReply = reply;
+    connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64 total) {
+        constexpr qint64 maxPageBytes = 1024 * 1024;
+        if (received > maxPageBytes || total > maxPageBytes) reply->abort();
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, url, redirects, generation] {
+        const QUrl redirect = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
+        const QNetworkReply::NetworkError networkError = reply->error();
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString()
+                                        .section(QLatin1Char(';'), 0, 0).trimmed().toLower();
+        const QByteArray html = reply->readAll();
+        if (m_linkPreviewReply == reply) m_linkPreviewReply = nullptr;
+        reply->deleteLater();
+        if (generation != m_linkPreviewGeneration) return;
+
+        if (redirect.isValid()) {
+            const QUrl next = QUrl(url).resolved(redirect);
+            if (redirects < 5 && safeHttpsPreviewUrl(next)) {
+                requestLinkPreviewPage(next.toString(QUrl::FullyEncoded), redirects + 1, generation);
+                return;
+            }
+            m_linkPreviewLoading = false;
+            m_draftLinkPreview = LinkPreview();
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+            return;
+        }
+
+        if (networkError != QNetworkReply::NoError || (status != 0 && (status < 200 || status >= 300)) ||
+            (contentType != QLatin1String("text/html") && contentType != QLatin1String("application/xhtml+xml")) ||
+            html.isEmpty() || html.size() > 1024 * 1024) {
+            m_linkPreviewLoading = false;
+            m_draftLinkPreview = LinkPreview();
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+            return;
+        }
+
+        LinkPreview preview;
+        preview.url = m_previewRequestedUrl;
+        preview.title = htmlMetaValue(html, {QStringLiteral("og:title"), QStringLiteral("twitter:title")});
+        if (preview.title.isEmpty()) preview.title = htmlTitleValue(html);
+        preview.description = htmlMetaValue(html, {QStringLiteral("og:description"), QStringLiteral("description"),
+                                                   QStringLiteral("twitter:description")});
+        preview.description = preview.description.left(280);
+        const QString imageValue = htmlMetaValue(html, {QStringLiteral("og:image"), QStringLiteral("og:image:url"),
+                                                        QStringLiteral("twitter:image")});
+        preview.title = preview.title.left(240).trimmed();
+        if (!preview.title.isEmpty()) m_draftLinkPreview = preview;
+        else m_draftLinkPreview = LinkPreview();
+        refreshLinkPreviewBar();
+
+        if (m_draftLinkPreview.isValid() && !imageValue.isEmpty()) {
+            const QUrl imageUrl = QUrl(url).resolved(QUrl(imageValue, QUrl::StrictMode));
+            if (safeHttpsPreviewUrl(imageUrl)) {
+                // If the user presses Send while metadata is loading, wait for the image too
+                // so it can be included in the signal-cli preview payload.
+                m_linkPreviewLoading = true;
+                requestLinkPreviewImage(imageUrl.toString(QUrl::FullyEncoded), m_draftLinkPreview.url, 0, generation);
+                return;
+            }
+        }
+        m_linkPreviewLoading = false;
+        finishPendingLinkPreviewSend();
+    });
+}
+
+void MainWindow::requestLinkPreviewImage(const QString &url, const QString &previewUrl, int redirects, quint64 generation)
+{
+    const QUrl parsed(url, QUrl::StrictMode);
+    if (generation != m_linkPreviewGeneration || !safeHttpsPreviewUrl(parsed) ||
+        m_draftLinkPreview.url != previewUrl) return;
+
+    QNetworkRequest request(parsed);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    request.setTransferTimeout(10000);
+    request.setRawHeader(QByteArrayLiteral("User-Agent"), QByteArrayLiteral("Corvus/0.2.0 (link preview)"));
+    request.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("image/png,image/jpeg,image/webp,image/gif"));
+    QNetworkReply *reply = m_nam.get(request);
+    m_linkPreviewImageReply = reply;
+    connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64 total) {
+        constexpr qint64 maxImageBytes = 5 * 1024 * 1024;
+        if (received > maxImageBytes || total > maxImageBytes) reply->abort();
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, url, previewUrl, redirects, generation] {
+        const QUrl redirect = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
+        const QNetworkReply::NetworkError networkError = reply->error();
+        const QString contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString()
+                                        .section(QLatin1Char(';'), 0, 0).trimmed().toLower();
+        const QByteArray data = reply->readAll();
+        if (m_linkPreviewImageReply == reply) m_linkPreviewImageReply = nullptr;
+        reply->deleteLater();
+        if (generation != m_linkPreviewGeneration) return;
+
+        if (redirect.isValid()) {
+            const QUrl next = QUrl(url).resolved(redirect);
+            if (redirects < 5 && safeHttpsPreviewUrl(next)) {
+                requestLinkPreviewImage(next.toString(QUrl::FullyEncoded), previewUrl, redirects + 1, generation);
+                return;
+            }
+            m_linkPreviewLoading = false;
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+            return;
+        }
+        const QString suffix = previewImageSuffix(contentType);
+        if (networkError != QNetworkReply::NoError || suffix.isEmpty() || data.isEmpty() || data.size() > 5 * 1024 * 1024 ||
+            m_draftLinkPreview.url != previewUrl) {
+            m_linkPreviewLoading = false;
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+            return;
+        }
+        const QImage image = AttachmentUtil::imageFromData(data);
+        if (image.isNull()) {
+            m_linkPreviewLoading = false;
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+            return;
+        }
+
+        const QString path = m_tmp.path() + QStringLiteral("/link-preview-") +
+                             QUuid::createUuid().toString(QUuid::WithoutBraces) + QLatin1Char('.') + suffix;
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size()) {
+            file.close();
+            QFile::remove(path);
+            m_linkPreviewLoading = false;
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+            return;
+        }
+        file.close();
+        m_draftLinkPreview.imagePath = path;
+        m_draftLinkPreview.imageThumb = AttachmentUtil::makeThumbnail(image);
+        if (m_draftLinkPreview.imageThumb.isEmpty()) m_draftLinkPreview.imageThumb = data;
+        m_linkPreviewLoading = false;
+        refreshLinkPreviewBar();
+        finishPendingLinkPreviewSend();
+    });
+}
+
+void MainWindow::fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const QString &author, int attempt)
+{
+    auto conversationIt = m_convs.find(key);
+    if (conversationIt == m_convs.end()) return;
+    const int mi = findMessage(conversationIt.value(), ts, QStringList{author});
+    if (mi < 0) return;
+    const Message &message = conversationIt.value().msgs[mi];
+    const LinkPreview lp = message.linkPreview;
+    if (!lp.isValid() || lp.imageId.isEmpty() || !lp.imageThumb.isEmpty() || lp.imageSize > kMaxThumbSource) return;
+    const QString token = QStringLiteral("lp|%1|%2|%3").arg(key).arg(ts).arg(author);
+    if (m_thumbPending.contains(token)) return;
+    m_thumbPending.insert(token);
+    QJsonObject params{{QStringLiteral("id"), lp.imageId}};
+    addRecipient(params, conversationIt.value());
+    m_cli.call(QStringLiteral("getAttachment"), params,
+               [this, key, ts, author, attempt, token, previewUrl = lp.url](const QJsonValue &res, const QString &err) {
+        m_thumbPending.remove(token);
+        if (!err.isEmpty()) {
+            if (attempt < 3)
+                QTimer::singleShot(2000 * (attempt + 1), this,
+                                   [this, key, ts, author, attempt] { fetchLinkPreviewThumbnail(key, ts, author, attempt + 1); });
+            return;
+        }
+        const QJsonObject object = res.toObject();
+        QString encoded = object.value(QStringLiteral("data")).toString();
+        if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
+        if (encoded.isEmpty() && res.isString()) encoded = res.toString();
+        const QByteArray data = QByteArray::fromBase64(encoded.toLatin1());
+        const QImage image = AttachmentUtil::imageFromData(data);
+        if (image.isNull()) return;
+        auto it = m_convs.find(key);
+        if (it == m_convs.end()) return;
+        const int i = findMessage(it.value(), ts, QStringList{author});
+        if (i < 0 || it.value().msgs[i].linkPreview.url != previewUrl) return;
+        Message &m = it.value().msgs[i];
+        m.linkPreview.imageThumb = AttachmentUtil::makeThumbnail(image);
+        if (m.linkPreview.imageThumb.isEmpty()) m.linkPreview.imageThumb = data;
+        persist(Records::linkPreviewUpdate(key, m));
+        if (key == m_current) showConversation(true);
+    });
+}
+
+void MainWindow::finishPendingLinkPreviewSend()
+{
+    if (!m_sendAfterLinkPreview) return;
+    const QString text = m_pendingPreviewSendText;
+    m_sendAfterLinkPreview = false;
+    m_pendingPreviewSendText.clear();
+    QTimer::singleShot(0, this, [this, text] {
+        if (m_input && m_input->text() == text) sendMessage();
+    });
+}
+
 void MainWindow::addPendingFiles(const QStringList &files)
 {
     for (const QString &f : files) {
@@ -3399,6 +3831,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         m.text.clear();
         m.textStyles.clear();
         m.quote = Quote();
+        m.linkPreview = LinkPreview();
         if (m.outgoing) m.attachments.clear();
     }
     if (m.quote.valid) m.quote.authorKey = resolveKey(m.quote.authorKey);
@@ -3839,6 +4272,15 @@ void MainWindow::sendMessage()
         statusBar()->showMessage(tr("%1 is blocked. Unblock the contact to send messages.").arg(m_convs[m_current].title), 8000);
         return;
     }
+    const QString pendingPreviewUrl = firstHttpsLink(rawText);
+    if (m_appearance.generateLinkPreviews && !pendingPreviewUrl.isEmpty() &&
+        pendingPreviewUrl != m_dismissedPreviewUrl && m_linkPreviewLoading &&
+        m_previewRequestedUrl == pendingPreviewUrl) {
+        m_sendAfterLinkPreview = true;
+        m_pendingPreviewSendText = rawText;
+        statusBar()->showMessage(tr("Generating link preview …"), 5000);
+        return;
+    }
 
     const Conversation c = m_convs[m_current];
     const QStringList files = m_pendingFiles;
@@ -3864,6 +4306,14 @@ void MainWindow::sendMessage()
     if (!text.isEmpty()) {
         p[QStringLiteral("message")] = text;
         if (!textStyles.isEmpty()) p[QStringLiteral("textStyle")] = textStyles;
+    }
+
+    LinkPreview previewForSend;
+    const QString textPreviewUrl = firstHttpsLink(text);
+    if (!viewOnce && m_appearance.generateLinkPreviews && !textPreviewUrl.isEmpty() &&
+        textPreviewUrl != m_dismissedPreviewUrl && m_draftLinkPreview.isValid() &&
+        m_draftLinkPreview.url == textPreviewUrl) {
+        previewForSend = m_draftLinkPreview;
     }
 
     QList<Attachment> atts;
@@ -3905,6 +4355,13 @@ void MainWindow::sendMessage()
     }
     if (!paths.isEmpty())
         p[QStringLiteral("attachments")] = QJsonArray::fromStringList(SignalCli::stageFiles(paths, stageDir));
+    if (previewForSend.isValid()) {
+        p[QStringLiteral("previewUrl")] = previewForSend.url;
+        p[QStringLiteral("previewTitle")] = previewForSend.title;
+        if (!previewForSend.description.isEmpty()) p[QStringLiteral("previewDescription")] = previewForSend.description;
+        if (!previewForSend.imagePath.isEmpty() && QFileInfo::exists(previewForSend.imagePath))
+            p[QStringLiteral("previewImage")] = SignalCli::stageFiles({previewForSend.imagePath}, stageDir).value(0, previewForSend.imagePath);
+    }
     if (viewOnce) p[QStringLiteral("viewOnce")] = true;
     // Recorded voice messages go out as voice notes (shown inline by the Signal apps) when this
     // signal-cli can do that and nothing but recordings is attached.
@@ -3934,6 +4391,7 @@ void MainWindow::sendMessage()
     preview.authorKey = m_account;
     preview.expiresInSeconds = c.expirationSeconds;
     preview.quote = quote;
+    preview.linkPreview = previewForSend;
     preview.viewOnce = viewOnce;
     preview.attachments = atts;
     preview.orderTs = std::max(preview.ts(), (target.msgs.isEmpty() ? qint64(0) : target.msgs.last().sortTs()) + 1);
@@ -3951,6 +4409,7 @@ void MainWindow::sendMessage()
     target.msgs.insert(at, preview);
 
     m_input->clear();
+    m_dismissedPreviewUrl.clear();
     m_pendingFiles.clear();
     if (m_viewOnceBtn) m_viewOnceBtn->setChecked(false);
     m_replyQuote = Quote();
@@ -4190,6 +4649,7 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
     if (mi < 0) return;
     const Message &m = c.msgs[mi];
     if (m.viewOnce) return; // fetching a thumbnail would consume/cache one-time media prematurely
+    fetchLinkPreviewThumbnail(key, ts, author, attempt);
 
     for (int a = 0; a < m.attachments.size(); ++a) {
         const Attachment &att = m.attachments[a];
@@ -4677,7 +5137,20 @@ void MainWindow::showAbout()
 void MainWindow::applyAppearance(const Appearance &appearance)
 {
     if (appearance == m_appearance) return;
+    const bool previewsWereEnabled = m_appearance.generateLinkPreviews;
     m_appearance = appearance;
+    if (previewsWereEnabled && !m_appearance.generateLinkPreviews) {
+        ++m_linkPreviewGeneration;
+        if (m_linkPreviewReply) { m_linkPreviewReply->abort(); m_linkPreviewReply = nullptr; }
+        if (m_linkPreviewImageReply) { m_linkPreviewImageReply->abort(); m_linkPreviewImageReply = nullptr; }
+        m_linkPreviewLoading = false;
+        m_draftLinkPreview = LinkPreview();
+        refreshLinkPreviewBar();
+        finishPendingLinkPreviewSend();
+    } else if (!previewsWereEnabled && m_appearance.generateLinkPreviews) {
+        m_dismissedPreviewUrl.clear();
+        updateDraftLinkPreview();
+    }
     m_appearance.save(palette());
     m_view->setAppearance(m_appearance);
     updateSendButton();

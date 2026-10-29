@@ -51,6 +51,7 @@ private:
     QCheckBox *m_showAvatars;
     QCheckBox *m_sortAlphabetically;
     QCheckBox *m_alwaysShowSend;
+    QCheckBox *m_generateLinkPreviews;
 };
 
 // --- Privacy --------------------------------------------------------------------------------

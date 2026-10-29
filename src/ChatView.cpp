@@ -791,6 +791,8 @@ QString ChatView::plainText() const
             continue;
         }
         lines << (who + QStringLiteral(": ") + m.text + (m.isEdited() ? tr(" (edited)") : QString()));
+        if (m.linkPreview.isValid())
+            lines << QStringLiteral("[link preview: %1 — %2]").arg(m.linkPreview.title, m.linkPreview.url);
         if (!m.reactions.isEmpty()) {
             QStringList e = m.reactions.values();
             e.sort();
@@ -869,6 +871,9 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
     if (includePixmaps) {
         for (const Attachment &a : m.attachments)
             it.pix << ((a.isImage() && !a.thumb.isEmpty()) ? QPixmap::fromImage(QImage::fromData(a.thumb)) : QPixmap());
+        it.linkPreviewPixmap = m.linkPreview.imageThumb.isEmpty()
+                                   ? QPixmap()
+                                   : QPixmap::fromImage(QImage::fromData(m.linkPreview.imageThumb));
     }
     it.renderResourcesBuilt = true;
 }
@@ -878,6 +883,7 @@ void ChatView::releaseItemRenderResources(int i)
     Item &it = m_items[i];
     it.doc.reset();
     it.pix.clear();
+    it.linkPreviewPixmap = QPixmap();
     it.renderResourcesBuilt = false;
 }
 
@@ -897,6 +903,8 @@ void ChatView::layoutItem(int i, int y)
     it.y = y;
     it.dateRect = it.bubble = it.senderRect = it.quoteBox = it.quoteAuthorRect = it.quoteTextRect = QRect();
     it.textRect = it.timeRect = it.pillsRect = QRect();
+    it.linkPreviewRect = it.linkPreviewImageRect = it.linkPreviewTitleRect =
+        it.linkPreviewDescriptionRect = it.linkPreviewHostRect = QRect();
     it.attRects.clear();
     it.pills.clear();
     it.dateLabel.clear();
@@ -985,6 +993,24 @@ void ChatView::layoutItem(int i, int y)
         contentW = qMax(contentW, textSz.width());
     }
 
+    int linkPreviewW = 0, linkPreviewH = 0, linkPreviewImageH = 0;
+    int linkPreviewTitleH = 0, linkPreviewDescriptionH = 0, linkPreviewHostH = 0;
+    if (!m.deleted && !m.viewOnce && m.linkPreview.isValid()) {
+        linkPreviewW = qMin(innerMax, 320);
+        const int textWidth = qMax(1, linkPreviewW - 16);
+        it.linkPreviewTitle = fitLines(fmb, m.linkPreview.title, textWidth, 2);
+        it.linkPreviewDescription = fitLines(fms, m.linkPreview.description, textWidth, 2);
+        it.linkPreviewHost = QUrl(m.linkPreview.url).host();
+        linkPreviewTitleH = fmb.boundingRect(QRect(0, 0, textWidth, 10000), Qt::TextWordWrap, it.linkPreviewTitle).height();
+        linkPreviewDescriptionH = it.linkPreviewDescription.isEmpty() ? 0
+            : fms.boundingRect(QRect(0, 0, textWidth, 10000), Qt::TextWordWrap, it.linkPreviewDescription).height();
+        linkPreviewHostH = fms.height();
+        if (!m.linkPreview.imageThumb.isEmpty()) linkPreviewImageH = qBound(76, linkPreviewW * 9 / 16, 150);
+        linkPreviewH = 8 + linkPreviewImageH + (linkPreviewImageH > 0 ? 6 : 0) + linkPreviewTitleH +
+                       (linkPreviewDescriptionH > 0 ? 4 + linkPreviewDescriptionH : 0) + 2 + linkPreviewHostH + 8;
+        contentW = qMax(contentW, linkPreviewW);
+    }
+
     const int bubbleW = contentW + 2 * kPadX;
     const int bubbleX = m.outgoing ? W - kMargin - bubbleW : kMargin;
     const int x0 = bubbleX + kPadX;
@@ -1010,6 +1036,24 @@ void ChatView::layoutItem(int i, int y)
     if (it.doc) {
         it.textRect = QRect(x0, yb, textSz.width(), textSz.height());
         yb += textSz.height() + 2;
+    }
+    if (linkPreviewH > 0) {
+        it.linkPreviewRect = QRect(x0, yb, linkPreviewW, linkPreviewH);
+        int py = yb + 8;
+        if (linkPreviewImageH > 0) {
+            it.linkPreviewImageRect = QRect(x0, py, linkPreviewW, linkPreviewImageH);
+            py += linkPreviewImageH + 6;
+        }
+        it.linkPreviewTitleRect = QRect(x0 + 8, py, linkPreviewW - 16, linkPreviewTitleH);
+        py += linkPreviewTitleH;
+        if (linkPreviewDescriptionH > 0) {
+            py += 4;
+            it.linkPreviewDescriptionRect = QRect(x0 + 8, py, linkPreviewW - 16, linkPreviewDescriptionH);
+            py += linkPreviewDescriptionH;
+        }
+        py += 2;
+        it.linkPreviewHostRect = QRect(x0 + 8, py, linkPreviewW - 16, linkPreviewHostH);
+        yb += linkPreviewH + kGap;
     }
     const int timeW = fms.horizontalAdvance(it.timeText);
     it.timeRect = QRect(bubbleX + bubbleW - kPadX - timeW, yb, timeW, fms.height());
@@ -1350,6 +1394,37 @@ void ChatView::paintItem(QPainter &p, int i)
         p.restore();
     }
 
+    if (!it.linkPreviewRect.isEmpty()) {
+        QPainterPath previewPath;
+        previewPath.addRoundedRect(QRectF(it.linkPreviewRect), 8, 8);
+        p.save();
+        p.setClipPath(previewPath);
+        p.fillRect(it.linkPreviewRect, alpha(fg, 12));
+        if (!it.linkPreviewImageRect.isEmpty() && !it.linkPreviewPixmap.isNull()) {
+            QPixmap scaled = it.linkPreviewPixmap.scaled(it.linkPreviewImageRect.size(), Qt::KeepAspectRatioByExpanding,
+                                                         Qt::SmoothTransformation);
+            QRect src(QPoint(0, 0), it.linkPreviewImageRect.size());
+            src.moveCenter(QRect(QPoint(0, 0), scaled.size()).center());
+            p.drawPixmap(it.linkPreviewImageRect, scaled, src);
+        }
+        p.restore();
+        p.setPen(QPen(alpha(fg, 65), 1));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(previewPath);
+        p.setFont(smallBold);
+        p.setPen(fg);
+        p.drawText(it.linkPreviewTitleRect, Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, it.linkPreviewTitle);
+        if (!it.linkPreviewDescriptionRect.isEmpty()) {
+            p.setFont(small);
+            p.setPen(alpha(fg, 220));
+            p.drawText(it.linkPreviewDescriptionRect, Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop,
+                       it.linkPreviewDescription);
+        }
+        p.setFont(small);
+        p.setPen(alpha(fg, 170));
+        p.drawText(it.linkPreviewHostRect, Qt::AlignLeft | Qt::AlignVCenter, it.linkPreviewHost);
+    }
+
     p.setFont(small);
     p.setPen(alpha(fg, 175));
     p.drawText(it.timeRect, Qt::AlignRight | Qt::AlignVCenter, it.timeText);
@@ -1398,6 +1473,11 @@ ChatView::Hit ChatView::hitTest(const QPoint &vp) const
                 h.index = a;
                 return h;
             }
+    }
+    if (!it.linkPreviewRect.isEmpty() && it.linkPreviewRect.contains(p)) {
+        h.kind = Hit::Link;
+        h.href = m_msgs[i].linkPreview.url;
+        return h;
     }
     if (it.doc && it.textRect.adjusted(0, 0, 0, 2).contains(p)) {
         const QPointF local = QPointF(p - it.textRect.topLeft());

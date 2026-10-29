@@ -45,6 +45,7 @@ class QShowEvent;
 class QLabel;
 class QLineEdit;
 class QMimeData;
+class QNetworkReply;
 class QAudioOutput;
 class QListWidget;
 class QListWidgetItem;
@@ -229,6 +230,12 @@ private:
     void navigateMessageSearch(bool backwards);
     void updateReplyBar();
     void updateAttachBar();
+    void updateDraftLinkPreview();
+    void refreshLinkPreviewBar();
+    void requestLinkPreviewPage(const QString &url, int redirects, quint64 generation);
+    void requestLinkPreviewImage(const QString &url, const QString &previewUrl, int redirects, quint64 generation);
+    void fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const QString &author, int attempt = 0);
+    void finishPendingLinkPreviewSend();
 
     // --- actions on messages
     void startReply(int idx);
@@ -287,6 +294,16 @@ private:
     SignalCli m_cli;
     HistoryStore m_store;
     QNetworkAccessManager m_nam;
+    QPointer<QNetworkReply> m_linkPreviewReply;
+    QPointer<QNetworkReply> m_linkPreviewImageReply;
+    LinkPreview m_draftLinkPreview;
+    QString m_previewRequestedUrl;
+    QString m_previewRequestedText;
+    QString m_dismissedPreviewUrl;
+    QString m_pendingPreviewSendText;
+    quint64 m_linkPreviewGeneration = 0;
+    bool m_linkPreviewLoading = false;
+    bool m_sendAfterLinkPreview = false;
     QMediaPlayer *m_audioPlayer = nullptr;
     QAudioOutput *m_audioOutput = nullptr;
     QUrl m_pendingGifAnalyticsUrl;
@@ -395,6 +412,12 @@ private:
     QWidget *m_attachBar;
     QLabel *m_attachLabel;
     QLabel *m_attachThumb;
+    QWidget *m_linkPreviewBar = nullptr;
+    QLabel *m_linkPreviewImageLabel = nullptr;
+    QLabel *m_linkPreviewTitleLabel = nullptr;
+    QLabel *m_linkPreviewDescriptionLabel = nullptr;
+    QLabel *m_linkPreviewUrlLabel = nullptr;
+    QToolButton *m_linkPreviewCloseButton = nullptr;
     QPointer<MessageInput> m_input;
     QToolButton *m_attachBtn;
     QToolButton *m_viewOnceBtn = nullptr;
