@@ -96,6 +96,71 @@ private slots:
         QVERIFY(parsed.typingStarted);
     }
 
+    void normalizesReceiveTypingFromPayloadWrapper()
+    {
+        const QJsonObject notification{
+            {"method", "receiveTyping"},
+            {"params", QJsonObject{
+                {"sourceNumber", "+49333"},
+                {"sourceUuid", "payload-peer-uuid"},
+                {"sourceName", "Bob"},
+                {"payload", QJsonObject{
+                    {"typingMessage", QJsonObject{{"action", "STARTED"}, {"groupId", "group-opaque"}}}
+                }}
+            }}
+        };
+
+        const QJsonObject envelope = SignalCli::envelopeFromNotification(notification);
+        QVERIFY(!envelope.isEmpty());
+        const ParsedEnvelope parsed = parseEnvelope(envelope);
+        QCOMPARE(parsed.kind, ParsedEnvelope::Typing);
+        QCOMPARE(parsed.src, QStringLiteral("+49333"));
+        QCOMPARE(parsed.srcName, QStringLiteral("Bob"));
+        QCOMPARE(parsed.groupId, QStringLiteral("group-opaque"));
+        QVERIFY(parsed.typingStarted);
+    }
+
+    void normalizesFlatReceiveTypingEnvelope()
+    {
+        const QJsonObject notification{
+            {"method", "receive"},
+            {"params", QJsonObject{
+                {"sourceNumber", "+49444"},
+                {"sourceUuid", "flat-peer-uuid"},
+                {"timestamp", 1'790'000'001'700LL},
+                {"typingMessage", QJsonObject{{"action", "STARTED"}, {"timestamp", 1'790'000'001'700LL}}}
+            }}
+        };
+
+        const QJsonObject envelope = SignalCli::envelopeFromNotification(notification);
+        QVERIFY(!envelope.isEmpty());
+        const ParsedEnvelope parsed = parseEnvelope(envelope);
+        QCOMPARE(parsed.kind, ParsedEnvelope::Typing);
+        QCOMPARE(parsed.src, QStringLiteral("+49444"));
+        QVERIFY(parsed.typingStarted);
+    }
+
+    void normalizesTypingAliasAndSiblingWrapper()
+    {
+        const QJsonObject notification{
+            {"method", "receive"},
+            {"params", QJsonObject{
+                {"source", "+49555"},
+                {"sourceUuid", "alias-peer-uuid"},
+                {"timestamp", 1'790'000'001'800LL},
+                {"envelope", QJsonObject{{"source", "+49555"}, {"sourceUuid", "alias-peer-uuid"}}},
+                {"typing", QJsonObject{{"type", "STARTED"}, {"timestamp", 1'790'000'001'800LL}}}
+            }}
+        };
+
+        const QJsonObject envelope = SignalCli::envelopeFromNotification(notification);
+        QVERIFY(!envelope.isEmpty());
+        const ParsedEnvelope parsed = parseEnvelope(envelope);
+        QCOMPARE(parsed.kind, ParsedEnvelope::Typing);
+        QCOMPARE(parsed.src, QStringLiteral("+49555"));
+        QVERIFY(parsed.typingStarted);
+    }
+
     void preservesStandardReceiveTypingEnvelope()
     {
         const QJsonObject envelope{

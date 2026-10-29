@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QDebug>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -72,7 +73,6 @@ QString SignalCli::Result::describe() const
 
 QString SignalCli::maskNumbers(const QString &text)
 {
-    if (qEnvironmentVariableIsSet("CORVUS_DEBUG")) return text;
     static const QRegularExpression re(QStringLiteral(R"(\+?(\d{2})\d{5,}(\d{2}))"));
     QString t = text;
     t.replace(re, QStringLiteral("+\\1…\\2"));
@@ -256,7 +256,7 @@ void SignalCli::start(const QString &account)
             emit logLine(l);
         }
     });
-    connect(p, &QProcess::started, this, &SignalCli::started);
+    connect(p, &QProcess::started, this, [this] { emit started(); });
     connect(p, &QProcess::errorOccurred, this, [this, p](QProcess::ProcessError e) {
         if (e == QProcess::FailedToStart && p == m_proc) {
             m_proc = nullptr;
@@ -275,7 +275,9 @@ void SignalCli::start(const QString &account)
         emit stopped(reason);
     });
 
-    startProcess(p, m_exe, {QStringLiteral("-a"), account, QStringLiteral("jsonRpc")});
+    // Be explicit instead of relying on signal-cli's version-dependent receive-mode default.
+    startProcess(p, m_exe, {QStringLiteral("-a"), account, QStringLiteral("jsonRpc"),
+                            QStringLiteral("--receive-mode=on-start")});
 }
 
 void SignalCli::stop()
@@ -319,7 +321,9 @@ void SignalCli::onStdout()
     while ((nl = m_buf.indexOf('\n')) >= 0) {
         const QByteArray line = m_buf.left(nl).trimmed();
         m_buf.remove(0, nl + 1);
-        if (!line.isEmpty()) handleLine(line);
+        if (line.isEmpty()) continue;
+
+        handleLine(line);
     }
 }
 
@@ -327,42 +331,129 @@ QJsonObject SignalCli::envelopeFromNotification(const QJsonObject &notification)
 {
     const QString method = notification.value(QStringLiteral("method")).toString();
     const QJsonObject params = notification.value(QStringLiteral("params")).toObject();
+    const QJsonObject result = params.value(QStringLiteral("result")).toObject();
+    const QJsonObject payload = params.value(QStringLiteral("payload")).toObject();
 
+    // signal-cli's documented JSON-RPC event is params.envelope. Depending on the
+    // receive mode or a wrapper, the same envelope can be nested under result/payload,
+    // or the parameters can themselves be the envelope. Accept all of these shapes.
     QJsonObject envelope = params.value(QStringLiteral("envelope")).toObject();
-    if (envelope.isEmpty())
-        envelope = params.value(QStringLiteral("result")).toObject().value(QStringLiteral("envelope")).toObject();
+    if (envelope.isEmpty()) envelope = result.value(QStringLiteral("envelope")).toObject();
+    if (envelope.isEmpty()) envelope = payload.value(QStringLiteral("envelope")).toObject();
 
-    // The normal signal-cli JSON-RPC protocol sends typingMessage inside a `receive`
-    // envelope. Accept `receiveTyping` as well because some wrappers expose typing as
-    // its own notification and may put the event directly in params.
-    if (method == QLatin1String("receive"))
+    const auto looksLikeEnvelope = [](const QJsonObject &o) {
+        return o.contains(QStringLiteral("source")) || o.contains(QStringLiteral("sourceNumber")) ||
+               o.contains(QStringLiteral("sourceUuid")) || o.contains(QStringLiteral("typingMessage")) ||
+               o.contains(QStringLiteral("typing")) || o.contains(QStringLiteral("action")) ||
+               o.contains(QStringLiteral("type")) || o.contains(QStringLiteral("receiptMessage")) ||
+               o.contains(QStringLiteral("dataMessage")) || o.contains(QStringLiteral("syncMessage"));
+    };
+    if (envelope.isEmpty() && looksLikeEnvelope(result)) envelope = result;
+    if (envelope.isEmpty() && looksLikeEnvelope(payload)) envelope = payload;
+    if (envelope.isEmpty() && looksLikeEnvelope(params)) envelope = params;
+
+    // Regular incoming events should pass through unchanged except for missing sender
+    // metadata supplied alongside the envelope by some wrappers.
+    if (method == QLatin1String("receive")) {
+        if (envelope.isEmpty()) return {};
+
+        // signal-cli's standard form is params.envelope.typingMessage. Some wrappers
+        // place it alongside envelope, or rename it to `typing`; normalize both forms.
+        QJsonObject typing = envelope.value(QStringLiteral("typingMessage")).toObject();
+        if (typing.isEmpty()) typing = envelope.value(QStringLiteral("typing")).toObject();
+        if (typing.isEmpty()) typing = params.value(QStringLiteral("typingMessage")).toObject();
+        if (typing.isEmpty()) typing = result.value(QStringLiteral("typingMessage")).toObject();
+        if (typing.isEmpty()) typing = payload.value(QStringLiteral("typingMessage")).toObject();
+        if (typing.isEmpty()) typing = params.value(QStringLiteral("typing")).toObject();
+        if (typing.isEmpty()) typing = result.value(QStringLiteral("typing")).toObject();
+        if (typing.isEmpty()) typing = payload.value(QStringLiteral("typing")).toObject();
+        if (typing.isEmpty() && (params.contains(QStringLiteral("action")) || params.contains(QStringLiteral("type"))))
+            typing = params;
+        if (!typing.isEmpty()) {
+            if (!typing.contains(QStringLiteral("action")) && typing.contains(QStringLiteral("type")))
+                typing.insert(QStringLiteral("action"), typing.value(QStringLiteral("type")));
+            if (!typing.contains(QStringLiteral("groupId"))) {
+                for (const QJsonObject &container : {envelope, params, result, payload}) {
+                    const QJsonValue group = container.value(QStringLiteral("groupId"));
+                    if (!group.isUndefined() && !group.isNull() && !group.toString().isEmpty()) {
+                        typing.insert(QStringLiteral("groupId"), group);
+                        break;
+                    }
+                }
+            }
+            envelope.remove(QStringLiteral("typing"));
+            envelope.insert(QStringLiteral("typingMessage"), typing);
+        }
+
+        const QStringList metadataKeys = {
+            QStringLiteral("source"), QStringLiteral("sourceNumber"), QStringLiteral("sourceUuid"),
+            QStringLiteral("sourceName"), QStringLiteral("timestamp"), QStringLiteral("groupId")
+        };
+        const QList<QJsonObject> containers = {params, result, payload, notification};
+        for (const QString &key : metadataKeys) {
+            if (envelope.value(key).isUndefined() || envelope.value(key).isNull() ||
+                (envelope.value(key).isString() && envelope.value(key).toString().isEmpty())) {
+                for (const QJsonObject &container : containers) {
+                    const QJsonValue value = container.value(key);
+                    if (!value.isUndefined() && !value.isNull() &&
+                        !(value.isString() && value.toString().isEmpty())) {
+                        envelope.insert(key, value);
+                        break;
+                    }
+                }
+            }
+        }
         return envelope;
-    if (method != QLatin1String("receiveTyping"))
-        return {};
+    }
 
-    if (envelope.isEmpty())
-        envelope = params;
+    if (method != QLatin1String("receiveTyping")) return {};
 
+    // Some adapters expose typing as a separate notification. They variously use
+    // typingMessage, typing, or put action/type directly in params.
     QJsonObject typing = envelope.value(QStringLiteral("typingMessage")).toObject();
     if (typing.isEmpty()) typing = params.value(QStringLiteral("typingMessage")).toObject();
+    if (typing.isEmpty()) typing = result.value(QStringLiteral("typingMessage")).toObject();
+    if (typing.isEmpty()) typing = payload.value(QStringLiteral("typingMessage")).toObject();
     if (typing.isEmpty()) typing = envelope.value(QStringLiteral("typing")).toObject();
     if (typing.isEmpty()) typing = params.value(QStringLiteral("typing")).toObject();
+    if (typing.isEmpty()) typing = result.value(QStringLiteral("typing")).toObject();
+    if (typing.isEmpty()) typing = payload.value(QStringLiteral("typing")).toObject();
     if (typing.isEmpty() && (params.contains(QStringLiteral("action")) || params.contains(QStringLiteral("type"))))
         typing = params;
+    if (typing.isEmpty() && (result.contains(QStringLiteral("action")) || result.contains(QStringLiteral("type"))))
+        typing = result;
     if (typing.isEmpty()) return {};
 
-    // Some wrappers put source and timestamp fields beside the nested envelope. Copy
-    // only envelope metadata, never arbitrary RPC parameters, into the normalized event.
+    // Start with envelope metadata if present, otherwise take the first event-like
+    // parameter object. Then fill the source fields from sibling JSON-RPC properties.
+    if (envelope.isEmpty()) envelope = params;
     static const QStringList metadataKeys = {
         QStringLiteral("source"), QStringLiteral("sourceNumber"), QStringLiteral("sourceUuid"),
         QStringLiteral("sourceName"), QStringLiteral("timestamp")
     };
+    const QList<QJsonObject> containers = {params, result, payload, notification};
     for (const QString &key : metadataKeys) {
-        if (!envelope.contains(key) && params.contains(key))
-            envelope.insert(key, params.value(key));
+        if (envelope.value(key).isUndefined() || envelope.value(key).isNull() ||
+            (envelope.value(key).isString() && envelope.value(key).toString().isEmpty())) {
+            for (const QJsonObject &container : containers) {
+                const QJsonValue value = container.value(key);
+                if (!value.isUndefined() && !value.isNull() &&
+                    !(value.isString() && value.toString().isEmpty())) {
+                    envelope.insert(key, value);
+                    break;
+                }
+            }
+        }
     }
-    if (!typing.contains(QStringLiteral("groupId")) && params.contains(QStringLiteral("groupId")))
-        typing.insert(QStringLiteral("groupId"), params.value(QStringLiteral("groupId")));
+    if (!typing.contains(QStringLiteral("groupId"))) {
+        for (const QJsonObject &container : {envelope, params, result, payload}) {
+            const QJsonValue group = container.value(QStringLiteral("groupId"));
+            if (!group.isUndefined() && !group.isNull() && !group.toString().isEmpty()) {
+                typing.insert(QStringLiteral("groupId"), group);
+                break;
+            }
+        }
+    }
     envelope.insert(QStringLiteral("typingMessage"), typing);
     return envelope;
 }
@@ -397,7 +488,8 @@ void SignalCli::handleLine(const QByteArray &line)
     const QString method = o.value(QStringLiteral("method")).toString();
     if (method == QLatin1String("receive") || method == QLatin1String("receiveTyping")) {
         const QJsonObject env = envelopeFromNotification(o);
-        if (!env.isEmpty()) emit envelopeReceived(env);
+        if (env.isEmpty()) return;
+        emit envelopeReceived(env);
     }
 }
 

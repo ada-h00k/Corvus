@@ -65,7 +65,7 @@ public:
     // Forcefully ends a child process. On Windows signal-cli is started through signal-cli.bat
     // (cmd.exe -> java.exe); a plain kill() would leave the JVM running, so the whole tree is ended.
     static void killTree(QProcess *p);
-    // Phone numbers are masked in diagnostics unless CORVUS_DEBUG is set.
+    // Phone numbers are masked in diagnostics.
     static QString maskNumbers(const QString &text);
 
     // Long-running process (JSON-RPC over stdin/stdout)

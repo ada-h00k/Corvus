@@ -34,6 +34,7 @@
 #include <QClipboard>
 #include <QCursor>
 #include <QDateTime>
+#include <QDebug>
 #include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -314,15 +315,22 @@ MainWindow::MainWindow()
     titleRow->addWidget(m_title, 1);
     m_typingLabel = new QLabel(right);
     m_typingLabel->setObjectName(QStringLiteral("typingIndicator"));
-    m_typingLabel->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 0.9em;"));
+    // Keep the peer typing status on its own line. In the title row the expanding
+    // conversation title can consume the available width and make this label
+    // effectively invisible in narrow windows or with long contact names.
+    m_typingLabel->setStyleSheet(QStringLiteral(
+        "color: palette(text); font-size: 0.9em; font-style: italic; padding: 1px 0;"));
     m_typingLabel->setTextFormat(Qt::PlainText);
+    m_typingLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_typingLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    m_typingLabel->setMinimumHeight(m_typingLabel->fontMetrics().height() + 4);
+    m_typingLabel->setMinimumWidth(0);
     m_typingLabel->hide();
     auto *findMessages = new QToolButton(right);
     findMessages->setObjectName(QStringLiteral("openMessageSearch"));
     findMessages->setText(tr("Search"));
     findMessages->setToolTip(tr("Search this conversation (Ctrl+F)"));
     findMessages->setAccessibleName(tr("Search this conversation"));
-    titleRow->addWidget(m_typingLabel);
     titleRow->addWidget(findMessages);
     v->addLayout(titleRow);
 
@@ -608,6 +616,9 @@ MainWindow::MainWindow()
     m_input->installEventFilter(this);
     right->installEventFilter(this);
     v->addWidget(m_recordBar);
+    // Signal Desktop places the typing status directly above the composer, so it
+    // remains visible without competing with the conversation title or actions.
+    v->addWidget(m_typingLabel, 0, Qt::AlignLeft);
     v->addLayout(h);
     split->addWidget(right);
     split->setStretchFactor(1, 1);
@@ -3908,6 +3919,9 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     }
 
     Message m = pe.msg;
+    // Receiving a message from someone is a definitive end to their typing state,
+    // even if their STOPPED typing event was delayed or lost.
+    if (!pe.outgoing) applyTyping(key, srcKey, false);
     m.outgoing = pe.outgoing;
     m.authorKey = pe.outgoing ? m_account : srcKey;
     if (m.outgoing && m.expiresInSeconds > 0) m.expirationStartMs = m.ts();
@@ -4201,24 +4215,28 @@ void MainWindow::applyTyping(const QString &key, const QString &sender, bool sta
         // shorter local expiry so a lost STOP does not leave a stale indicator visible.
         m_typingUntil[canonicalKey].insert(canonicalSender, QDateTime::currentMSecsSinceEpoch() + 12000);
     } else {
-        auto conversation = m_typingUntil.find(canonicalKey);
-        if (conversation != m_typingUntil.end()) {
-            conversation->remove(canonicalSender);
-            if (sender != canonicalSender) conversation->remove(sender);
-            if (conversation->isEmpty()) m_typingUntil.erase(conversation);
-        }
-        // Clean up an entry created by an older non-canonical chat key as well.
-        if (canonicalKey != key) {
-            auto legacy = m_typingUntil.find(key);
-            if (legacy != m_typingUntil.end()) {
-                legacy->remove(canonicalSender);
-                if (sender != canonicalSender) legacy->remove(sender);
-                if (legacy->isEmpty()) m_typingUntil.erase(legacy);
+        // STOP can arrive with the other identifier for the same contact. Remove the
+        // sender from every alias-equivalent direct-chat bucket so a stale UUID-keyed
+        // indicator cannot mask the STOP received under a phone-number key (or vice versa).
+        for (auto conversation = m_typingUntil.begin(); conversation != m_typingUntil.end();) {
+            const bool sameConversation = conversation.key() == canonicalKey ||
+                (!canonicalKey.startsWith(QLatin1String("g:")) &&
+                 !conversation.key().startsWith(QLatin1String("g:")) &&
+                 resolveKey(conversation.key()) == resolveKey(canonicalKey));
+            if (sameConversation) {
+                conversation->remove(canonicalSender);
+                if (sender != canonicalSender) conversation->remove(sender);
+                if (conversation->isEmpty()) {
+                    conversation = m_typingUntil.erase(conversation);
+                    continue;
+                }
             }
+            ++conversation;
         }
     }
-    if (canonicalKey == (m_current.startsWith(QLatin1String("g:")) ? m_current : resolveKey(m_current)))
-        updateTypingIndicator();
+    // Refresh even when the event belongs to a different conversation. This also
+    // clears a stale label promptly when a fast chat switch races with a STOP event.
+    updateTypingIndicator();
 }
 
 void MainWindow::updateTypingIndicator()
@@ -4228,6 +4246,17 @@ void MainWindow::updateTypingIndicator()
     QString lookupKey = currentKey;
     if (!m_typingUntil.contains(lookupKey) && m_typingUntil.contains(m_current))
         lookupKey = m_current; // migrate in-memory state written before canonicalization
+    // Historical chats can retain a UUID key while a fresh envelope is keyed by
+    // phone number (or vice versa). Match equivalent direct-chat aliases as a final
+    // fallback rather than silently hiding a typing event routed under the other key.
+    if (!m_typingUntil.contains(lookupKey) && !currentKey.startsWith(QLatin1String("g:"))) {
+        for (auto it = m_typingUntil.cbegin(); it != m_typingUntil.cend(); ++it) {
+            if (!it.key().startsWith(QLatin1String("g:")) && resolveKey(it.key()) == resolveKey(currentKey)) {
+                lookupKey = it.key();
+                break;
+            }
+        }
+    }
     if (!m_notify.typingIndicators || m_current.isEmpty() || !m_typingUntil.contains(lookupKey) ||
         m_typingUntil.value(lookupKey).isEmpty()) {
         m_typingLabel->clear();
@@ -4235,9 +4264,8 @@ void MainWindow::updateTypingIndicator()
         return;
     }
     const auto peers = m_typingUntil.value(lookupKey);
-    if (!m_convs.contains(m_current) || !m_convs.value(m_current).isGroup) {
-        m_typingLabel->setText(tr("typing…"));
-    } else if (peers.size() == 1) {
+    if (peers.size() == 1) {
+        // Include the sender's display name for both direct and group chats.
         m_typingLabel->setText(tr("%1 is typing…").arg(displayName(peers.constBegin().key())));
     } else {
         m_typingLabel->setText(tr("%1 people are typing…").arg(peers.size()));
