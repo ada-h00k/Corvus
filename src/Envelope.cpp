@@ -1,6 +1,7 @@
 #include "Envelope.h"
 
 #include <QJsonArray>
+#include <algorithm>
 
 
 static QList<TextStyleRange> parseTextStyles(const QJsonArray &arr)
@@ -71,6 +72,55 @@ static Quote parseQuote(const QJsonObject &dm)
     return q;
 }
 
+static QList<MentionRange> parseMentions(const QJsonObject &dm, const QString &text)
+{
+    QList<MentionRange> mentions;
+    QJsonArray ranges = dm.value(QStringLiteral("mentions")).toArray();
+    if (ranges.isEmpty()) ranges = dm.value(QStringLiteral("bodyRanges")).toArray();
+    for (const QJsonValue &value : ranges) {
+        const QJsonObject object = value.toObject();
+        if (object.isEmpty()) continue;
+        MentionRange range;
+        range.start = object.value(QStringLiteral("start")).toInt(-1);
+        range.length = object.value(QStringLiteral("length")).toInt(0);
+        range.uuid = object.value(QStringLiteral("uuid")).toString();
+        if (range.uuid.isEmpty()) range.uuid = object.value(QStringLiteral("recipient")).toString();
+        if (range.uuid.isEmpty()) range.uuid = object.value(QStringLiteral("recipientUuid")).toString();
+        if (range.uuid.isEmpty()) range.uuid = object.value(QStringLiteral("recipientNumber")).toString();
+        if (range.uuid.isEmpty()) range.uuid = object.value(QStringLiteral("mentionUuid")).toString();
+        if (range.uuid.isEmpty()) range.uuid = object.value(QStringLiteral("aci")).toString();
+        if (range.uuid.isEmpty()) range.uuid = object.value(QStringLiteral("mentionAci")).toString();
+        if (range.uuid.isEmpty()) range.uuid = object.value(QStringLiteral("number")).toString();
+        const QJsonValue recipientValue = object.value(QStringLiteral("recipient"));
+        const QJsonObject recipientObject = recipientValue.toObject();
+        if (range.uuid.isEmpty()) range.uuid = recipientObject.value(QStringLiteral("uuid")).toString();
+        if (range.uuid.isEmpty()) range.uuid = recipientObject.value(QStringLiteral("number")).toString();
+        const QJsonObject nested = object.value(QStringLiteral("mention")).toObject();
+        if (range.uuid.isEmpty()) range.uuid = nested.value(QStringLiteral("uuid")).toString();
+        if (range.uuid.isEmpty()) range.uuid = nested.value(QStringLiteral("aci")).toString();
+        if (range.uuid.isEmpty()) range.uuid = nested.value(QStringLiteral("number")).toString();
+        if (range.start >= 0 && range.length > 0 && range.start < text.size()) {
+            range.length = qMin(range.length, text.size() - range.start);
+            mentions.append(range);
+        }
+    }
+
+    // Some signal-cli builds expose the Signal Object Replacement Character but omit
+    // mention metadata. Preserve the placeholder so the UI can render a safe generic label.
+    for (int pos = 0; pos < text.size(); ++pos) {
+        if (text.at(pos) != QChar(0xfffc)) continue;
+        bool covered = false;
+        for (const MentionRange &range : mentions) {
+            if (pos >= range.start && pos < range.start + range.length) { covered = true; break; }
+        }
+        if (!covered) mentions.append({pos, 1, QString()});
+    }
+    std::sort(mentions.begin(), mentions.end(), [](const MentionRange &a, const MentionRange &b) {
+        return a.start < b.start;
+    });
+    return mentions;
+}
+
 // Fills reaction or message data from a dataMessage-like object (also used for sync sentMessage).
 static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelopeTs)
 {
@@ -102,6 +152,7 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
     out.msg.viewOnce = dm["viewOnce"].toBool();
     out.msg.text = dm["message"].toString();
     out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());
+    out.msg.mentions = parseMentions(dm, out.msg.text);
     out.msg.attachments = parseAttachments(dm);
     out.msg.linkPreview = out.msg.viewOnce ? LinkPreview() : parseLinkPreview(dm);
     const QJsonObject sticker = dm["sticker"].toObject();
@@ -148,6 +199,7 @@ static bool parseEdit(const QJsonObject &edit, ParsedEnvelope &out, qint64 envel
     out.targetTs = target;
     out.msg.text = text;
     out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());
+    out.msg.mentions = parseMentions(dm, out.msg.text);
     out.msg.time = ts > 0 ? QDateTime::fromMSecsSinceEpoch(ts) : QDateTime::currentDateTime();
     out.groupId = dm["groupInfo"].toObject()["groupId"].toString();
     return true;

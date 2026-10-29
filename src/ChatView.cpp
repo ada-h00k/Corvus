@@ -5,6 +5,7 @@
 #include <QAbstractTextDocumentLayout>
 #include <QApplication>
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QContextMenuEvent>
 #include <QDateTime>
 #include <QLabel>
@@ -82,7 +83,9 @@ QString linkify(const QString &text)
     return esc;
 }
 
-QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styles, const QColor &fg)
+QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styles,
+                          const QList<MentionRange> &mentions, const QColor &fg,
+                          const std::function<QString(const QString &)> &nameResolver)
 {
     if (text.isEmpty()) return QString();
     const int n = text.size();
@@ -93,8 +96,11 @@ QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styl
         for (int i = a; i < b; ++i) active[i].insert(r.style);
     }
 
-    QString html;
-    int runStart = 0;
+    QList<MentionRange> sortedMentions = mentions;
+    std::sort(sortedMentions.begin(), sortedMentions.end(), [](const MentionRange &a, const MentionRange &b) {
+        return a.start < b.start;
+    });
+
     auto runHtml = [&](int a, int b) {
         if (a >= b) return QString();
         QString css;
@@ -109,11 +115,34 @@ QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styl
         return css.isEmpty() ? piece : QStringLiteral("<span style=\"%1\">%2</span>").arg(css, piece);
     };
 
-    for (int i = 1; i <= n; ++i) {
-        if (i == n || active[i] != active[runStart]) {
-            html += runHtml(runStart, i);
-            runStart = i;
+    QString html;
+    int i = 0;
+    int mentionIndex = 0;
+    while (i < n) {
+        while (mentionIndex < sortedMentions.size() &&
+               (sortedMentions.at(mentionIndex).start < i || sortedMentions.at(mentionIndex).length <= 0))
+            ++mentionIndex;
+        if (mentionIndex < sortedMentions.size() && sortedMentions.at(mentionIndex).start == i) {
+            const MentionRange range = sortedMentions.at(mentionIndex++);
+            const int consume = text.at(i) == QChar(0xfffc) ? 1 : qMin(range.length, n - i);
+            QString label = range.uuid.isEmpty() ? QString() : (nameResolver ? nameResolver(range.uuid) : range.uuid);
+            if (label.trimmed().isEmpty() || label == range.uuid) {
+                // Avoid exposing a raw UUID as the UI text if signal-cli could not resolve it.
+                const bool looksLikeUuid = range.uuid.count(QLatin1Char('-')) >= 4;
+                label = (range.uuid.isEmpty() || looksLikeUuid)
+                            ? QCoreApplication::translate("ChatView", "mentioned member") : range.uuid;
+            }
+            html += QStringLiteral("<span style=\"color:%1;font-weight:600;\">@%2</span>")
+                        .arg(fg.lighter(125).name(), label.toHtmlEscaped());
+            i += qMax(1, consume);
+            continue;
         }
+        int j = i + 1;
+        while (j < n && active[j] == active[i] &&
+               (mentionIndex >= sortedMentions.size() || sortedMentions.at(mentionIndex).start != j))
+            ++j;
+        html += runHtml(i, j);
+        i = j;
     }
     return html;
 }
@@ -876,7 +905,7 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
         it.doc->setDocumentMargin(0);
         it.doc->setDefaultFont(font());
         it.doc->setDefaultStyleSheet(QStringLiteral("a { color: %1; text-decoration: underline; }").arg(fg.name()));
-        it.doc->setHtml(styledMessageHtml(m.text, m.textStyles, fg));
+        it.doc->setHtml(styledMessageHtml(m.text, m.textStyles, m.mentions, fg, m_nameOf));
         if (it.textRect.width() > 0) it.doc->setTextWidth(it.textRect.width());
     }
     it.pix.clear();

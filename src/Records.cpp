@@ -60,6 +60,32 @@ static QList<TextStyleRange> textStylesFromJson(const QJsonArray &arr)
     return styles;
 }
 
+static QJsonArray mentionsToJson(const QList<MentionRange> &mentions)
+{
+    QJsonArray result;
+    for (const MentionRange &range : mentions) {
+        if (range.start < 0 || range.length <= 0) continue;
+        QJsonObject item{{QStringLiteral("s"), range.start}, {QStringLiteral("l"), range.length}};
+        if (!range.uuid.isEmpty()) item[QStringLiteral("u")] = range.uuid;
+        result.append(item);
+    }
+    return result;
+}
+
+static QList<MentionRange> mentionsFromJson(const QJsonArray &array)
+{
+    QList<MentionRange> result;
+    for (const QJsonValue &value : array) {
+        const QJsonObject item = value.toObject();
+        MentionRange range;
+        range.start = item.value(QStringLiteral("s")).toInt(-1);
+        range.length = item.value(QStringLiteral("l")).toInt(0);
+        range.uuid = item.value(QStringLiteral("u")).toString();
+        if (range.start >= 0 && range.length > 0) result.append(range);
+    }
+    return result;
+}
+
 static QJsonObject linkPreviewToJson(const LinkPreview &lp)
 {
     QJsonObject o;
@@ -130,6 +156,7 @@ static QJsonObject editToJson(const Message &m)
 {
     QJsonObject e{{"x", m.text}, {"et", QJsonValue(static_cast<qint64>(m.editTs))}, {"ec", m.editCount}};
     if (!m.textStyles.isEmpty()) e["st"] = textStylesToJson(m.textStyles);
+    if (!m.mentions.isEmpty()) e["mn"] = mentionsToJson(m.mentions);
     return e;
 }
 
@@ -166,6 +193,7 @@ QJsonObject message(const QString &conv, const Message &m)
         d["at"] = attachmentsToJson(safeAttachments);
     }
     if (!m.textStyles.isEmpty() && !m.deleted) d["st"] = textStylesToJson(m.textStyles);
+    if (!m.mentions.isEmpty() && !m.deleted) d["mn"] = mentionsToJson(m.mentions);
 
     QJsonObject rec{{"t", "m"},
                     {"c", conv},
@@ -227,6 +255,7 @@ void applyExtras(Message &m, const QJsonObject &d)
         const QJsonObject e = d["ed"].toObject();
         if (e.contains("x")) m.text = e["x"].toString();
         if (e.contains("st")) m.textStyles = textStylesFromJson(e["st"].toArray());
+        if (e.contains("mn")) m.mentions = mentionsFromJson(e["mn"].toArray());
         m.editTs = e["et"].toVariant().toLongLong();
         m.editCount = e["ec"].toInt();
     }
@@ -239,6 +268,7 @@ void applyExtras(Message &m, const QJsonObject &d)
     if (d.contains("vv")) m.viewOnceViewed = d["vv"].toBool();
     if (d.contains("ve")) m.viewOnceExpired = d["ve"].toBool();
     if (d.contains("st")) m.textStyles = textStylesFromJson(d["st"].toArray());
+    if (d.contains("mn")) m.mentions = mentionsFromJson(d["mn"].toArray());
     if (d.contains("at")) {
         m.attachments.clear();
         for (const QJsonValue &v : d["at"].toArray()) m.attachments.append(attachmentFromJson(v.toObject()));
@@ -248,6 +278,7 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.deleted = true;
         m.text.clear();
         m.textStyles.clear();
+        m.mentions.clear();
         m.attachments.clear();
         m.quote = Quote();
         m.linkPreview = LinkPreview();

@@ -32,6 +32,7 @@
 #include <QApplication>
 #include <QAudioOutput>
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
@@ -218,24 +219,182 @@ static QList<TextStyleRange> styleRangesFromJson(const QJsonArray &arr)
     return styles;
 }
 
-static QJsonArray normalizedStyles(const QJsonArray &styles, int lead, int end)
+struct PreparedComposerMessage {
+    QString text;
+    QJsonArray textStyles;
+    QList<MentionRange> mentions;
+};
+
+static int removedAtBefore(const QList<int> &positions, int offset)
 {
-    QJsonArray out;
-    for (const QJsonValue &v : styles) {
-        const QStringList p = v.toString().split(QLatin1Char(':'));
-        if (p.size() != 3) continue;
-        bool ok1 = false, ok2 = false;
-        const int start = p.at(0).toInt(&ok1);
-        const int length = p.at(1).toInt(&ok2);
-        if (!ok1 || !ok2 || length <= 0) continue;
-        const int a = qMax(start, lead);
-        const int b = qMin(start + length, end);
-        if (a < b)
-            out.append(QStringLiteral("%1:%2:%3").arg(a - lead).arg(b - a).arg(p.at(2)));
-    }
-    return out;
+    int count = 0;
+    for (int position : positions) if (position < offset) ++count;
+    return count;
 }
 
+static PreparedComposerMessage prepareComposerMessage(const QString &raw, const QJsonArray &rawStyles,
+                                                       const QList<MentionRange> &rawMentions,
+                                                       bool allowMentions)
+{
+    PreparedComposerMessage prepared;
+    const int first = raw.indexOf(QRegularExpression(QStringLiteral("\\S")));
+    const int lead = first < 0 ? raw.size() : first;
+    const int last = raw.lastIndexOf(QRegularExpression(QStringLiteral("\\S")));
+    const int end = last < 0 ? lead : last + 1;
+    if (end <= lead) return prepared;
+
+    QList<MentionRange> included;
+    QList<int> removeAt;
+    if (allowMentions) {
+        for (const MentionRange &range : rawMentions) {
+            if (range.start <= lead || range.length <= 0 || range.start + range.length > end ||
+                range.start > raw.size() || raw.at(range.start - 1) != QLatin1Char('@') || range.uuid.isEmpty())
+                continue;
+            included.append(range);
+            removeAt.append(range.start - 1);
+        }
+    }
+    std::sort(removeAt.begin(), removeAt.end());
+    removeAt.erase(std::unique(removeAt.begin(), removeAt.end()), removeAt.end());
+
+    prepared.text = raw.mid(lead, end - lead);
+    for (auto it = removeAt.crbegin(); it != removeAt.crend(); ++it)
+        prepared.text.remove(*it - lead, 1);
+
+    for (const MentionRange &range : included) {
+        MentionRange mapped = range;
+        mapped.start = range.start - lead - removedAtBefore(removeAt, range.start);
+        if (mapped.start >= 0 && mapped.start + mapped.length <= prepared.text.size())
+            prepared.mentions.append(mapped);
+    }
+
+    for (const QJsonValue &value : rawStyles) {
+        const QStringList parts = value.toString().split(QLatin1Char(':'));
+        if (parts.size() != 3) continue;
+        bool startOk = false, lengthOk = false;
+        const int start = parts.at(0).toInt(&startOk);
+        const int length = parts.at(1).toInt(&lengthOk);
+        if (!startOk || !lengthOk || length <= 0) continue;
+        const int a = qMax(start, lead);
+        const int b = qMin(start + length, end);
+        if (a >= b) continue;
+        const int mappedA = a - lead - removedAtBefore(removeAt, a);
+        const int mappedB = b - lead - removedAtBefore(removeAt, b);
+        if (mappedA < mappedB)
+            prepared.textStyles.append(QStringLiteral("%1:%2:%3").arg(mappedA).arg(mappedB - mappedA).arg(parts.at(2)));
+    }
+    return prepared;
+}
+
+static QJsonArray mentionCliArguments(const QList<MentionRange> &mentions)
+{
+    QJsonArray result;
+    for (const MentionRange &mention : mentions) {
+        if (mention.start >= 0 && mention.length > 0 && !mention.uuid.isEmpty())
+            result.append(QStringLiteral("%1:%2:%3").arg(mention.start).arg(mention.length).arg(mention.uuid));
+    }
+    return result;
+}
+
+static QString comparableMessageText(const Message &message)
+{
+    QString text = message.text;
+    QList<MentionRange> ranges = message.mentions;
+    std::sort(ranges.begin(), ranges.end(), [](const MentionRange &a, const MentionRange &b) { return a.start > b.start; });
+    for (const MentionRange &range : ranges) {
+        if (range.start < 0 || range.start >= text.size() || range.length <= 0) continue;
+        const int length = text.at(range.start) == QChar(0xfffc) ? 1 : qMin(range.length, text.size() - range.start);
+        text.replace(range.start, length, QStringLiteral("\x1fmention\x1f"));
+    }
+    return text;
+}
+
+struct ComposerRepresentation {
+    QString text;
+    QList<MentionRange> mentions;
+};
+
+static ComposerRepresentation composerRepresentation(const Message &message,
+                                                       const std::function<QString(const QString &)> &nameResolver)
+{
+    ComposerRepresentation result;
+    QList<MentionRange> ranges = message.mentions;
+    std::sort(ranges.begin(), ranges.end(), [](const MentionRange &a, const MentionRange &b) { return a.start < b.start; });
+    int sourcePosition = 0;
+    for (const MentionRange &range : ranges) {
+        if (range.start < sourcePosition || range.start < 0 || range.start >= message.text.size() || range.length <= 0) continue;
+        result.text += message.text.mid(sourcePosition, range.start - sourcePosition);
+        const int consume = message.text.at(range.start) == QChar(0xfffc) ? 1 : qMin(range.length, message.text.size() - range.start);
+        QString name = range.uuid.isEmpty() ? QString() : (nameResolver ? nameResolver(range.uuid) : range.uuid);
+        if (name.isEmpty() || name == range.uuid) {
+            const bool uuidLike = range.uuid.count(QLatin1Char('-')) >= 4;
+            name = range.uuid.isEmpty() || uuidLike ? QCoreApplication::translate("MainWindow", "mentioned member") : range.uuid;
+        }
+        result.text += QLatin1Char('@');
+        const int mentionStart = result.text.size();
+        result.text += name;
+        if (!range.uuid.isEmpty()) result.mentions.append({mentionStart, static_cast<int>(name.size()), range.uuid});
+        sourcePosition = range.start + consume;
+    }
+    result.text += message.text.mid(sourcePosition);
+    return result;
+}
+
+static Message signalReadyMessage(const Message &source, const std::function<QString(const QString &)> &nameResolver)
+{
+    Message result = source;
+    result.text.clear();
+    result.mentions.clear();
+    result.textStyles.clear();
+    const int n = source.text.size();
+    QVector<int> offsetMap(n + 1, 0);
+    QList<MentionRange> ranges = source.mentions;
+    std::sort(ranges.begin(), ranges.end(), [](const MentionRange &a, const MentionRange &b) { return a.start < b.start; });
+    int rangeIndex = 0;
+    for (int pos = 0; pos < n;) {
+        offsetMap[pos] = result.text.size();
+        while (rangeIndex < ranges.size() && ranges.at(rangeIndex).start < pos) ++rangeIndex;
+        const bool mentionStarts = rangeIndex < ranges.size() && ranges.at(rangeIndex).start == pos &&
+                                   ranges.at(rangeIndex).length > 0;
+        if (mentionStarts && source.text.at(pos) == QChar(0xfffc)) {
+            const MentionRange range = ranges.at(rangeIndex++);
+            QString label = range.uuid.isEmpty() ? QString() : (nameResolver ? nameResolver(range.uuid) : range.uuid);
+            if (label.isEmpty() || label == range.uuid) {
+                const bool uuidLike = range.uuid.count(QLatin1Char('-')) >= 4;
+                label = range.uuid.isEmpty() || uuidLike ? QCoreApplication::translate("MainWindow", "mentioned member") : range.uuid;
+            }
+            if (range.uuid.isEmpty()) {
+                result.text += QLatin1Char('@') + label;
+            } else {
+                const int newStart = result.text.size();
+                result.text += label;
+                result.mentions.append({newStart, static_cast<int>(label.size()), range.uuid});
+            }
+            ++pos;
+            offsetMap[pos] = result.text.size();
+            continue;
+        }
+        if (mentionStarts) {
+            const MentionRange range = ranges.at(rangeIndex++);
+            const int mappedStart = result.text.size();
+            const int length = qMin(range.length, n - pos);
+            if (!range.uuid.isEmpty()) result.mentions.append({mappedStart, length, range.uuid});
+        }
+        result.text += source.text.at(pos);
+        ++pos;
+        offsetMap[pos] = result.text.size();
+    }
+    offsetMap[n] = result.text.size();
+    for (const TextStyleRange &style : source.textStyles) {
+        if (style.start < 0 || style.length <= 0 || style.style.isEmpty()) continue;
+        const int oldStart = qBound(0, style.start, n);
+        const int oldEnd = qBound(oldStart, style.start + style.length, n);
+        const int newStart = offsetMap.at(oldStart);
+        const int newEnd = offsetMap.at(oldEnd);
+        if (newEnd > newStart) result.textStyles.append({newStart, newEnd - newStart, style.style});
+    }
+    return result;
+}
 
 static AppIcon::Mode iconMode(const Appearance &a)
 {
@@ -494,6 +653,27 @@ MainWindow::MainWindow()
 #endif
     m_input = new MessageInput;
     m_input->setPlaceholderText(tr("Write a message …"));
+
+    // A non-activating popup keeps keyboard focus in the composer while offering
+    // native Signal-style @mentions for the members of the open group.
+    m_mentionPopup = new QFrame(right);
+    m_mentionPopup->setObjectName(QStringLiteral("mentionSuggestionPopup"));
+    m_mentionPopup->setAttribute(Qt::WA_ShowWithoutActivating);
+    m_mentionPopup->setFocusPolicy(Qt::NoFocus);
+    m_mentionPopup->setFrameShape(QFrame::StyledPanel);
+    auto *mentionPopupLayout = new QVBoxLayout(m_mentionPopup);
+    mentionPopupLayout->setContentsMargins(4, 4, 4, 4);
+    mentionPopupLayout->setSpacing(0);
+    m_mentionList = new QListWidget(m_mentionPopup);
+    m_mentionList->setObjectName(QStringLiteral("mentionSuggestionList"));
+    m_mentionList->setFocusPolicy(Qt::NoFocus);
+    m_mentionList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_mentionList->setIconSize(QSize(32, 32));
+    m_mentionList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_mentionList->setMaximumHeight(200);
+    mentionPopupLayout->addWidget(m_mentionList);
+    m_mentionPopup->hide();
+    connect(m_mentionList, &QListWidget::itemClicked, this, &MainWindow::acceptMention);
     // Floating "popout" handle: it hovers centered above the message field,
     // overlapping the chat view, and is only shown while the mouse is over the field or over
     // the spot where the handle sits (see positionExpandButton()).
@@ -811,6 +991,7 @@ MainWindow::MainWindow()
         updateAttachBar();
         updateDraftLinkPreview();
         updateLocalTypingState();
+        updateMentionSuggestions();
     });
     connect(m_emojiBtn, &QToolButton::clicked, this, &MainWindow::showComposerPicker);
     connect(m_picker, &EmojiPicker::emojiSelected, this, [this](const QString &e) {
@@ -1049,6 +1230,29 @@ bool MainWindow::event(QEvent *event)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_input && event->type() == QEvent::KeyPress &&
+        m_mentionPopup && m_mentionPopup->isVisible() && m_mentionList && m_mentionList->count() > 0) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Down || keyEvent->key() == Qt::Key_Up) {
+            const int count = m_mentionList->count();
+            int row = m_mentionList->currentRow();
+            if (row < 0) row = 0;
+            else row = (row + (keyEvent->key() == Qt::Key_Down ? 1 : count - 1)) % count;
+            m_mentionList->setCurrentRow(row);
+            keyEvent->accept();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter || keyEvent->key() == Qt::Key_Tab) {
+            if (m_mentionList->currentItem()) acceptMention(m_mentionList->currentItem());
+            keyEvent->accept();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Escape) {
+            hideMentionSuggestions();
+            keyEvent->accept();
+            return true;
+        }
+    }
     if (event->type() == QEvent::KeyPress) {
         auto *keyEvent = static_cast<QKeyEvent *>(event);
         if (keyEvent->matches(QKeySequence::Find)) {
@@ -1311,7 +1515,9 @@ QString MainWindow::displayName(const QString &key) const
     const QString r = resolveKey(key);
     if (!m_account.isEmpty() && (key == m_account || r == m_account)) return tr("You");
     auto it = m_convs.constFind(r);
-    return it != m_convs.constEnd() ? it->title : key;
+    if (it != m_convs.constEnd() && !it->title.isEmpty() && it->title != r) return it->title;
+    const QString contactName = m_contactNames.value(r);
+    return contactName.isEmpty() ? key : contactName;
 }
 
 // ---------------------------------------------------------------- Start
@@ -2437,6 +2643,7 @@ void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const 
     if (confirmed.viewOnce) {
         confirmed.text.clear();
         confirmed.textStyles.clear();
+        confirmed.mentions.clear();
         confirmed.quote = Quote();
         confirmed.attachments.clear();
     }
@@ -2561,6 +2768,8 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     if (m_editKey == key && m_editTs == m.ts()) cancelEdit();
     m.deleted = true;
     m.text.clear();
+    m.textStyles.clear();
+    m.mentions.clear();
     m.attachments.clear();
     m.quote = Quote();
     m.linkPreview = LinkPreview();
@@ -2585,7 +2794,8 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
 }
 
 bool MainWindow::applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text,
-                           qint64 newTs, const QList<TextStyleRange> &textStyles)
+                           qint64 newTs, const QList<TextStyleRange> &textStyles,
+                           const QList<MentionRange> &mentions)
 {
     auto it = m_convs.find(key);
     if (it == m_convs.end()) return false;
@@ -2596,6 +2806,7 @@ bool MainWindow::applyEdit(const QString &key, qint64 targetTs, const QStringLis
     if (newTs <= m.latestTs()) return false; // already applied / outdated revision
     m.text = text;
     m.textStyles = textStyles;
+    m.mentions = mentions;
     // The preview belongs to the old body; edits do not currently regenerate it.
     m.linkPreview = LinkPreview();
     m.editTs = newTs;
@@ -2851,6 +3062,7 @@ void MainWindow::expireMessages()
                 message.attachments.clear();
                 message.text.clear();
                 message.textStyles.clear();
+                message.mentions.clear();
                 message.quote = Quote();
                 changed = true;
                 continue;
@@ -3241,6 +3453,7 @@ void MainWindow::saveDraft(const QString &key)
     Draft d;
     d.text = m_input->text();
     d.richText = m_input->richText();
+    d.mentions = m_input->mentionRanges();
     d.cursor = m_input->textCursor().position();
     d.reply = m_replyQuote;
     d.files = m_pendingFiles;
@@ -3259,6 +3472,8 @@ void MainWindow::loadDraft(const QString &key)
     if (!d.richText.isEmpty()) m_input->setRichText(d.richText);
     else m_input->setText(d.text);
     m_loadingDraft = false;
+    for (const MentionRange &mention : d.mentions)
+        m_input->applyMentionFormat(mention.start, mention.length, mention.uuid);
     m_input->setCursorPosition(d.cursor);
     m_replyQuote = d.reply;
     m_pendingFiles = d.files;
@@ -3432,6 +3647,120 @@ void MainWindow::updateReplyBar()
     if (text.size() > 120) text = text.left(120) + QStringLiteral("…");
     m_replyLabel->setText(tr("↩ Replying to %1: %2").arg(displayName(m_replyQuote.authorKey), text));
     m_replyBar->show();
+}
+
+void MainWindow::hideMentionSuggestions()
+{
+    if (m_mentionPopup) m_mentionPopup->hide();
+    if (m_mentionList) m_mentionList->clear();
+    m_mentionStart = -1;
+    m_mentionEnd = -1;
+}
+
+void MainWindow::updateMentionSuggestions()
+{
+    if (!m_input || !m_mentionPopup || !m_mentionList || m_current.isEmpty() ||
+        !m_convs.contains(m_current) || !m_convs.value(m_current).isGroup ||
+        !m_editKey.isEmpty() || !m_input->isEnabled()) {
+        hideMentionSuggestions();
+        return;
+    }
+
+    const QString text = m_input->text();
+    const int cursor = m_input->textCursor().position();
+    if (cursor <= 0 || cursor > text.size()) {
+        hideMentionSuggestions();
+        return;
+    }
+    const int at = text.lastIndexOf(QLatin1Char('@'), cursor - 1);
+    if (at < 0 || (at > 0 && (text.at(at - 1).isLetterOrNumber() || text.at(at - 1) == QLatin1Char('_')))) {
+        hideMentionSuggestions();
+        return;
+    }
+    const QString query = text.mid(at + 1, cursor - at - 1);
+    if (query.contains(QRegularExpression(QStringLiteral("\\s"))) || query.contains(QLatin1Char('@')) ||
+        query.contains(QLatin1Char('\n')) || query.size() > 48) {
+        hideMentionSuggestions();
+        return;
+    }
+
+    struct Candidate { QString id; QString name; };
+    QList<Candidate> candidates;
+    for (const QString &id : m_groupMembers.value(m_current)) {
+        if (id.isEmpty() || resolveKey(id) == resolveKey(m_account) || id == m_account) continue;
+        QString name = memberName(id).trimmed();
+        if (name.isEmpty()) name = id;
+        if (!query.isEmpty() && !name.contains(query, Qt::CaseInsensitive) &&
+            !id.contains(query, Qt::CaseInsensitive)) continue;
+        candidates.append({id, name});
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate &a, const Candidate &b) {
+        return a.name.localeAwareCompare(b.name) < 0;
+    });
+    if (candidates.isEmpty()) {
+        hideMentionSuggestions();
+        return;
+    }
+
+    m_mentionStart = at;
+    m_mentionEnd = cursor;
+    m_mentionList->clear();
+    const int limit = qMin(8, candidates.size());
+    for (int i = 0; i < limit; ++i) {
+        auto *item = new QListWidgetItem(candidates.at(i).name, m_mentionList);
+        item->setSizeHint(QSize(0, 40));
+        const QString avatarKey = resolveKey(candidates.at(i).id);
+        const auto avatarConversation = m_convs.constFind(avatarKey);
+        const QPixmap avatar = avatarConversation != m_convs.constEnd()
+                                   ? avatarPixmap(*avatarConversation)
+                                   : placeholderAvatar(candidates.at(i).id, candidates.at(i).name);
+        item->setIcon(QIcon(avatar));
+        item->setData(Qt::UserRole, candidates.at(i).id);
+        item->setData(Qt::UserRole + 1, candidates.at(i).name);
+        item->setToolTip(candidates.at(i).id);
+    }
+    m_mentionList->setCurrentRow(0);
+    // Size the popup to the number of suggestions instead of QListWidget's
+    // default sizeHint, which reserves space for several empty rows. Keep at
+    // most five rows visible; larger result sets scroll inside the list.
+    const int visibleRows = qMin(limit, 5);
+    m_mentionList->setFixedHeight(visibleRows * 40);
+    m_mentionPopup->adjustSize();
+    // Anchor the suggestions to the whole composer field, not the current caret.
+    // This keeps the list directly above the input as in Signal Desktop, even when
+    // the user is typing on a later line in the multi-line editor.
+    const int popupHeight = qMin(240, m_mentionPopup->sizeHint().height());
+    m_mentionPopup->resize(m_input->width(), popupHeight);
+    // Keep the popup as a child of the conversation panel and position it in
+    // that panel's coordinate system. Top-level Qt::Tool windows can be placed
+    // by the window manager (notably under Wayland), which may ignore move() and
+    // leave the popup in the middle of the screen.
+    QWidget *panel = m_mentionPopup->parentWidget();
+    const QPoint inputTopLeft = m_input->mapTo(panel, QPoint(0, 0));
+    const int availableHeight = qMax(0, inputTopLeft.y() - 4);
+    const int finalHeight = qMin(popupHeight, availableHeight);
+    m_mentionPopup->resize(m_input->width(), finalHeight);
+    m_mentionPopup->move(inputTopLeft.x(), inputTopLeft.y() - finalHeight - 4);
+    m_mentionPopup->show();
+    m_mentionPopup->raise();
+}
+
+void MainWindow::acceptMention(QListWidgetItem *item)
+{
+    if (!item || !m_input || m_mentionStart < 0 || m_mentionEnd < m_mentionStart) {
+        hideMentionSuggestions();
+        return;
+    }
+    const QString id = item->data(Qt::UserRole).toString();
+    const QString name = item->data(Qt::UserRole + 1).toString();
+    const int start = m_mentionStart;
+    const int end = m_mentionEnd;
+    m_input->insertMention(start, end, id, name);
+    hideMentionSuggestions();
+    m_input->setFocus(Qt::OtherFocusReason);
+    updateAttachBar();
+    updateDraftLinkPreview();
+    updateLocalTypingState();
 }
 
 void MainWindow::updateAttachBar()
@@ -3914,7 +4243,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         // Like the official clients: an edit is only applied to a known message written by the
         // same author. Anything else (unknown target, someone else's message) is dropped.
         const QString author = pe.outgoing ? m_account : srcKey;
-        applyEdit(key, pe.targetTs, {author}, pe.msg.text, pe.msg.ts(), pe.msg.textStyles);
+        applyEdit(key, pe.targetTs, {author}, pe.msg.text, pe.msg.ts(), pe.msg.textStyles, pe.msg.mentions);
         return;
     }
 
@@ -3931,6 +4260,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         // media on this device, so discard the own-device attachment reference immediately.
         m.text.clear();
         m.textStyles.clear();
+        m.mentions.clear();
         m.quote = Quote();
         m.linkPreview = LinkPreview();
         if (m.outgoing) m.attachments.clear();
@@ -3975,7 +4305,8 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         if (!alreadyConfirmed) {
             for (auto it = m_pendingSends.cbegin(); it != m_pendingSends.cend(); ++it) {
                 const PendingSend &pending = it.value();
-                if (pending.echoReceived || pending.conversationKey != key || pending.message.text != m.text)
+                if (pending.echoReceived || pending.conversationKey != key ||
+                    comparableMessageText(pending.message) != comparableMessageText(m))
                     continue;
                 // The outgoing View Once envelope has its attachment reference cleared above.
                 // Match on the protocol flag before comparing attachment counts, or a one-time
@@ -4505,13 +4836,16 @@ void MainWindow::sendForwardedMessage(const std::shared_ptr<ForwardOperation> &o
 {
     if (!operation || operation->destinations.isEmpty()) return;
     const Message &source = operation->source;
+    const Message signalSource = signalReadyMessage(source, [this](const QString &id) { return displayName(id); });
     const QString prefix = operation->note.isEmpty() ? QString() : operation->note + QStringLiteral("\n\n");
-    const QString forwardedText = prefix + source.text;
+    const QString forwardedText = prefix + signalSource.text;
     QJsonArray styles;
-    for (const TextStyleRange &style : source.textStyles) {
+    for (const TextStyleRange &style : signalSource.textStyles) {
         if (style.start < 0 || style.length <= 0 || style.style.isEmpty()) continue;
         styles.append(QStringLiteral("%1:%2:%3").arg(style.start + prefix.size()).arg(style.length).arg(style.style));
     }
+    QList<MentionRange> forwardedMentions = signalSource.mentions;
+    for (MentionRange &mention : forwardedMentions) mention.start += prefix.size();
 
     const bool directSticker = source.text.isEmpty() && source.attachments.size() == 1 &&
                                source.attachments.first().isSticker() &&
@@ -4558,6 +4892,9 @@ void MainWindow::sendForwardedMessage(const std::shared_ptr<ForwardOperation> &o
         if (!forwardedText.isEmpty()) {
             params[QStringLiteral("message")] = forwardedText;
             if (!styles.isEmpty()) params[QStringLiteral("textStyle")] = styles;
+            const QJsonArray nativeMentions = mentionCliArguments(forwardedMentions);
+            if (!nativeMentions.isEmpty() && targetConversation.isGroup)
+                params[QStringLiteral("mention")] = nativeMentions;
         }
         if (directSticker) {
             const Attachment &sticker = source.attachments.first();
@@ -4570,8 +4907,9 @@ void MainWindow::sendForwardedMessage(const std::shared_ptr<ForwardOperation> &o
         Message preview;
         preview.time = QDateTime::currentDateTime();
         preview.text = forwardedText;
-        preview.textStyles = source.textStyles;
+        preview.textStyles = signalSource.textStyles;
         for (TextStyleRange &style : preview.textStyles) style.start += prefix.size();
+        preview.mentions = targetConversation.isGroup ? forwardedMentions : QList<MentionRange>();
         preview.outgoing = true;
         preview.authorKey = m_account;
         preview.expiresInSeconds = targetConversation.expirationSeconds;
@@ -4649,22 +4987,23 @@ void MainWindow::sendMessage()
 {
     if (!m_editKey.isEmpty()) {
         const QString raw = m_input->text();
-        const QString text = raw.trimmed();
-        const int first = raw.indexOf(QRegularExpression(QStringLiteral("\\S")));
-        const int lead = first < 0 ? raw.size() : first;
-        const int last = raw.lastIndexOf(QRegularExpression(QStringLiteral("\\S")));
-        const int end = last < 0 ? lead : last + 1;
-        sendEdit(text, normalizedStyles(m_input->textStyles(), lead, end));
+        const bool allowMentions = m_convs.contains(m_editKey) && m_convs.value(m_editKey).isGroup;
+        const PreparedComposerMessage prepared = prepareComposerMessage(raw, m_input->textStyles(),
+                                                                         m_input->mentionRanges(), allowMentions);
+        sendEdit(prepared.text, prepared.textStyles, prepared.mentions);
         return;
     }
     const QString rawText = m_input->text();
-    const QString text = rawText.trimmed();
-    const int first = rawText.indexOf(QRegularExpression(QStringLiteral("\\S")));
-    const int lead = first < 0 ? rawText.size() : first;
-    const int last = rawText.lastIndexOf(QRegularExpression(QStringLiteral("\\S")));
-    const int end = last < 0 ? lead : last + 1;
-    const QJsonArray textStyles = normalizedStyles(m_input->textStyles(), lead, end);
-    if ((text.isEmpty() && m_pendingFiles.isEmpty()) || !m_convs.contains(m_current)) return;
+    const QString rawRichText = m_input->richText();
+    const int rawCursor = m_input->textCursor().position();
+    const QList<MentionRange> rawMentionRanges = m_input->mentionRanges();
+    if (!m_convs.contains(m_current)) return;
+    const Conversation c = m_convs.value(m_current);
+    const PreparedComposerMessage prepared = prepareComposerMessage(rawText, m_input->textStyles(), rawMentionRanges, c.isGroup);
+    const QString text = prepared.text;
+    const QJsonArray textStyles = prepared.textStyles;
+    const QList<MentionRange> mentions = prepared.mentions;
+    if (text.isEmpty() && m_pendingFiles.isEmpty()) return;
     if (m_convs[m_current].blocked) {
         statusBar()->showMessage(tr("%1 is blocked. Unblock the contact to send messages.").arg(m_convs[m_current].title), 8000);
         return;
@@ -4679,7 +5018,6 @@ void MainWindow::sendMessage()
         return;
     }
 
-    const Conversation c = m_convs[m_current];
     const QStringList files = m_pendingFiles;
     const Quote quote = m_replyQuote;
     const QUrl giphySentAnalyticsUrl = m_pendingGifAnalyticsUrl;
@@ -4703,6 +5041,8 @@ void MainWindow::sendMessage()
     if (!text.isEmpty()) {
         p[QStringLiteral("message")] = text;
         if (!textStyles.isEmpty()) p[QStringLiteral("textStyle")] = textStyles;
+        const QJsonArray nativeMentions = mentionCliArguments(mentions);
+        if (!nativeMentions.isEmpty()) p[QStringLiteral("mention")] = nativeMentions;
     }
 
     LinkPreview previewForSend;
@@ -4784,6 +5124,7 @@ void MainWindow::sendMessage()
         preview.time = QDateTime::fromMSecsSinceEpoch(temporaryTimestamp);
     }
     preview.text = text;
+    preview.mentions = mentions;
     preview.outgoing = true;
     preview.authorKey = m_account;
     preview.expiresInSeconds = c.expirationSeconds;
@@ -4816,7 +5157,7 @@ void MainWindow::sendMessage()
     if (key == m_current) showConversation(true);
 
     m_cli.call(QStringLiteral("send"), p,
-               [this, pendingId, key, text, textStyles, files, quote, viewOnce, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
+               [this, pendingId, key, text, rawText, rawRichText, rawCursor, rawMentionRanges, textStyles, files, quote, viewOnce, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
         QDir(stageDir).removeRecursively();
         auto pendingIt = m_pendingSends.find(pendingId);
         if (pendingIt == m_pendingSends.end()) return;
@@ -4832,8 +5173,10 @@ void MainWindow::sendMessage()
                 // that chat's draft, never into the composer of the chat that is open now.
                 Draft &d = m_drafts[key];
                 if (d.text.isEmpty() && d.files.isEmpty() && !d.reply.valid) {
-                    d.text = text;
-                    d.cursor = text.size();
+                    d.text = rawText;
+                    d.richText = rawRichText;
+                    d.mentions = rawMentionRanges;
+                    d.cursor = rawCursor;
                     d.files = files;
                     d.reply = quote;
                     d.viewOnce = viewOnce;
@@ -4842,7 +5185,13 @@ void MainWindow::sendMessage()
                 return;
             }
             const bool draftWasEmpty = m_input->text().isEmpty();
-            if (draftWasEmpty) m_input->setText(text); // don't overwrite a newer draft
+            if (draftWasEmpty) {
+                if (!rawRichText.isEmpty()) m_input->setRichText(rawRichText);
+                else m_input->setText(rawText);
+                for (const MentionRange &mention : rawMentionRanges)
+                    m_input->applyMentionFormat(mention.start, mention.length, mention.uuid);
+                m_input->setCursorPosition(rawCursor);
+            } // don't overwrite a newer draft
             if (draftWasEmpty && m_pendingFiles.isEmpty() && !files.isEmpty()) {
                 m_pendingFiles = files;
                 if (m_viewOnceBtn) m_viewOnceBtn->setChecked(viewOnce);
@@ -4896,8 +5245,11 @@ void MainWindow::startEdit(int idx)
         m_input->setExpanded(true);
         m_editExpandedInput = true;
     }
-    m_input->setText(m.text);
-    m_input->setCursorPosition(m.text.size());
+    const ComposerRepresentation editable = composerRepresentation(m, [this](const QString &id) { return displayName(id); });
+    m_input->setText(editable.text);
+    for (const MentionRange &mention : editable.mentions)
+        m_input->applyMentionFormat(mention.start, mention.length, mention.uuid);
+    m_input->setCursorPosition(editable.text.size());
     updateEditBar();
     m_input->setFocus();
 }
@@ -4954,7 +5306,7 @@ void MainWindow::updateEditBar()
     m_editBar->show();
 }
 
-void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles)
+void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles, const QList<MentionRange> &mentions)
 {
     auto it = m_convs.find(m_editKey);
     if (it == m_convs.end()) {
@@ -4972,7 +5324,8 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles)
         statusBar()->showMessage(tr("A message cannot be empty."), 6000);
         return;
     }
-    if (text == m.text && textStyles == styleRangesToJson(m.textStyles)) { // nothing changed
+    const QJsonArray mentionParams = mentionCliArguments(mentions);
+    if (text == m.text && textStyles == styleRangesToJson(m.textStyles) && mentionParams == mentionCliArguments(m.mentions)) {
         cancelEdit();
         return;
     }
@@ -4986,6 +5339,7 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles)
     QJsonObject p{{QStringLiteral("message"), text},
                   {QStringLiteral("editTimestamp"), QJsonValue(static_cast<qint64>(m.latestTs()))}};
     if (!textStyles.isEmpty()) p[QStringLiteral("textStyle")] = textStyles;
+    if (!mentionParams.isEmpty()) p[QStringLiteral("mention")] = mentionParams;
     if (m.quote.valid && !m.quote.authorKey.isEmpty()) { // an edit keeps the reply it belongs to
         p[QStringLiteral("quoteTimestamp")] = QJsonValue(static_cast<qint64>(m.quote.id));
         p[QStringLiteral("quoteAuthor")] = m.quote.authorKey;
@@ -4995,7 +5349,7 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles)
 
     const QString key = c.key;
     const qint64 origTs = m.ts();
-    m_cli.call(QStringLiteral("send"), p, [this, key, origTs, text, textStyles](const QJsonValue &res, const QString &err) {
+    m_cli.call(QStringLiteral("send"), p, [this, key, origTs, text, textStyles, mentions](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
             // stay in edit mode with the typed text so nothing is lost
             statusBar()->showMessage(tr("Editing failed: %1").arg(err), 10000);
@@ -5004,7 +5358,7 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles)
         statusBar()->clearMessage();
         qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
         if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
-        applyEdit(key, origTs, {m_account}, text, ts, styleRangesFromJson(textStyles));
+        applyEdit(key, origTs, {m_account}, text, ts, styleRangesFromJson(textStyles), mentions);
         if (m_editKey == key && m_editTs == origTs) cancelEdit();
     });
 }
@@ -5197,6 +5551,7 @@ void MainWindow::consumeViewOnce(const QString &key, qint64 timestamp, const QSt
     message.attachments.clear();
     message.text.clear();
     message.textStyles.clear();
+    message.mentions.clear();
     message.quote = Quote();
     persist(Records::viewOnceUpdate(key, message));
 

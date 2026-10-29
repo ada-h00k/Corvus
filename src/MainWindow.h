@@ -27,6 +27,7 @@
 #include <memory>
 
 class ChatView;
+class QFrame;
 class EmojiPicker;
 class GiphyPicker;
 class MessageInput;
@@ -230,6 +231,9 @@ private:
     void navigateMessageSearch(bool backwards);
     void updateReplyBar();
     void updateAttachBar();
+    void updateMentionSuggestions();
+    void hideMentionSuggestions();
+    void acceptMention(QListWidgetItem *item);
     void updateDraftLinkPreview();
     void queueReadReceipt(const QString &key, qint64 timestamp, const QString &author, bool viewOnce);
     void flushPendingReadReceipts(const QString &key);
@@ -257,11 +261,12 @@ private:
     void saveDraft(const QString &key);
     void loadDraft(const QString &key);
     void switchConversation(const QString &key);
-    void sendEdit(const QString &text, const QJsonArray &textStyles = {});
+    void sendEdit(const QString &text, const QJsonArray &textStyles = {},
+                  const QList<MentionRange> &mentions = {});
     // Applies an edit (own or received). author = who must have written the message.
     bool applyDelete(const QString &key, qint64 targetTs, const QStringList &authors);
     bool applyEdit(const QString &key, qint64 targetTs, const QStringList &authors, const QString &text, qint64 newTs,
-                   const QList<TextStyleRange> &textStyles = {});
+                   const QList<TextStyleRange> &textStyles = {}, const QList<MentionRange> &mentions = {});
     void updateEditBar();
     void sendReaction(int idx, const QString &emoji);
     void addRecipient(QJsonObject &params, const Conversation &c) const;
@@ -300,6 +305,10 @@ private:
 
     QPointer<SettingsDialog> m_settings;
     QPointer<ProfilePage> m_profilePage;
+    QFrame *m_mentionPopup = nullptr;
+    QListWidget *m_mentionList = nullptr;
+    int m_mentionStart = -1;
+    int m_mentionEnd = -1;
 
     SignalCli m_cli;
     HistoryStore m_store;
@@ -374,6 +383,7 @@ private:
     struct Draft {
         QString text;
         QString richText;
+        QList<MentionRange> mentions;
         int cursor = 0;
         Quote reply;
         QStringList files;
