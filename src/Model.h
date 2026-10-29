@@ -95,6 +95,13 @@ struct LinkPreview {
     }
 };
 
+struct RecipientReceipt {
+    // 0=sent, 1=delivered, 2=read. Event times are the local receipt timestamps reported by signal-cli.
+    int status = 0;
+    qint64 deliveredAtMs = 0;
+    qint64 readAtMs = 0;
+};
+
 struct Message {
     QDateTime time;
     // Local timeline order is independent from Signal's sender timestamp (`time`). A sender's
@@ -105,6 +112,10 @@ struct Message {
     QString text;
     QList<TextStyleRange> textStyles;
     bool outgoing = false;
+    // Receipt state for outgoing messages: 0=sent, 1=delivered, 2=read.
+    int receiptStatus = 0;
+    // Recipient identity (number/UUID) -> individual delivery/read state, for outgoing messages.
+    QHash<QString, RecipientReceipt> recipientReceipts;
     QString authorKey;    // number/UUID of the author (own number for outgoing)
     Quote quote;
     LinkPreview linkPreview;

@@ -323,6 +323,50 @@ void SignalCli::onStdout()
     }
 }
 
+QJsonObject SignalCli::envelopeFromNotification(const QJsonObject &notification)
+{
+    const QString method = notification.value(QStringLiteral("method")).toString();
+    const QJsonObject params = notification.value(QStringLiteral("params")).toObject();
+
+    QJsonObject envelope = params.value(QStringLiteral("envelope")).toObject();
+    if (envelope.isEmpty())
+        envelope = params.value(QStringLiteral("result")).toObject().value(QStringLiteral("envelope")).toObject();
+
+    // The normal signal-cli JSON-RPC protocol sends typingMessage inside a `receive`
+    // envelope. Accept `receiveTyping` as well because some wrappers expose typing as
+    // its own notification and may put the event directly in params.
+    if (method == QLatin1String("receive"))
+        return envelope;
+    if (method != QLatin1String("receiveTyping"))
+        return {};
+
+    if (envelope.isEmpty())
+        envelope = params;
+
+    QJsonObject typing = envelope.value(QStringLiteral("typingMessage")).toObject();
+    if (typing.isEmpty()) typing = params.value(QStringLiteral("typingMessage")).toObject();
+    if (typing.isEmpty()) typing = envelope.value(QStringLiteral("typing")).toObject();
+    if (typing.isEmpty()) typing = params.value(QStringLiteral("typing")).toObject();
+    if (typing.isEmpty() && (params.contains(QStringLiteral("action")) || params.contains(QStringLiteral("type"))))
+        typing = params;
+    if (typing.isEmpty()) return {};
+
+    // Some wrappers put source and timestamp fields beside the nested envelope. Copy
+    // only envelope metadata, never arbitrary RPC parameters, into the normalized event.
+    static const QStringList metadataKeys = {
+        QStringLiteral("source"), QStringLiteral("sourceNumber"), QStringLiteral("sourceUuid"),
+        QStringLiteral("sourceName"), QStringLiteral("timestamp")
+    };
+    for (const QString &key : metadataKeys) {
+        if (!envelope.contains(key) && params.contains(key))
+            envelope.insert(key, params.value(key));
+    }
+    if (!typing.contains(QStringLiteral("groupId")) && params.contains(QStringLiteral("groupId")))
+        typing.insert(QStringLiteral("groupId"), params.value(QStringLiteral("groupId")));
+    envelope.insert(QStringLiteral("typingMessage"), typing);
+    return envelope;
+}
+
 void SignalCli::handleLine(const QByteArray &line)
 {
     QJsonParseError err;
@@ -348,12 +392,11 @@ void SignalCli::handleLine(const QByteArray &line)
         return;
     }
 
-    // Notification (incoming message)
-    if (o.value(QStringLiteral("method")).toString() == QLatin1String("receive")) {
-        const QJsonObject params = o.value(QStringLiteral("params")).toObject();
-        QJsonObject env = params.value(QStringLiteral("envelope")).toObject();
-        if (env.isEmpty())
-            env = params.value(QStringLiteral("result")).toObject().value(QStringLiteral("envelope")).toObject();
+    // Incoming message and typing notifications. Normalize wrapper-specific typing
+    // events before forwarding so the rest of the app has one parsing path.
+    const QString method = o.value(QStringLiteral("method")).toString();
+    if (method == QLatin1String("receive") || method == QLatin1String("receiveTyping")) {
+        const QJsonObject env = envelopeFromNotification(o);
         if (!env.isEmpty()) emit envelopeReceived(env);
     }
 }

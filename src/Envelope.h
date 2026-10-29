@@ -6,7 +6,7 @@
 
 // A signal-cli "receive" envelope reduced to what the GUI needs.
 struct ParsedEnvelope {
-    enum Kind { None, Message_, Reaction, Edit, Delete, ExpirationUpdate } kind = None;
+    enum Kind { None, Message_, Reaction, Edit, Delete, ExpirationUpdate, Receipt, Typing } kind = None;
     bool outgoing = false;   // sent by one of our own other devices (sync message)
     QString src;             // sender number / UUID (incoming)
     QString srcName;         // sender's profile name
@@ -14,6 +14,13 @@ struct ParsedEnvelope {
     QString groupId;         // set for group messages
     int expirationSeconds = 0;
     Message msg;             // Message_: time, text, attachments, quote (author keys unresolved)
+    // Receipt notifications acknowledge timestamps of messages sent by this client.
+    bool readReceipt = false;
+    bool deliveryReceipt = false;
+    qint64 receiptTimeMs = 0; // event timestamp, distinct from the acknowledged message timestamps
+    QList<qint64> receiptTimestamps;
+    // Typing notifications from a contact (or a member of a group).
+    bool typingStarted = false;
 
     // Reaction
     QString emoji;

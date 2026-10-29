@@ -231,6 +231,16 @@ private:
     void updateReplyBar();
     void updateAttachBar();
     void updateDraftLinkPreview();
+    void queueReadReceipt(const QString &key, qint64 timestamp, const QString &author, bool viewOnce);
+    void flushPendingReadReceipts(const QString &key);
+    void applyReceipt(const QString &key, qint64 timestamp, int status,
+                      const QString &recipientKey, qint64 receiptTimeMs);
+    void showMessageDetails(int idx);
+    void applyTyping(const QString &key, const QString &sender, bool started);
+    void updateTypingIndicator();
+    void updateLocalTypingState();
+    void sendTypingStatus(const QString &key, bool stop);
+    void stopLocalTyping();
     void refreshLinkPreviewBar();
     void requestLinkPreviewPage(const QString &url, int redirects, quint64 generation);
     void requestLinkPreviewImage(const QString &url, const QString &previewUrl, int redirects, quint64 generation);
@@ -309,6 +319,7 @@ private:
     QUrl m_pendingGifAnalyticsUrl;
 
     QHash<QString, Conversation> m_convs;
+    QHash<QString, QStringList> m_groupMembers; // group conversation -> current member identities
     QHash<QString, QString> m_knownSafety;         // recipient -> safety number (digits) last seen / accepted
     QString m_knownSafetyAccount;                  // account m_knownSafety was loaded for
     QHash<QString, SafetyChange> m_safetyChanged;  // conversation key -> unacknowledged change
@@ -335,6 +346,10 @@ private:
     QHash<QString, QString> m_hiddenContacts; // isHidden contacts from listContacts: key -> name
     QSet<QString> m_declined;                // declined message requests (persisted, outlives the chat)
     QString m_current;
+    QString m_localTypingKey;
+    bool m_loadingDraft = false;
+    QHash<QString, QHash<qint64, QString>> m_pendingReadReceipts; // conversation -> timestamp -> author
+    QHash<QString, QHash<QString, qint64>> m_typingUntil; // conversation -> peer -> expiration ms
     QString m_account;
     QString m_version; // e.g. "0.13.12"
     QString m_historyProtectionMode;
@@ -390,6 +405,9 @@ private:
     QPointer<MediaGalleryDialog> m_gallery;
     QString m_galleryKey;
     QTimer m_expirationTimer;
+    QTimer m_localTypingTimer;
+    QTimer m_typingIdleTimer;
+    QTimer m_typingSweepTimer;
     QPointer<QWidget> m_savedToast;
     QString m_savedToastPath;
     QTimer m_savedToastTimer;
@@ -399,6 +417,7 @@ private:
     QLineEdit *m_contactSearch = nullptr; // filters the chat list, finds address book contacts
     QAction *m_contactSearchAction = nullptr; // File menu entry: toggles m_contactSearch, text follows the state
     QLabel *m_title;
+    QLabel *m_typingLabel = nullptr;
     ChatView *m_view = nullptr;
     QWidget *m_searchBar;
     QLineEdit *m_searchEdit;

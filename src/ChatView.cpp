@@ -374,6 +374,15 @@ void ChatView::setGroupMode(bool group)
     if (!m_items.isEmpty()) relayoutAll();
 }
 
+void ChatView::setReadReceiptsEnabled(bool enabled)
+{
+    if (m_showReadReceipts == enabled) return;
+    m_showReadReceipts = enabled;
+    for (int i = 0; i < m_items.size() && i < m_msgs.size(); ++i)
+        m_items[i].statusRead = m_showReadReceipts && m_msgs[i].receiptStatus >= 2;
+    viewport()->update();
+}
+
 void ChatView::setAppearance(const Appearance &a)
 {
     m_ap = a;
@@ -820,6 +829,9 @@ void ChatView::buildItem(int i)
 
     it.timeText = QLocale().toString(m.time.time(), QLocale::ShortFormat);
     if (m.isEdited() && !m.deleted) it.timeText = tr("edited") + QStringLiteral(" · ") + it.timeText;
+    it.statusText.clear();
+    it.statusRead = m_showReadReceipts && m.receiptStatus >= 2;
+    if (m.outgoing) it.statusText = m.receiptStatus >= 1 ? QStringLiteral("✓✓") : QStringLiteral("✓");
     if (!m.outgoing) it.sender = m.sender.isEmpty() ? nameOf(m.authorKey) : m.sender;
     if (m.quote.valid) {
         it.quoteAuthor = nameOf(m.quote.authorKey);
@@ -902,7 +914,7 @@ void ChatView::layoutItem(int i, int y)
 
     it.y = y;
     it.dateRect = it.bubble = it.senderRect = it.quoteBox = it.quoteAuthorRect = it.quoteTextRect = QRect();
-    it.textRect = it.timeRect = it.pillsRect = QRect();
+    it.textRect = it.timeRect = it.statusRect = it.pillsRect = QRect();
     it.linkPreviewRect = it.linkPreviewImageRect = it.linkPreviewTitleRect =
         it.linkPreviewDescriptionRect = it.linkPreviewHostRect = QRect();
     it.attRects.clear();
@@ -930,6 +942,7 @@ void ChatView::layoutItem(int i, int y)
 
     // ---- pass 1: sizes
     int contentW = fms.horizontalAdvance(it.timeText);
+    if (!it.statusText.isEmpty()) contentW += 5 + fms.horizontalAdvance(it.statusText);
     int senderW = 0, senderH = 0;
     QString senderShown;
     if (it.showSender) {
@@ -1056,7 +1069,13 @@ void ChatView::layoutItem(int i, int y)
         yb += linkPreviewH + kGap;
     }
     const int timeW = fms.horizontalAdvance(it.timeText);
-    it.timeRect = QRect(bubbleX + bubbleW - kPadX - timeW, yb, timeW, fms.height());
+    const int statusW = fms.horizontalAdvance(it.statusText);
+    if (statusW > 0) {
+        it.statusRect = QRect(bubbleX + bubbleW - kPadX - statusW, yb, statusW, fms.height());
+        it.timeRect = QRect(it.statusRect.left() - 5 - timeW, yb, timeW, fms.height());
+    } else {
+        it.timeRect = QRect(bubbleX + bubbleW - kPadX - timeW, yb, timeW, fms.height());
+    }
     yb += fms.height();
     // Reaction pills overlap the lower edge of the bubble: reserve room so they never cover the time.
     const int pillH = fms.height() + 8;
@@ -1428,6 +1447,10 @@ void ChatView::paintItem(QPainter &p, int i)
     p.setFont(small);
     p.setPen(alpha(fg, 175));
     p.drawText(it.timeRect, Qt::AlignRight | Qt::AlignVCenter, it.timeText);
+    if (!it.statusText.isEmpty()) {
+        p.setPen(it.statusRead ? QColor(0x2e, 0xa0, 0x66) : alpha(fg, 175));
+        p.drawText(it.statusRect, Qt::AlignRight | Qt::AlignVCenter, it.statusText);
+    }
 
     // reaction pills overlapping the bubble's lower edge
     for (const Pill &pill : it.pills) {
@@ -1653,6 +1676,8 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
     }
     const Message m = m_msgs[idx];
     if (!menu.isEmpty()) menu.addSeparator();
+    if (!m.deleted)
+        menu.addAction(tr("Message details…"), this, [this, idx] { emit messageDetailsRequested(idx); });
     if (m.deleted) { // placeholder: only removing it from this device is left
         menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });
         menu.exec(e->globalPos());

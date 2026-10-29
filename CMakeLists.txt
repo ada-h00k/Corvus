@@ -347,6 +347,14 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(receipt_typing_test tests/receipt_typing_test.cpp)
+    target_link_libraries(receipt_typing_test PRIVATE app_core Qt6::Test)
+    add_test(NAME receipt_typing COMMAND receipt_typing_test)
+    set_tests_properties(receipt_typing PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(conversation_order_test tests/conversation_order_test.cpp)
     target_link_libraries(conversation_order_test PRIVATE app_core Qt6::Test)
     add_test(NAME conversation_order COMMAND conversation_order_test)

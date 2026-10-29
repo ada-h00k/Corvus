@@ -33,6 +33,7 @@
 #include <QAudioOutput>
 #include <QClipboard>
 #include <QCursor>
+#include <QDateTime>
 #include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -60,6 +61,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -77,6 +79,8 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTextDocument>
+#include <QTableWidget>
+#include <QHeaderView>
 #include <QStyleHints>
 #include <QStyleOptionToolButton>
 #include <QSystemTrayIcon>
@@ -308,11 +312,17 @@ MainWindow::MainWindow()
     m_title->setFont(f);
     auto *titleRow = new QHBoxLayout;
     titleRow->addWidget(m_title, 1);
+    m_typingLabel = new QLabel(right);
+    m_typingLabel->setObjectName(QStringLiteral("typingIndicator"));
+    m_typingLabel->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 0.9em;"));
+    m_typingLabel->setTextFormat(Qt::PlainText);
+    m_typingLabel->hide();
     auto *findMessages = new QToolButton(right);
     findMessages->setObjectName(QStringLiteral("openMessageSearch"));
     findMessages->setText(tr("Search"));
     findMessages->setToolTip(tr("Search this conversation (Ctrl+F)"));
     findMessages->setAccessibleName(tr("Search this conversation"));
+    titleRow->addWidget(m_typingLabel);
     titleRow->addWidget(findMessages);
     v->addLayout(titleRow);
 
@@ -744,6 +754,7 @@ MainWindow::MainWindow()
     // Chat view actions
     connect(m_view, &ChatView::replyRequested, this, &MainWindow::startReply);
     connect(m_view, &ChatView::forwardRequested, this, &MainWindow::forwardMessage);
+    connect(m_view, &ChatView::messageDetailsRequested, this, &MainWindow::showMessageDetails);
     connect(m_view, &ChatView::editRequested, this, &MainWindow::startEdit);
     connect(m_view, &ChatView::deleteRequested, this, &MainWindow::deleteMessage);
     connect(m_view, &ChatView::reactionChosen, this, &MainWindow::sendReaction);
@@ -785,7 +796,11 @@ MainWindow::MainWindow()
         addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
     });
     connect(m_viewOnceBtn, &QToolButton::toggled, this, [this] { updateAttachBar(); });
-    connect(m_input, &QTextEdit::textChanged, this, [this] { updateAttachBar(); updateDraftLinkPreview(); });
+    connect(m_input, &QTextEdit::textChanged, this, [this] {
+        updateAttachBar();
+        updateDraftLinkPreview();
+        updateLocalTypingState();
+    });
     connect(m_emojiBtn, &QToolButton::clicked, this, &MainWindow::showComposerPicker);
     connect(m_picker, &EmojiPicker::emojiSelected, this, [this](const QString &e) {
         if (m_pickAction) m_pickAction(e);
@@ -874,12 +889,49 @@ MainWindow::MainWindow()
 
     // signal-cli
     connect(&m_cli, &SignalCli::envelopeReceived, this, &MainWindow::onEnvelope);
-    connect(&m_cli, &SignalCli::stopped, this, [this](const QString &reason) { setConnected(false, reason); });
+    connect(&m_cli, &SignalCli::stopped, this, [this](const QString &reason) {
+        m_localTypingTimer.stop();
+        m_localTypingKey.clear();
+        m_typingUntil.clear();
+        updateTypingIndicator();
+        setConnected(false, reason);
+    });
     connect(&m_cli, &SignalCli::logLine, this, [this](const QString &l) { statusBar()->showMessage(l, 5000); });
 
     m_expirationTimer.setInterval(1000);
     connect(&m_expirationTimer, &QTimer::timeout, this, &MainWindow::expireMessages);
     m_expirationTimer.start();
+
+    // signal-cli typing notifications expire after roughly 15 seconds; send a keepalive
+    // while the user is still writing and expire stale incoming indicators promptly.
+    m_localTypingTimer.setInterval(5000);
+    connect(&m_localTypingTimer, &QTimer::timeout, this, [this] {
+        if (m_localTypingKey.isEmpty() || !m_notify.typingIndicators ||
+            m_localTypingKey != m_current || !m_input || m_input->text().trimmed().isEmpty()) {
+            stopLocalTyping();
+            return;
+        }
+        sendTypingStatus(m_localTypingKey, false);
+    });
+    m_typingIdleTimer.setSingleShot(true);
+    m_typingIdleTimer.setInterval(3500);
+    connect(&m_typingIdleTimer, &QTimer::timeout, this, &MainWindow::stopLocalTyping);
+    m_typingSweepTimer.setInterval(500);
+    connect(&m_typingSweepTimer, &QTimer::timeout, this, [this] {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        bool changed = false;
+        for (auto conversation = m_typingUntil.begin(); conversation != m_typingUntil.end();) {
+            auto peer = conversation.value().begin();
+            while (peer != conversation.value().end()) {
+                if (peer.value() <= now) { peer = conversation.value().erase(peer); changed = true; }
+                else ++peer;
+            }
+            if (conversation.value().isEmpty()) conversation = m_typingUntil.erase(conversation);
+            else ++conversation;
+        }
+        if (changed) updateTypingIndicator();
+    });
+    m_typingSweepTimer.start();
 
     // The handle is invisible (and so cannot receive hover events itself, nor steal clicks from the
     // chat view), so the mouse position is polled to show it when the pointer gets near. The timer
@@ -966,6 +1018,7 @@ bool MainWindow::event(QEvent *event)
             m_notifier->close(m_current);
             refreshList();
         }
+        flushPendingReadReceipts(m_current);
         // When returning to the app (e.g. via Alt+Tab), put the caret back into
         // the composer so typing can start immediately. Do this after Qt has
         // finished activation so another child widget cannot steal the focus.
@@ -1511,6 +1564,15 @@ void MainWindow::refreshGroups(std::function<void()> done)
             if (title.isEmpty()) title = tr("Group");
             Conversation &c = conv(QStringLiteral("g:") + id, title, true);
             c.title = title;
+            const GroupInfo::Info groupInfo = GroupInfo::parseOne(g);
+            QStringList memberKeys;
+            const QString selfResolved = resolveKey(m_account);
+            for (const GroupInfo::Member &member : groupInfo.members) {
+                const QString memberKey = resolveKey(member.id());
+                if (memberKey.isEmpty() || memberKey == selfResolved || member.is(m_account)) continue;
+                if (!memberKeys.contains(memberKey)) memberKeys.append(memberKey);
+            }
+            m_groupMembers.insert(c.key, memberKeys);
             const int expiration = g.value(QStringLiteral("messageExpirationTime")).toInt();
             if (c.expirationSeconds != expiration) {
                 c.expirationSeconds = expiration;
@@ -3182,8 +3244,10 @@ void MainWindow::saveDraft(const QString &key)
 void MainWindow::loadDraft(const QString &key)
 {
     const Draft d = m_drafts.take(key); // the composer owns it while the chat is open
+    m_loadingDraft = true;
     if (!d.richText.isEmpty()) m_input->setRichText(d.richText);
     else m_input->setText(d.text);
+    m_loadingDraft = false;
     m_input->setCursorPosition(d.cursor);
     m_replyQuote = d.reply;
     m_pendingFiles = d.files;
@@ -3198,6 +3262,7 @@ void MainWindow::switchConversation(const QString &key)
     if (key == m_current) return;
     // A running recording stays with the chat it was made in (it ends up in that chat's draft).
     if (m_recorder && m_recorder->isRecording()) stopVoiceRecording(false);
+    stopLocalTyping();
     cancelEdit(); // an edit in progress is dropped and the text typed before it comes back
     saveDraft(m_current);
     m_current = key;
@@ -3209,6 +3274,7 @@ void MainWindow::openConversation(const QString &key)
     if (!m_convs.contains(key)) return;
     switchConversation(key); // stashes the old chat's draft, restores this chat's draft
     m_convs[m_current].unread = 0;
+    flushPendingReadReceipts(key);
     startIncomingExpirationTimers(key);
     showConversation();
     refreshList();
@@ -3238,6 +3304,7 @@ void MainWindow::showConversation(bool keepScroll)
     if (!m_convs.contains(m_current)) {
         m_title->setText(tr("No conversation selected"));
         m_view->clearView();
+        updateTypingIndicator();
         updateSafetyBar();
         updateGroupActions();
         updateMessageSearch();
@@ -3245,6 +3312,8 @@ void MainWindow::showConversation(bool keepScroll)
     }
     const Conversation &c = m_convs[m_current];
     m_title->setText(c.title);
+    m_view->setReadReceiptsEnabled(m_notify.readReceipts);
+    updateTypingIndicator();
     updateSafetyBar();
     updateGroupActions();
     m_view->setGroupMode(c.isGroup);
@@ -3786,6 +3855,24 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     // client we treat it as our own send (no unread badge, no notification for it).
     if (!pe.outgoing && !group && isNoteToSelf(srcKey)) pe.outgoing = true;
 
+    if (pe.kind == ParsedEnvelope::Receipt) {
+        // Delivery receipts are always accepted. Read receipts are not processed at all when
+        // the local privacy option is disabled; do not mislabel them as delivery receipts.
+        if (pe.readReceipt && !m_notify.readReceipts) return;
+        const int status = pe.readReceipt ? 2 : (pe.deliveryReceipt ? 1 : 0);
+        if (status <= 0) return;
+        const qint64 receiptTime = pe.receiptTimeMs > 0 ? pe.receiptTimeMs : QDateTime::currentMSecsSinceEpoch();
+        for (qint64 timestamp : std::as_const(pe.receiptTimestamps))
+            applyReceipt(key, timestamp, status, srcKey, receiptTime);
+        return;
+    }
+
+    if (pe.kind == ParsedEnvelope::Typing) {
+        if (!m_notify.typingIndicators || srcKey.isEmpty()) return;
+        applyTyping(key, srcKey, pe.typingStarted);
+        return;
+    }
+
     if (pe.kind == ParsedEnvelope::ExpirationUpdate) {
         auto conversation = m_convs.find(key);
         if (conversation != m_convs.end() && conversation->expirationSeconds != pe.expirationSeconds) {
@@ -3915,6 +4002,9 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     }
 
     const QString title = group ? tr("Group") : (pe.outgoing ? key : m.sender);
+    // Even if signal-cli replays a message that is already in local history, acknowledging it
+    // while its conversation is open is correct and prevents a stale unread state on the sender.
+    if (!pe.outgoing) queueReadReceipt(key, m.ts(), m.authorKey, m.viewOnce);
     if (!addMessage(key, m, title, group)) return;
     if (!pe.outgoing && !group && !pe.srcName.isEmpty()) learnName(key, pe.srcName);
     if (!pe.outgoing) {
@@ -3922,6 +4012,285 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         if (!group) refreshAvatar(key); // the contact may have changed the picture
     }
     if (!m.viewOnce) fetchThumbnails(key, m.ts(), m.authorKey);
+}
+
+void MainWindow::queueReadReceipt(const QString &key, qint64 timestamp, const QString &author, bool viewOnce)
+{
+    if (!m_notify.readReceipts || viewOnce || key.isEmpty() || author.isEmpty() || timestamp <= 0) return;
+    m_pendingReadReceipts[key].insert(timestamp, author);
+    if (key == m_current && userIsLooking()) flushPendingReadReceipts(key);
+}
+
+void MainWindow::flushPendingReadReceipts(const QString &key)
+{
+    if (!m_notify.readReceipts || key.isEmpty() || !m_cli.isRunning() || !userIsLooking()) return;
+    auto pending = m_pendingReadReceipts.take(key);
+    if (pending.isEmpty()) return;
+
+    QHash<QString, QJsonArray> byAuthor;
+    for (auto it = pending.cbegin(); it != pending.cend(); ++it)
+        byAuthor[it.value()].append(QJsonValue(static_cast<qint64>(it.key())));
+
+    for (auto it = byAuthor.cbegin(); it != byAuthor.cend(); ++it) {
+        QJsonObject params{{QStringLiteral("recipient"), it.key()},
+                           {QStringLiteral("targetTimestamps"), it.value()},
+                           {QStringLiteral("type"), QStringLiteral("read")}};
+        m_cli.call(QStringLiteral("sendReceipt"), params,
+                   [this, key, timestamps = it.value(), author = it.key()](const QJsonValue &, const QString &error) {
+            if (error.isEmpty()) return;
+            qWarning() << "Could not send read receipt:" << error;
+            // Do not lose receipts on a transient CLI error; the next activation/open can retry.
+            if (!m_notify.readReceipts) return;
+            for (const QJsonValue &value : timestamps) {
+                const qint64 timestamp = value.toVariant().toLongLong();
+                if (timestamp > 0) m_pendingReadReceipts[key].insert(timestamp, author);
+            }
+        });
+    }
+}
+
+void MainWindow::applyReceipt(const QString &key, qint64 timestamp, int status,
+                              const QString &recipientKey, qint64 receiptTimeMs)
+{
+    if (timestamp <= 0 || status <= 0 || recipientKey.isEmpty() ||
+        (status >= 2 && !m_notify.readReceipts)) return;
+    status = qBound(1, status, 2);
+    const QString recipient = resolveKey(recipientKey).isEmpty() ? recipientKey : resolveKey(recipientKey);
+    bool changed = false;
+    auto applyToConversation = [&](const QString &conversationKey, Conversation &conversation) {
+        for (Message &message : conversation.msgs) {
+            if (!message.outgoing || (message.ts() != timestamp && message.latestTs() != timestamp)) continue;
+            RecipientReceipt receipt = message.recipientReceipts.value(recipient);
+            const int oldStatus = receipt.status;
+            const qint64 oldDeliveredAt = receipt.deliveredAtMs;
+            const qint64 oldReadAt = receipt.readAtMs;
+            if (status > receipt.status) receipt.status = status;
+            if (status == 1 && receipt.deliveredAtMs <= 0) receipt.deliveredAtMs = receiptTimeMs;
+            if (status == 2 && receipt.readAtMs <= 0) receipt.readAtMs = receiptTimeMs;
+            if (oldStatus == receipt.status && oldDeliveredAt == receipt.deliveredAtMs && oldReadAt == receipt.readAtMs)
+                continue;
+            message.recipientReceipts.insert(recipient, receipt);
+            const int previousAggregate = message.receiptStatus;
+            message.receiptStatus = previousAggregate;
+            for (auto it = message.recipientReceipts.cbegin(); it != message.recipientReceipts.cend(); ++it)
+                message.receiptStatus = qMax(message.receiptStatus, it.value().status);
+            persist(Records::receiptStatusUpdate(conversationKey, message));
+            changed = true;
+        }
+    };
+
+    auto direct = m_convs.find(key);
+    if (direct != m_convs.end()) applyToConversation(key, direct.value());
+    // Group receipts identify the member, while the acknowledged timestamp identifies the sent
+    // message. If the direct conversation has no matching outgoing message, search group chats.
+    if (!changed) {
+        for (auto conversation = m_convs.begin(); conversation != m_convs.end(); ++conversation)
+            if (conversation.key() != key) applyToConversation(conversation.key(), conversation.value());
+    }
+    if (changed && m_convs.contains(m_current)) showConversation(true);
+    else if (changed) refreshList();
+}
+
+void MainWindow::showMessageDetails(int idx)
+{
+    const auto conversationIt = m_convs.constFind(m_current);
+    if (conversationIt == m_convs.cend() || idx < 0 || idx >= conversationIt->msgs.size()) return;
+    const Conversation &conversation = conversationIt.value();
+    const Message message = conversation.msgs.at(idx);
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Message details"));
+    dialog.setModal(true);
+    dialog.resize(660, 360);
+    auto *layout = new QVBoxLayout(&dialog);
+
+    const QString timestamp = message.time.isValid()
+        ? QLocale().toString(message.time.toLocalTime(), QLocale::LongFormat)
+        : tr("Unknown");
+    auto *timestampLabel = new QLabel(tr("Message timestamp: %1").arg(timestamp), &dialog);
+    timestampLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(timestampLabel);
+
+    if (message.outgoing) {
+        auto *table = new QTableWidget(&dialog);
+        table->setColumnCount(4);
+        table->setHorizontalHeaderLabels({tr("Recipient"), tr("Status"), tr("Delivered at"), tr("Read at")});
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        table->setSelectionMode(QAbstractItemView::SingleSelection);
+        table->verticalHeader()->hide();
+        table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+
+        QStringList recipients;
+        if (conversation.isGroup) {
+            recipients = m_groupMembers.value(m_current);
+        } else if (!m_current.isEmpty()) {
+            recipients.append(m_current);
+        }
+        for (auto it = message.recipientReceipts.cbegin(); it != message.recipientReceipts.cend(); ++it)
+            if (!recipients.contains(it.key())) recipients.append(it.key());
+        recipients.removeAll(m_account);
+        recipients.removeAll(resolveKey(m_account));
+        recipients.removeDuplicates();
+        std::sort(recipients.begin(), recipients.end(), [this](const QString &a, const QString &b) {
+            return displayName(a).localeAwareCompare(displayName(b)) < 0;
+        });
+
+        auto formattedReceiptTime = [this](qint64 ms) {
+            if (ms <= 0) return QStringLiteral("—");
+            return QLocale().toString(QDateTime::fromMSecsSinceEpoch(ms).toLocalTime(), QLocale::LongFormat);
+        };
+        table->setRowCount(recipients.size());
+        int row = 0;
+        for (const QString &recipientKey : std::as_const(recipients)) {
+            const RecipientReceipt receipt = message.recipientReceipts.value(recipientKey);
+            int effectiveStatus = receipt.status;
+            if (!m_notify.readReceipts && effectiveStatus >= 2) effectiveStatus = 1;
+            const QString status = effectiveStatus >= 2 ? tr("Read")
+                                  : effectiveStatus == 1 ? tr("Delivered") : tr("Sent");
+            auto *nameItem = new QTableWidgetItem(displayName(recipientKey));
+            nameItem->setData(Qt::UserRole, recipientKey);
+            table->setItem(row, 0, nameItem);
+            table->setItem(row, 1, new QTableWidgetItem(status));
+            table->setItem(row, 2, new QTableWidgetItem(formattedReceiptTime(receipt.deliveredAtMs)));
+            table->setItem(row, 3, new QTableWidgetItem(m_notify.readReceipts
+                ? formattedReceiptTime(receipt.readAtMs) : QStringLiteral("—")));
+            ++row;
+        }
+        if (recipients.isEmpty()) {
+            auto *none = new QLabel(tr("No recipient status is available yet."), &dialog);
+            none->setWordWrap(true);
+            layout->addWidget(none);
+        } else {
+            table->setMinimumHeight(qMin(260, 30 + recipients.size() * 30));
+            layout->addWidget(table, 1);
+        }
+        if (!m_notify.readReceipts) {
+            auto *note = new QLabel(tr("Read status is hidden because Read receipts is disabled."), &dialog);
+            note->setWordWrap(true);
+            layout->addWidget(note);
+        }
+    } else {
+        auto *received = new QLabel(tr("Received from: %1").arg(message.sender.isEmpty()
+            ? displayName(message.authorKey) : message.sender), &dialog);
+        received->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(received);
+    }
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons->button(QDialogButtonBox::Close), &QPushButton::clicked, &dialog, &QDialog::accept);
+    layout->addWidget(buttons);
+    dialog.exec();
+}
+
+void MainWindow::applyTyping(const QString &key, const QString &sender, bool started)
+{
+    if (!m_notify.typingIndicators || key.isEmpty() || sender.isEmpty()) return;
+    // A conversation can have been created from an older UUID-based history entry,
+    // while newer signal-cli envelopes identify the same contact by phone number.
+    // Store direct-chat typing state under the same canonical key used by contacts.
+    const QString canonicalKey = key.startsWith(QLatin1String("g:")) ? key : resolveKey(key);
+    const QString canonicalSender = resolveKey(sender);
+    if (started) {
+        // signal-cli typing events expire after roughly 15 seconds; use a slightly
+        // shorter local expiry so a lost STOP does not leave a stale indicator visible.
+        m_typingUntil[canonicalKey].insert(canonicalSender, QDateTime::currentMSecsSinceEpoch() + 12000);
+    } else {
+        auto conversation = m_typingUntil.find(canonicalKey);
+        if (conversation != m_typingUntil.end()) {
+            conversation->remove(canonicalSender);
+            if (sender != canonicalSender) conversation->remove(sender);
+            if (conversation->isEmpty()) m_typingUntil.erase(conversation);
+        }
+        // Clean up an entry created by an older non-canonical chat key as well.
+        if (canonicalKey != key) {
+            auto legacy = m_typingUntil.find(key);
+            if (legacy != m_typingUntil.end()) {
+                legacy->remove(canonicalSender);
+                if (sender != canonicalSender) legacy->remove(sender);
+                if (legacy->isEmpty()) m_typingUntil.erase(legacy);
+            }
+        }
+    }
+    if (canonicalKey == (m_current.startsWith(QLatin1String("g:")) ? m_current : resolveKey(m_current)))
+        updateTypingIndicator();
+}
+
+void MainWindow::updateTypingIndicator()
+{
+    if (!m_typingLabel) return;
+    const QString currentKey = m_current.startsWith(QLatin1String("g:")) ? m_current : resolveKey(m_current);
+    QString lookupKey = currentKey;
+    if (!m_typingUntil.contains(lookupKey) && m_typingUntil.contains(m_current))
+        lookupKey = m_current; // migrate in-memory state written before canonicalization
+    if (!m_notify.typingIndicators || m_current.isEmpty() || !m_typingUntil.contains(lookupKey) ||
+        m_typingUntil.value(lookupKey).isEmpty()) {
+        m_typingLabel->clear();
+        m_typingLabel->hide();
+        return;
+    }
+    const auto peers = m_typingUntil.value(lookupKey);
+    if (!m_convs.contains(m_current) || !m_convs.value(m_current).isGroup) {
+        m_typingLabel->setText(tr("typing…"));
+    } else if (peers.size() == 1) {
+        m_typingLabel->setText(tr("%1 is typing…").arg(displayName(peers.constBegin().key())));
+    } else {
+        m_typingLabel->setText(tr("%1 people are typing…").arg(peers.size()));
+    }
+    m_typingLabel->show();
+}
+
+void MainWindow::sendTypingStatus(const QString &key, bool stop)
+{
+    if (!m_cli.isRunning() || key.isEmpty() || !m_convs.contains(key) || isNoteToSelf(key)) return;
+    if (!stop && m_convs.value(key).blocked) return;
+
+    QJsonObject params;
+    if (key.startsWith(QLatin1String("g:"))) {
+        params.insert(QStringLiteral("groupIds"), QJsonArray{key.mid(2)});
+    } else {
+        params.insert(QStringLiteral("recipients"), QJsonArray{key});
+    }
+    params.insert(QStringLiteral("stop"), stop);
+    m_cli.call(QStringLiteral("sendTyping"), params, [](const QJsonValue &, const QString &error) {
+        if (!error.isEmpty()) qWarning() << "Could not send typing indicator:" << error;
+    });
+}
+
+void MainWindow::stopLocalTyping()
+{
+    m_localTypingTimer.stop();
+    m_typingIdleTimer.stop();
+    const QString oldKey = m_localTypingKey;
+    m_localTypingKey.clear();
+    if (!oldKey.isEmpty()) sendTypingStatus(oldKey, true);
+}
+
+void MainWindow::updateLocalTypingState()
+{
+    if (m_loadingDraft) return;
+    const QString text = m_input ? m_input->text().trimmed() : QString();
+    const bool eligible = m_notify.typingIndicators && m_cli.isRunning() && !m_current.isEmpty() &&
+                          m_convs.contains(m_current) && !m_convs.value(m_current).blocked &&
+                          !isNoteToSelf(m_current) && !text.isEmpty();
+    if (!eligible) {
+        stopLocalTyping();
+        return;
+    }
+    if (m_localTypingKey != m_current) {
+        stopLocalTyping();
+        m_localTypingKey = m_current;
+        sendTypingStatus(m_localTypingKey, false);
+        m_localTypingTimer.start();
+    }
+    // Only show the indicator while there has been recent keyboard input. The pulse timer
+    // refreshes it during continuous typing; a short idle timeout sends STOP during pauses.
+    m_typingIdleTimer.start();
 }
 
 void MainWindow::addRecipient(QJsonObject &params, const Conversation &c) const
@@ -5394,9 +5763,20 @@ void MainWindow::openMessageRequests()
 void MainWindow::applyNotifications(const NotificationSettings &notify)
 {
     if (notify == m_notify) return;
+    const bool typingWasEnabled = m_notify.typingIndicators;
     m_notify = notify;
     m_notify.save();
     applyNotificationSettings();
+    if (!m_notify.typingIndicators) {
+        stopLocalTyping();
+        m_typingUntil.clear();
+        updateTypingIndicator();
+    } else if (!typingWasEnabled) {
+        // Wait for the next real edit; restoring an existing draft must not start typing.
+        m_localTypingTimer.stop();
+    }
+    if (!m_notify.readReceipts) m_pendingReadReceipts.clear();
+    if (m_view) m_view->setReadReceiptsEnabled(m_notify.readReceipts);
 }
 
 // One window for everything (Settings → Configure Corvus …). General, Appearance and Notifications

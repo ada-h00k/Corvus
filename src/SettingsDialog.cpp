@@ -120,11 +120,26 @@ void GeneralPage::applyTo(NotificationSettings &ns) const
 }
 
 // ===================================================================================== Privacy
-PrivacyPage::PrivacyPage(QWidget *parent) : QWidget(parent)
+PrivacyPage::PrivacyPage(const NotificationSettings &settings, QWidget *parent) : QWidget(parent)
 {
     setObjectName(QStringLiteral("privacyPage"));
     auto *lay = new QVBoxLayout(this);
     lay->setContentsMargins(0, 0, 0, 0);
+
+    auto *messagingBox = new QGroupBox(tr("Messaging privacy"));
+    auto *ml = new QVBoxLayout(messagingBox);
+    m_readReceipts = new QCheckBox(tr("Read receipts"));
+    m_readReceipts->setObjectName(QStringLiteral("readReceipts"));
+    m_readReceipts->setToolTip(tr("Let contacts know when you have read their messages, and show when they have read yours. Both sides must enable this."));
+    m_typingIndicators = new QCheckBox(tr("Typing indicators"));
+    m_typingIndicators->setObjectName(QStringLiteral("typingIndicators"));
+    m_typingIndicators->setToolTip(tr("Let contacts know when you are typing, and show when they are typing. Both sides must enable this."));
+    m_readReceipts->setChecked(settings.readReceipts);
+    m_typingIndicators->setChecked(settings.typingIndicators);
+    ml->addWidget(m_readReceipts);
+    ml->addWidget(m_typingIndicators);
+    ml->addWidget(hint(tr("When disabled, Corvus neither sends nor displays the corresponding status.")));
+    lay->addWidget(messagingBox);
 
     auto *box = new QGroupBox(tr("Chat history"));
     auto *bl = new QVBoxLayout(box);
@@ -150,6 +165,14 @@ PrivacyPage::PrivacyPage(QWidget *parent) : QWidget(parent)
                            "encryption to protect it.")));
     lay->addStretch(1);
     connect(m_change, &QPushButton::clicked, this, &PrivacyPage::changeProtectionRequested);
+    connect(m_readReceipts, &QCheckBox::toggled, this, &PrivacyPage::changed);
+    connect(m_typingIndicators, &QCheckBox::toggled, this, &PrivacyPage::changed);
+}
+
+void PrivacyPage::applyTo(NotificationSettings &settings) const
+{
+    settings.readReceipts = m_readReceipts->isChecked();
+    settings.typingIndicators = m_typingIndicators->isChecked();
 }
 
 void PrivacyPage::setHistory(const QString &path, const QString &mode, bool ready)
@@ -241,7 +264,7 @@ SettingsDialog::SettingsDialog(const Appearance &ap, const NotificationSettings 
     m_appearance = new AppearancePage(ap);
     m_notify = new NotificationPage(ns, sound, notifier);
     m_profile = new ProfilePage;
-    m_privacy = new PrivacyPage;
+    m_privacy = new PrivacyPage(ns);
     m_advanced = new AdvancedPage;
 
     m_list = new QListWidget;
@@ -287,6 +310,7 @@ SettingsDialog::SettingsDialog(const Appearance &ap, const NotificationSettings 
     connect(m_general, &GeneralPage::changed, this, &SettingsDialog::updateButtons);
     connect(m_appearance, &AppearancePage::changed, this, &SettingsDialog::updateButtons);
     connect(m_notify, &NotificationPage::changed, this, &SettingsDialog::updateButtons);
+    connect(m_privacy, &PrivacyPage::changed, this, &SettingsDialog::updateButtons);
 
     resize(760, 560);
     m_list->setCurrentRow(0);
@@ -304,6 +328,7 @@ NotificationSettings SettingsDialog::notifications() const
 {
     NotificationSettings n = m_notify->settings();
     m_general->applyTo(n);
+    m_privacy->applyTo(n);
     return n;
 }
 

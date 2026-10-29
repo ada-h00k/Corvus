@@ -59,15 +59,19 @@ class PrivacyPage : public QWidget
 {
     Q_OBJECT
 public:
-    explicit PrivacyPage(QWidget *parent = nullptr);
+    explicit PrivacyPage(const NotificationSettings &settings, QWidget *parent = nullptr);
+    void applyTo(NotificationSettings &settings) const;
     void setHistory(const QString &path, const QString &protectionMode, bool ready);
 signals:
     void changeProtectionRequested();
+    void changed();
 
 private:
     QLabel *m_path;
     QLabel *m_mode;
     QPushButton *m_change;
+    QCheckBox *m_readReceipts;
+    QCheckBox *m_typingIndicators;
 };
 
 // --- Advanced -------------------------------------------------------------------------------

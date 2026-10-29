@@ -162,6 +162,38 @@ ParsedEnvelope parseEnvelope(const QJsonObject &env)
     out.srcName = env["sourceName"].toString();
     const qint64 envTs = env["timestamp"].toVariant().toLongLong();
 
+    // signal-cli emits receipt and typing events as distinct envelope members. They
+    // are not data messages and must be handled before the empty-message filter below.
+    const QJsonObject receipt = env.value(QStringLiteral("receiptMessage")).toObject();
+    if (!receipt.isEmpty()) {
+        out.kind = ParsedEnvelope::Receipt;
+        out.receiptTimeMs = envTs;
+        out.readReceipt = receipt.value(QStringLiteral("isRead")).toBool() ||
+                          receipt.value(QStringLiteral("isViewed")).toBool();
+        out.deliveryReceipt = receipt.value(QStringLiteral("isDelivery")).toBool();
+        for (const QJsonValue &value : receipt.value(QStringLiteral("timestamps")).toArray()) {
+            bool ok = false;
+            qint64 timestamp = value.toVariant().toLongLong(&ok);
+            if (!ok && value.isString()) timestamp = value.toString().toLongLong(&ok);
+            if (ok && timestamp > 0) out.receiptTimestamps.append(timestamp);
+        }
+        return out;
+    }
+
+    const QJsonObject typing = env.value(QStringLiteral("typingMessage")).toObject();
+    if (!typing.isEmpty()) {
+        out.kind = ParsedEnvelope::Typing;
+        QJsonValue action = typing.value(QStringLiteral("action"));
+        if (action.isUndefined()) action = typing.value(QStringLiteral("type"));
+        const QString actionText = action.toString().toUpper();
+        out.typingStarted = actionText == QLatin1String("STARTED") || actionText == QLatin1String("START");
+        out.groupId = typing.value(QStringLiteral("groupId")).toString();
+        if (out.groupId.isEmpty())
+            out.groupId = env.value(QStringLiteral("groupInfo")).toObject().value(QStringLiteral("groupId")).toString();
+        if (out.groupId.isEmpty()) out.groupId = env.value(QStringLiteral("groupId")).toString();
+        return out;
+    }
+
     const QJsonObject dm = env["dataMessage"].toObject();
     if (!dm.isEmpty()) {
         parseBody(dm, out, envTs);

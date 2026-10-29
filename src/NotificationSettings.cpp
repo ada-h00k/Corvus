@@ -17,6 +17,11 @@ NotificationSettings NotificationSettings::load()
     n.trayIcon = s.value(QStringLiteral("trayIcon"), n.trayIcon).toBool();
     n.closeToTray = s.value(QStringLiteral("closeToTray"), n.closeToTray).toBool();
     n.startMinimizedInTray = s.value(QStringLiteral("startMinimizedInTray"), n.startMinimizedInTray).toBool();
+    s.endGroup();
+    s.beginGroup(QStringLiteral("privacy"));
+    n.readReceipts = s.value(QStringLiteral("readReceipts"), n.readReceipts).toBool();
+    n.typingIndicators = s.value(QStringLiteral("typingIndicators"), n.typingIndicators).toBool();
+    s.endGroup();
     return n;
 }
 
@@ -32,11 +37,17 @@ void NotificationSettings::save() const
     s.setValue(QStringLiteral("trayIcon"), trayIcon);
     s.setValue(QStringLiteral("closeToTray"), closeToTray);
     s.setValue(QStringLiteral("startMinimizedInTray"), startMinimizedInTray);
+    s.endGroup();
+    s.beginGroup(QStringLiteral("privacy"));
+    s.setValue(QStringLiteral("readReceipts"), readReceipts);
+    s.setValue(QStringLiteral("typingIndicators"), typingIndicators);
+    s.endGroup();
 }
 
 bool NotificationSettings::operator==(const NotificationSettings &o) const
 {
     return notifications == o.notifications && content == o.content && sound == o.sound && soundId == o.soundId &&
            soundFile == o.soundFile && trayIcon == o.trayIcon && closeToTray == o.closeToTray &&
-           startMinimizedInTray == o.startMinimizedInTray;
+           startMinimizedInTray == o.startMinimizedInTray && readReceipts == o.readReceipts &&
+           typingIndicators == o.typingIndicators;
 }

@@ -50,6 +50,10 @@ public:
     void queryAccounts(std::function<void(const Result &, const QStringList &accounts)> cb);
 
     static QStringList parseAccounts(const QString &output);
+    // Normalizes signal-cli JSON-RPC receive notifications. Some integrations expose
+    // typing as a separate receiveTyping notification instead of a regular receive
+    // envelope; normalize both to the envelope format consumed by MainWindow.
+    static QJsonObject envelopeFromNotification(const QJsonObject &notification);
     // Environment for child processes: inside an AppImage the library/plugin
     // paths that point into the bundle are removed so Java etc. are not confused.
     static QProcessEnvironment childEnvironment(const QProcessEnvironment &base = QProcessEnvironment::systemEnvironment());

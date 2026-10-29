@@ -35,6 +35,7 @@ public:
     void setNameResolver(std::function<QString(const QString &)> fn) { m_nameOf = std::move(fn); }
     void setSelfKey(const QString &key) { m_self = key; }
     void setGroupMode(bool group);
+    void setReadReceiptsEnabled(bool enabled);
     void setAppearance(const Appearance &a);
     Appearance appearance() const { return m_ap; }
 
@@ -71,6 +72,7 @@ public:
 signals:
     void replyRequested(int idx);
     void forwardRequested(int idx);
+    void messageDetailsRequested(int idx);
     void editRequested(int idx); // own text message within the edit window
     void deleteRequested(int idx);
     void reactionChosen(int idx, const QString &emoji);
@@ -108,13 +110,14 @@ private:
         QList<QMovie *> movies;
         QList<ApngMovie *> apngMovies; // Signal's animated stickers are APNG, which QMovie cannot play
         mutable QList<bool> animationRequested;
-        QString sender, quoteAuthor, quoteText, timeText, dateLabel;
+        QString sender, quoteAuthor, quoteText, timeText, statusText, dateLabel;
+        bool statusRead = false;
         QString quoteNote;
         QList<QSize> attachmentImageSizes;
         bool showSender = false;
         // layout (item-local coordinates, valid for m_layoutWidth)
         int y = 0, height = 0;
-        QRect dateRect, bubble, senderRect, quoteBox, quoteAuthorRect, quoteTextRect, textRect, timeRect, pillsRect;
+        QRect dateRect, bubble, senderRect, quoteBox, quoteAuthorRect, quoteTextRect, textRect, timeRect, statusRect, pillsRect;
         QRect linkPreviewRect, linkPreviewImageRect, linkPreviewTitleRect, linkPreviewDescriptionRect, linkPreviewHostRect;
         QList<QRect> attRects;
         QList<Pill> pills;
@@ -151,6 +154,7 @@ private:
     std::function<QString(const QString &)> m_nameOf;
     QString m_self;
     bool m_group = false;
+    bool m_showReadReceipts = true;
     Appearance m_ap;
     int m_layoutWidth = -1;
     int m_renderFirst = -1;

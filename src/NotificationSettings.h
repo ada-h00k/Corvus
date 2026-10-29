@@ -14,6 +14,8 @@ struct NotificationSettings {
     bool trayIcon = true;          // show the tray icon
     bool closeToTray = true;       // closing the window keeps the app running in the tray
     bool startMinimizedInTray = false; // start with the window hidden in the tray
+    bool readReceipts = true;       // send and display read receipts
+    bool typingIndicators = true;   // send and display typing indicators
 
     static NotificationSettings load();
     void save() const;

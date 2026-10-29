@@ -96,6 +96,35 @@ static QJsonArray attachmentsToJson(const QList<Attachment> &list)
     return arr;
 }
 
+static QJsonObject recipientReceiptsToJson(const QHash<QString, RecipientReceipt> &receipts)
+{
+    QJsonObject result;
+    for (auto it = receipts.cbegin(); it != receipts.cend(); ++it) {
+        const RecipientReceipt &r = it.value();
+        result.insert(it.key(), QJsonObject{
+            {QStringLiteral("s"), qBound(0, r.status, 2)},
+            {QStringLiteral("d"), QJsonValue(static_cast<qint64>(r.deliveredAtMs))},
+            {QStringLiteral("r"), QJsonValue(static_cast<qint64>(r.readAtMs))}
+        });
+    }
+    return result;
+}
+
+static QHash<QString, RecipientReceipt> recipientReceiptsFromJson(const QJsonObject &json)
+{
+    QHash<QString, RecipientReceipt> result;
+    for (auto it = json.begin(); it != json.end(); ++it) {
+        if (it.key().isEmpty() || !it.value().isObject()) continue;
+        const QJsonObject value = it.value().toObject();
+        RecipientReceipt r;
+        r.status = qBound(0, value.value(QStringLiteral("s")).toInt(), 2);
+        r.deliveredAtMs = value.value(QStringLiteral("d")).toVariant().toLongLong();
+        r.readAtMs = value.value(QStringLiteral("r")).toVariant().toLongLong();
+        result.insert(it.key(), r);
+    }
+    return result;
+}
+
 // Edit state: x = current text, et = timestamp of the latest revision, ec = number of edits.
 static QJsonObject editToJson(const Message &m)
 {
@@ -114,6 +143,9 @@ QJsonObject message(const QString &conv, const Message &m)
         d["es"] = QJsonValue(static_cast<qint64>(m.expirationStartMs));
     }
     if (m.linkPreview.isValid() && !m.deleted) d["lp"] = linkPreviewToJson(m.linkPreview);
+    if (m.outgoing && m.receiptStatus > 0) d["rs"] = m.receiptStatus;
+    if (m.outgoing && !m.recipientReceipts.isEmpty())
+        d["rr"] = recipientReceiptsToJson(m.recipientReceipts);
     if (m.viewOnce) {
         d["vo"] = true;
         if (m.viewOnceViewed) d["vv"] = true;
@@ -180,6 +212,9 @@ QJsonObject expirationUpdate(const QString &conv, const Message &m)
 void applyExtras(Message &m, const QJsonObject &d)
 {
     if (d.contains("ot")) m.orderTs = d["ot"].toVariant().toLongLong();
+    if (d.contains("rs") && m.outgoing) m.receiptStatus = qBound(0, d["rs"].toInt(), 2);
+    if (d.contains("rr") && m.outgoing)
+        m.recipientReceipts = recipientReceiptsFromJson(d["rr"].toObject());
     if (d.contains("q")) {
         const QJsonObject q = d["q"].toObject();
         m.quote.valid = true;
@@ -261,6 +296,18 @@ QJsonObject viewOnceUpdate(const QString &conv, const Message &m)
             {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
             {"au", m.authorKey},
             {"d", d}};
+}
+
+QJsonObject receiptStatusUpdate(const QString &conv, const Message &m)
+{
+    QJsonObject extras{{"rs", qBound(0, m.receiptStatus, 2)}};
+    if (!m.recipientReceipts.isEmpty())
+        extras["rr"] = recipientReceiptsToJson(m.recipientReceipts);
+    return {{"t", "u"},
+            {"c", conv},
+            {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
+            {"au", m.authorKey},
+            {"d", extras}};
 }
 
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji)
