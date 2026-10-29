@@ -36,6 +36,7 @@ public:
     void setSelfKey(const QString &key) { m_self = key; }
     void setGroupMode(bool group);
     void setReadReceiptsEnabled(bool enabled);
+    void setDeliveryStatusVisible(bool visible);
     void setAppearance(const Appearance &a);
     Appearance appearance() const { return m_ap; }
 
@@ -155,6 +156,7 @@ private:
     QString m_self;
     bool m_group = false;
     bool m_showReadReceipts = true;
+    bool m_showDeliveryStatus = true;
     Appearance m_ap;
     int m_layoutWidth = -1;
     int m_renderFirst = -1;

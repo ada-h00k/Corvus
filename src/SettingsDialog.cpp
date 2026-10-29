@@ -134,11 +134,16 @@ PrivacyPage::PrivacyPage(const NotificationSettings &settings, QWidget *parent) 
     m_typingIndicators = new QCheckBox(tr("Typing indicators"));
     m_typingIndicators->setObjectName(QStringLiteral("typingIndicators"));
     m_typingIndicators->setToolTip(tr("Let contacts know when you are typing, and show when they are typing. Both sides must enable this."));
+    m_showDeliveryStatus = new QCheckBox(tr("Show delivery status"));
+    m_showDeliveryStatus->setObjectName(QStringLiteral("showDeliveryStatus"));
+    m_showDeliveryStatus->setToolTip(tr("Show sent, delivered, and read check marks on your outgoing messages. This only affects your local display; receipt handling is unchanged."));
     m_readReceipts->setChecked(settings.readReceipts);
     m_typingIndicators->setChecked(settings.typingIndicators);
+    m_showDeliveryStatus->setChecked(settings.showDeliveryStatus);
     ml->addWidget(m_readReceipts);
     ml->addWidget(m_typingIndicators);
-    ml->addWidget(hint(tr("When disabled, Corvus neither sends nor displays the corresponding status.")));
+    ml->addWidget(m_showDeliveryStatus);
+    ml->addWidget(hint(tr("Read receipts and typing indicators are sent and shown only while their respective options are enabled. Show delivery status only controls the check marks in your chat view.")));
     lay->addWidget(messagingBox);
 
     auto *box = new QGroupBox(tr("Chat history"));
@@ -167,12 +172,14 @@ PrivacyPage::PrivacyPage(const NotificationSettings &settings, QWidget *parent) 
     connect(m_change, &QPushButton::clicked, this, &PrivacyPage::changeProtectionRequested);
     connect(m_readReceipts, &QCheckBox::toggled, this, &PrivacyPage::changed);
     connect(m_typingIndicators, &QCheckBox::toggled, this, &PrivacyPage::changed);
+    connect(m_showDeliveryStatus, &QCheckBox::toggled, this, &PrivacyPage::changed);
 }
 
 void PrivacyPage::applyTo(NotificationSettings &settings) const
 {
     settings.readReceipts = m_readReceipts->isChecked();
     settings.typingIndicators = m_typingIndicators->isChecked();
+    settings.showDeliveryStatus = m_showDeliveryStatus->isChecked();
 }
 
 void PrivacyPage::setHistory(const QString &path, const QString &mode, bool ready)

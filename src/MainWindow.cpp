@@ -3539,6 +3539,7 @@ void MainWindow::showConversation(bool keepScroll)
     const Conversation &c = m_convs[m_current];
     m_title->setText(c.title);
     m_view->setReadReceiptsEnabled(m_notify.readReceipts);
+    m_view->setDeliveryStatusVisible(m_notify.showDeliveryStatus);
     updateTypingIndicator();
     updateSafetyBar();
     updateGroupActions();
@@ -6159,7 +6160,10 @@ void MainWindow::applyNotifications(const NotificationSettings &notify)
         m_localTypingTimer.stop();
     }
     if (!m_notify.readReceipts) m_pendingReadReceipts.clear();
-    if (m_view) m_view->setReadReceiptsEnabled(m_notify.readReceipts);
+    if (m_view) {
+        m_view->setReadReceiptsEnabled(m_notify.readReceipts);
+        m_view->setDeliveryStatusVisible(m_notify.showDeliveryStatus);
+    }
 }
 
 // One window for everything (Settings → Configure Corvus …). General, Appearance and Notifications

@@ -583,17 +583,22 @@ int main(int argc, char **argv)
         CHECK(apply && !apply->isEnabled()); // nothing changed yet
         int applied = 0;
         Appearance seen;
-        QObject::connect(&dlg, &SettingsDialog::applied, [&](const Appearance &a, const NotificationSettings &) {
+        NotificationSettings seenNotify;
+        QObject::connect(&dlg, &SettingsDialog::applied, [&](const Appearance &a, const NotificationSettings &n) {
             ++applied;
             seen = a;
+            seenNotify = n;
         });
         // an option on the General page changes the Appearance values handed to MainWindow
         auto *sort = dlg.findChild<QCheckBox *>("sortAlphabetically");
         CHECK(sort != nullptr);
         if (sort) sort->click();
+        auto *deliveryStatus = dlg.findChild<QCheckBox *>("showDeliveryStatus");
+        CHECK(deliveryStatus && deliveryStatus->isChecked());
+        if (deliveryStatus) deliveryStatus->click();
         CHECK(apply && apply->isEnabled());
         if (apply) apply->click();
-        CHECK(applied == 1 && seen.sortAlphabetically);
+        CHECK(applied == 1 && seen.sortAlphabetically && !seenNotify.showDeliveryStatus);
         CHECK(apply && !apply->isEnabled());
         // "Reset to defaults" on the Appearance page leaves the General options alone
         auto *page = dlg.findChild<AppearancePage *>();

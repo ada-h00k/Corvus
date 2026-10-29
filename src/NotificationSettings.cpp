@@ -21,6 +21,7 @@ NotificationSettings NotificationSettings::load()
     s.beginGroup(QStringLiteral("privacy"));
     n.readReceipts = s.value(QStringLiteral("readReceipts"), n.readReceipts).toBool();
     n.typingIndicators = s.value(QStringLiteral("typingIndicators"), n.typingIndicators).toBool();
+    n.showDeliveryStatus = s.value(QStringLiteral("showDeliveryStatus"), n.showDeliveryStatus).toBool();
     s.endGroup();
     return n;
 }
@@ -41,6 +42,7 @@ void NotificationSettings::save() const
     s.beginGroup(QStringLiteral("privacy"));
     s.setValue(QStringLiteral("readReceipts"), readReceipts);
     s.setValue(QStringLiteral("typingIndicators"), typingIndicators);
+    s.setValue(QStringLiteral("showDeliveryStatus"), showDeliveryStatus);
     s.endGroup();
 }
 
@@ -49,5 +51,5 @@ bool NotificationSettings::operator==(const NotificationSettings &o) const
     return notifications == o.notifications && content == o.content && sound == o.sound && soundId == o.soundId &&
            soundFile == o.soundFile && trayIcon == o.trayIcon && closeToTray == o.closeToTray &&
            startMinimizedInTray == o.startMinimizedInTray && readReceipts == o.readReceipts &&
-           typingIndicators == o.typingIndicators;
+           typingIndicators == o.typingIndicators && showDeliveryStatus == o.showDeliveryStatus;
 }

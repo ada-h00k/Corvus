@@ -412,6 +412,20 @@ void ChatView::setReadReceiptsEnabled(bool enabled)
     viewport()->update();
 }
 
+void ChatView::setDeliveryStatusVisible(bool visible)
+{
+    if (m_showDeliveryStatus == visible) return;
+    m_showDeliveryStatus = visible;
+    // This is a local display preference only. Keep receipt processing and stored receipt data
+    // intact so enabling the indicators again immediately restores each message's current state.
+    for (int i = 0; i < m_items.size() && i < m_msgs.size(); ++i) {
+        m_items[i].statusText.clear();
+        if (m_showDeliveryStatus && m_msgs[i].outgoing)
+            m_items[i].statusText = m_msgs[i].receiptStatus >= 1 ? QStringLiteral("✓✓") : QStringLiteral("✓");
+    }
+    relayoutAll();
+}
+
 void ChatView::setAppearance(const Appearance &a)
 {
     m_ap = a;
@@ -860,7 +874,8 @@ void ChatView::buildItem(int i)
     if (m.isEdited() && !m.deleted) it.timeText = tr("edited") + QStringLiteral(" · ") + it.timeText;
     it.statusText.clear();
     it.statusRead = m_showReadReceipts && m.receiptStatus >= 2;
-    if (m.outgoing) it.statusText = m.receiptStatus >= 1 ? QStringLiteral("✓✓") : QStringLiteral("✓");
+    if (m_showDeliveryStatus && m.outgoing)
+        it.statusText = m.receiptStatus >= 1 ? QStringLiteral("✓✓") : QStringLiteral("✓");
     if (!m.outgoing) it.sender = m.sender.isEmpty() ? nameOf(m.authorKey) : m.sender;
     if (m.quote.valid) {
         it.quoteAuthor = nameOf(m.quote.authorKey);
