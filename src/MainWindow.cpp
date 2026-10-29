@@ -237,10 +237,13 @@ static PreparedComposerMessage prepareComposerMessage(const QString &raw, const 
                                                        bool allowMentions)
 {
     PreparedComposerMessage prepared;
-    const int first = raw.indexOf(QRegularExpression(QStringLiteral("\\S")));
-    const int lead = first < 0 ? raw.size() : first;
-    const int last = raw.lastIndexOf(QRegularExpression(QStringLiteral("\\S")));
-    const int end = last < 0 ? lead : last + 1;
+    // Walk UTF-16 code units when trimming so we never split a supplementary
+    // Unicode character. A regex match may span two QChars, so `last + 1`
+    // truncates the low surrogate for a final emoji such as 😀.
+    int lead = 0;
+    while (lead < raw.size() && raw.at(lead).isSpace()) ++lead;
+    int end = raw.size();
+    while (end > lead && raw.at(end - 1).isSpace()) --end;
     if (end <= lead) return prepared;
 
     QList<MentionRange> included;
