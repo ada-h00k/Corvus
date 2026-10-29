@@ -19,8 +19,17 @@ the option above; by hand:
 ## presage and libsignal-service
 
 corvus-signal needs work that is not in presage and libsignal-service-rs yet. It is built
-against integration branches of both (`[patch]` in Cargo.toml), currently local checkouts next to
-this repository: `../../presage-corvus` and `../../libsignal-service-corvus`, branch `corvus`.
+against integration branches of both, branch `corvus` of
+[cyberneticangel/presage](https://github.com/cyberneticangel/presage) and
+[cyberneticangel/libsignal-service-rs](https://github.com/cyberneticangel/libsignal-service-rs)
+(pinned by commit in Cargo.toml and presage's Cargo.toml).
+
+To work on them, clone both forks next to this repository and add a `[patch]` section in a
+local, uncommitted change:
+
+    [patch."https://github.com/cyberneticangel/presage"]
+    presage = { path = "../../presage/presage" }
+    presage-store-sqlite = { path = "../../presage/presage-store-sqlite" }
 
 They are upstream plus these open pull requests:
 

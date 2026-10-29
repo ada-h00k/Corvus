@@ -12,9 +12,11 @@ path = "src/main.rs"
 
 # Kept apart from history-store so its minimal-dependency policy is unaffected.
 [dependencies]
+# The corvus integration branch of presage (it uses the one of libsignal-service-rs): upstream plus
+# the open pull requests corvus needs and corvus' own additions, see README.md.
 # cdsi: contact discovery, to find a phone number nobody synced (libsignal-net, BoringSSL)
-presage = { git = "https://github.com/whisperfish/presage", rev = "aeaedf99babebae2dbc6b86bca797807d4cd9fda", features = ["cdsi"] }
-presage-store-sqlite = { git = "https://github.com/whisperfish/presage", rev = "aeaedf99babebae2dbc6b86bca797807d4cd9fda", features = ["cdsi"] }
+presage = { git = "https://github.com/cyberneticangel/presage", rev = "16e33907d4dd9d0d3175c7838b4e00d2c49672e0", features = ["cdsi"] }
+presage-store-sqlite = { git = "https://github.com/cyberneticangel/presage", rev = "16e33907d4dd9d0d3175c7838b4e00d2c49672e0", features = ["cdsi"] }
 
 anyhow = "1.0"
 base64 = "0.22"
@@ -26,13 +28,6 @@ serde_json = "1.0"
 tokio = { version = "1.48", features = ["rt", "macros", "io-std", "io-util", "sync", "time", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# corvus integration branches of presage and libsignal-service: upstream plus the open pull
-# requests corvus needs (groups, link previews off, storage service, identities) and corvus' own
-# additions. Local checkouts for now, see signal-backend/README.md.
-[patch."https://github.com/whisperfish/presage"]
-presage = { path = "../../presage-corvus/presage" }
-presage-store-sqlite = { path = "../../presage-corvus/presage-store-sqlite" }
 
 # Same patches as the presage workspace; [patch] does not propagate from dependencies.
 [patch.crates-io]
