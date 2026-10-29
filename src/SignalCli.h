@@ -25,6 +25,8 @@ public:
     ~SignalCli() override;
 
     static QString autodetect();
+    // corvus-signal, the signal-cli compatible Rust backend (signal-backend/).
+    static bool isNative(const QString &exe);
 
     QString executable() const { return m_exe; }
     void setExecutable(const QString &path) { m_exe = path; }

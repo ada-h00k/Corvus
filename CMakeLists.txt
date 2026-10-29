@@ -36,6 +36,24 @@ set_target_properties(history_store PROPERTIES
 )
 add_dependencies(history_store history_store_cargo)
 
+# ---- Rust: corvus-signal, the signal-cli compatible backend (optional) -----
+# Built on presage/libsignal; needs protoc, plus clang and cmake for libsignal's BoringSSL.
+option(CORVUS_RUST_BACKEND "Build corvus-signal, the Rust backend (choose it with Settings → Advanced → Choose …)" OFF)
+if(CORVUS_RUST_BACKEND)
+    set(SIGNAL_BACKEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/signal-backend)
+    set(SIGNAL_CARGO_TARGET_DIR ${CMAKE_BINARY_DIR}/cargo-signal)
+    set(SIGNAL_BACKEND_BIN ${SIGNAL_CARGO_TARGET_DIR}/release/corvus-signal${CMAKE_EXECUTABLE_SUFFIX})
+    # Copied next to corvus.
+    add_custom_target(corvus_signal ALL
+        COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${SIGNAL_CARGO_TARGET_DIR}
+                ${CARGO} build --release --locked --manifest-path ${SIGNAL_BACKEND_DIR}/Cargo.toml
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SIGNAL_BACKEND_BIN} ${CMAKE_BINARY_DIR}/
+        BYPRODUCTS ${SIGNAL_BACKEND_BIN} ${CMAKE_BINARY_DIR}/corvus-signal${CMAKE_EXECUTABLE_SUFFIX}
+        COMMENT "Building Rust backend corvus-signal"
+        USES_TERMINAL
+    )
+endif()
+
 # ---- Qt GUI ---------------------------------------------------------------
 set(APP_SOURCES
     resources/sounds.qrc
@@ -347,6 +365,17 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    # corvus-signal's JSON (tests/data, written by signal-backend/src/contract.rs) through corvus' parsers.
+    add_executable(backend_contract_test tests/backend_contract_test.cpp)
+    target_link_libraries(backend_contract_test PRIVATE app_core Qt6::Test)
+    target_compile_definitions(backend_contract_test PRIVATE
+        CONTRACT_JSON="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/corvus-signal-contract.json")
+    add_test(NAME backend_contract COMMAND backend_contract_test)
+    set_tests_properties(backend_contract PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(receipt_typing_test tests/receipt_typing_test.cpp)
     target_link_libraries(receipt_typing_test PRIVATE app_core Qt6::Test)
     add_test(NAME receipt_typing COMMAND receipt_typing_test)
@@ -394,6 +423,9 @@ install(TARGETS corvus
     # Used for regular executables on Linux and other platforms.
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+if(CORVUS_RUST_BACKEND)
+    install(PROGRAMS ${SIGNAL_BACKEND_BIN} DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 if(NOT WIN32)
     install(FILES packaging/corvus.desktop

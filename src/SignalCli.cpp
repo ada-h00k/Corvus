@@ -48,6 +48,11 @@ QString SignalCli::autodetect()
     return QStandardPaths::findExecutable(QStringLiteral("signal-cli"), extra);
 }
 
+bool SignalCli::isNative(const QString &exe)
+{
+    return QFileInfo(exe).completeBaseName() == QLatin1String("corvus-signal");
+}
+
 void SignalCli::killTree(QProcess *p)
 {
     if (!p || p->state() == QProcess::NotRunning) return;
@@ -119,7 +124,8 @@ void SignalCli::startProcess(QProcess *p, const QString &exe, const QStringList 
                            QStringLiteral("/../Helpers/corvus-signal-cli.app/Contents/MacOS/corvus-signal-cli");
     // A missing signal-cli is started directly, so QProcess reports FailedToStart right away.
     const QString resolved = QFileInfo(exe).isAbsolute() ? exe : QStandardPaths::findExecutable(exe);
-    if (QFileInfo::exists(helper) && QFileInfo(resolved).isExecutable()) {
+    // corvus-signal is a native program without unpacked libraries; it needs no helper.
+    if (!isNative(resolved) && QFileInfo::exists(helper) && QFileInfo(resolved).isExecutable()) {
         p->start(helper, QStringList{resolved} + args);
         return;
     }

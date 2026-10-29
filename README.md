@@ -147,6 +147,8 @@ cmake --build build --parallel
 ./build/corvus
 ```
 
+`-DCORVUS_RUST_BACKEND=ON` also builds `corvus-signal`, an experimental Rust backend that can be used instead of signal-cli (it also needs `protoc` and clang). See [`signal-backend/README.md`](signal-backend/README.md).
+
 For the native Swift app, install Xcode and Rust, then run:
 
 ```sh

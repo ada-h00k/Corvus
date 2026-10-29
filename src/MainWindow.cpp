@@ -1380,7 +1380,11 @@ void MainWindow::connectAccount()
             showCliProblem(tr("signal-cli could not be run."), r);
             return;
         }
+        // corvus-signal prints "corvus-signal <own version> compatible with signal-cli <version>":
+        // features are gated on the signal-cli version (last word), the own version is shown.
+        m_nativeBackend = version.startsWith(QLatin1String("corvus-signal"));
         m_version = version.section(QLatin1Char(' '), -1);
+        m_backendVersion = m_nativeBackend ? version.section(QLatin1Char(' '), 1, 1) : m_version;
         syncSettingsDialog();
 
         m_cli.queryAccounts([this, gen](const SignalCli::Result &r, const QStringList &accounts) {
@@ -1476,7 +1480,9 @@ void MainWindow::setConnected(bool connected, const QString &info)
     updateAttachBar();
     updateRecordingUi();
     if (connected) {
-        m_statusLabel->setText(tr("Connected · signal-cli %1").arg(m_version));
+        m_statusLabel->setText(tr("Connected · %1 %2")
+                                   .arg(m_nativeBackend ? QStringLiteral("corvus-signal") : QStringLiteral("signal-cli"),
+                                        m_backendVersion));
     } else {
         m_statusLabel->setText(info.isEmpty() ? tr("Not connected") : tr("Disconnected: %1").arg(info));
     }
@@ -5475,6 +5481,13 @@ void MainWindow::saveAttachment(int msgIdx, int attIdx)
 
 void MainWindow::checkForUpdates(bool silent)
 {
+    if (m_nativeBackend) { // updated together with Corvus, not on its own
+        if (!silent)
+            QMessageBox::information(this, tr("Update check"),
+                                     tr("corvus-signal %1 is part of Corvus and is updated with it.").arg(m_backendVersion));
+        m_updateLabel->clear();
+        return;
+    }
     QNetworkRequest req(QUrl(QStringLiteral("https://api.github.com/repos/AsamK/signal-cli/releases/latest")));
     req.setRawHeader("User-Agent", "corvus");
     req.setRawHeader("Accept", "application/vnd.github+json");
@@ -5890,7 +5903,7 @@ void MainWindow::syncSettingsDialog()
     if (!m_settings) return;
     m_settings->profilePage()->setConnected(!m_account.isEmpty() && m_cli.isRunning());
     m_settings->privacyPage()->setHistory(historyPath(), m_historyProtectionMode, m_store.isOpen());
-    m_settings->advancedPage()->setSignalCli(m_cli.executable(), m_version);
+    m_settings->advancedPage()->setSignalCli(m_cli.executable(), m_backendVersion);
     QString key, error;
     const bool known = GiphyApiKeyStore::load(key, error);
     m_settings->advancedPage()->setGiphyKeyState(known, !key.isEmpty());

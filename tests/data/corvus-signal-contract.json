@@ -1,0 +1,476 @@
+{
+  "delete": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "dataMessage": {
+          "expiresInSeconds": 0,
+          "message": null,
+          "remoteDelete": {
+            "timestamp": 1789999994000
+          },
+          "timestamp": 1790000000000,
+          "viewOnce": false
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "deliveryReceipt": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "receiptMessage": {
+          "isDelivery": true,
+          "isRead": false,
+          "isViewed": false,
+          "timestamps": [
+            1789999999700
+          ],
+          "when": 1790000000000
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "edit": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "editMessage": {
+          "dataMessage": {
+            "expiresInSeconds": 0,
+            "message": "fixed typo",
+            "textStyle": [
+              "0:5:BOLD"
+            ],
+            "timestamp": 1790000000000,
+            "viewOnce": false
+          },
+          "targetSentTimestamp": 1789999993000
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "expiration": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "dataMessage": {
+          "expiresInSeconds": 86400,
+          "isExpirationUpdate": true,
+          "message": null,
+          "timestamp": 1790000000000,
+          "viewOnce": false
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "groupId": "oroE+kkkL8I7/RAkLPCJTJXWJtGEQJ2C48QynhfRFe0=",
+  "groupText": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "dataMessage": {
+          "expiresInSeconds": 0,
+          "groupInfo": {
+            "groupId": "oroE+kkkL8I7/RAkLPCJTJXWJtGEQJ2C48QynhfRFe0=",
+            "revision": 3,
+            "type": "DELIVER"
+          },
+          "message": "in the group",
+          "timestamp": 1790000000000,
+          "viewOnce": false
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "22222222-2222-4222-8222-222222222222",
+        "sourceDevice": 1,
+        "sourceName": "Bob",
+        "sourceNumber": null,
+        "sourceUuid": "22222222-2222-4222-8222-222222222222",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "groupTyping": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000,
+        "typingMessage": {
+          "action": "STARTED",
+          "groupId": "oroE+kkkL8I7/RAkLPCJTJXWJtGEQJ2C48QynhfRFe0=",
+          "timestamp": 1790000000000
+        }
+      }
+    }
+  },
+  "listGroups": [
+    {
+      "admins": [
+        {
+          "number": "+49999",
+          "uuid": "33333333-3333-4333-8333-333333333333"
+        }
+      ],
+      "banned": [],
+      "description": "Our team",
+      "groupInviteLink": "https://signal.group/#CjQKIAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHEhAJCQkJCQkJCQkJCQkJCQkJ",
+      "id": "oroE+kkkL8I7/RAkLPCJTJXWJtGEQJ2C48QynhfRFe0=",
+      "isBlocked": false,
+      "isMember": true,
+      "members": [
+        {
+          "isAdmin": true,
+          "number": "+49999",
+          "uuid": "33333333-3333-4333-8333-333333333333"
+        },
+        {
+          "isAdmin": false,
+          "number": "+49111",
+          "uuid": "11111111-1111-4111-8111-111111111111"
+        }
+      ],
+      "messageExpirationTime": 604800,
+      "name": "Team",
+      "pendingMembers": [
+        {
+          "number": "+49999",
+          "uuid": "33333333-3333-4333-8333-333333333333"
+        }
+      ],
+      "permissionAddMember": "EVERY_MEMBER",
+      "permissionEditDetails": "ONLY_ADMINS",
+      "permissionSendMessage": "ONLY_ADMINS",
+      "requestingMembers": [
+        {
+          "number": null,
+          "uuid": "22222222-2222-4222-8222-222222222222"
+        }
+      ],
+      "revision": 3
+    }
+  ],
+  "reaction": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "dataMessage": {
+          "expiresInSeconds": 0,
+          "groupInfo": {
+            "groupId": "oroE+kkkL8I7/RAkLPCJTJXWJtGEQJ2C48QynhfRFe0=",
+            "revision": 3,
+            "type": "DELIVER"
+          },
+          "message": null,
+          "reaction": {
+            "emoji": "👍",
+            "isRemove": false,
+            "targetAuthor": "+49999",
+            "targetAuthorNumber": "+49999",
+            "targetAuthorUuid": "33333333-3333-4333-8333-333333333333",
+            "targetSentTimestamp": 1789999995000
+          },
+          "timestamp": 1790000000000,
+          "viewOnce": false
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "readReceipt": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "receiptMessage": {
+          "isDelivery": false,
+          "isRead": true,
+          "isViewed": false,
+          "timestamps": [
+            1789999999900,
+            1789999999800
+          ],
+          "when": 1790000000000
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "sticker": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "dataMessage": {
+          "expiresInSeconds": 0,
+          "message": null,
+          "sticker": {
+            "emoji": "🐢",
+            "packId": "abcd",
+            "stickerId": 4
+          },
+          "timestamp": 1790000000000,
+          "viewOnce": false
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "syncSent": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49999",
+        "sourceDevice": 1,
+        "sourceName": null,
+        "sourceNumber": "+49999",
+        "sourceUuid": "33333333-3333-4333-8333-333333333333",
+        "syncMessage": {
+          "sentMessage": {
+            "destination": "+49111",
+            "destinationNumber": "+49111",
+            "destinationUuid": "11111111-1111-4111-8111-111111111111",
+            "expiresInSeconds": 0,
+            "message": "from my phone",
+            "timestamp": 1790000000000,
+            "viewOnce": false
+          }
+        },
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "syncSentEdit": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49999",
+        "sourceDevice": 1,
+        "sourceName": null,
+        "sourceNumber": "+49999",
+        "sourceUuid": "33333333-3333-4333-8333-333333333333",
+        "syncMessage": {
+          "sentMessage": {
+            "destination": "+49111",
+            "destinationNumber": "+49111",
+            "destinationUuid": "11111111-1111-4111-8111-111111111111",
+            "editMessage": {
+              "dataMessage": {
+                "expiresInSeconds": 0,
+                "message": "edited on phone",
+                "timestamp": 1790000000000,
+                "viewOnce": false
+              },
+              "targetSentTimestamp": 1789999992000
+            },
+            "timestamp": 1790000000000
+          }
+        },
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "text": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "dataMessage": {
+          "attachments": [
+            {
+              "caption": null,
+              "contentType": "image/png",
+              "filename": "cat.png",
+              "height": 480,
+              "id": "att1",
+              "size": 1234,
+              "voiceNote": false,
+              "width": 640
+            }
+          ],
+          "expiresInSeconds": 3600,
+          "message": "Hello world https://example.org",
+          "previews": [
+            {
+              "description": "An example",
+              "image": {
+                "caption": null,
+                "contentType": "image/png",
+                "filename": "cat.png",
+                "height": 480,
+                "id": "prev1",
+                "size": 1234,
+                "voiceNote": false,
+                "width": 640
+              },
+              "title": "Example",
+              "url": "https://example.org"
+            }
+          ],
+          "quote": {
+            "attachments": [],
+            "author": "22222222-2222-4222-8222-222222222222",
+            "authorNumber": null,
+            "authorUuid": "22222222-2222-4222-8222-222222222222",
+            "id": 1789999999000,
+            "text": "earlier"
+          },
+          "textStyle": [
+            "0:5:BOLD"
+          ],
+          "timestamp": 1790000000000,
+          "viewOnce": false
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "viewOnce": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "dataMessage": {
+          "attachments": [
+            {
+              "caption": null,
+              "contentType": "image/png",
+              "filename": "cat.png",
+              "height": 480,
+              "id": "vo1",
+              "size": 1234,
+              "voiceNote": false,
+              "width": 640
+            }
+          ],
+          "expiresInSeconds": 0,
+          "message": null,
+          "timestamp": 1790000000000,
+          "viewOnce": true
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  },
+  "voiceNote": {
+    "jsonrpc": "2.0",
+    "method": "receive",
+    "params": {
+      "account": "+49999",
+      "envelope": {
+        "dataMessage": {
+          "attachments": [
+            {
+              "caption": null,
+              "contentType": "audio/aac",
+              "filename": null,
+              "height": null,
+              "id": "987654321",
+              "size": 4321,
+              "voiceNote": true,
+              "width": null
+            }
+          ],
+          "expiresInSeconds": 0,
+          "message": null,
+          "timestamp": 1790000000000,
+          "viewOnce": false
+        },
+        "serverReceivedTimestamp": 1790000000050,
+        "source": "+49111",
+        "sourceDevice": 1,
+        "sourceName": "Alice",
+        "sourceNumber": "+49111",
+        "sourceUuid": "11111111-1111-4111-8111-111111111111",
+        "timestamp": 1790000000000
+      }
+    }
+  }
+}
