@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
     MainWindow w;
     w.resize(1000, 640);
     w.show();
-    auto *list = w.findChild<QListWidget *>();
+    auto *list = w.findChild<QListWidget *>("conversationList");
     auto *view = w.findChild<ChatView *>();
     auto has = [&](const QString &n) { for (int i = 0; i < list->count(); ++i) if (list->item(i)->text().contains(n)) return true; return false; };
     if (!waitFor([&] { return has("Team"); })) { std::printf("no list\n"); return 1; }

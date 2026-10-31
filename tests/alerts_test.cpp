@@ -217,7 +217,7 @@ struct Scenario {
         ns.save();
         w = std::make_unique<MainWindow>();
         w->show();
-        auto *list = w->findChild<QListWidget *>();
+        auto *list = w->findChild<QListWidget *>("conversationList");
         const bool ready = waitFor([&] {
             for (int i = 0; i < list->count(); ++i)
                 if (list->item(i)->text().contains("Alice")) return true;
@@ -474,7 +474,7 @@ int main(int argc, char **argv)
         ns.sound = false;
         Scenario s(bus, ns);
         CHECK(waitFor([&] { // group title arrives with listGroups
-            auto *l = s.w->findChild<QListWidget *>();
+            auto *l = s.w->findChild<QListWidget *>("conversationList");
             for (int i = 0; i < l->count(); ++i) if (l->item(i)->text().contains("Team")) return true;
             return false; }));
         s.inject(incoming("+49111", "Alice", 1700000001000LL, "see you", "R1JPVVA="));
@@ -524,7 +524,7 @@ int main(int argc, char **argv)
             Scenario s(bus, NotificationSettings());
             s.w->setMuted("+49111", true);
             data = s.tmp.path();
-            auto *l = s.w->findChild<QListWidget *>();
+            auto *l = s.w->findChild<QListWidget *>("conversationList");
             bool marked = false;
             for (int i = 0; i < l->count(); ++i) if (l->item(i)->text().startsWith("🔕") && l->item(i)->text().contains("Alice")) marked = true;
             CHECK(marked);
@@ -536,7 +536,7 @@ int main(int argc, char **argv)
     std::printf("nothing while looking at the conversation\n");
     {
         Scenario s(bus, NotificationSettings());
-        auto *list = s.w->findChild<QListWidget *>();
+        auto *list = s.w->findChild<QListWidget *>("conversationList");
         for (int i = 0; i < list->count(); ++i)
             if (list->item(i)->text().contains("Alice")) list->setCurrentRow(i);
         s.w->activateWindow();

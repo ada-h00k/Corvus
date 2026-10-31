@@ -128,7 +128,7 @@ int main(int argc, char **argv)
 
     MainWindow w;
     w.show();
-    auto *list = w.findChild<QListWidget *>();
+    auto *list = w.findChild<QListWidget *>("conversationList");
     CHECK(list);
     if (!list) return 1;
     CHECK(waitFor([&] { return listHas(list, "Team") && listHas(list, "Club"); }));

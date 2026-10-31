@@ -231,6 +231,19 @@ static bool chooseChatNickname(MainWindow &window, QListWidget *list, const QStr
 // triggers the first action whose text contains `actionText` (e.g. "Archive").
 // With `confirmText` set, the same text is clicked away in the confirmation box
 // the action opens (Block).
+// Clicks the button containing `text` in the visible message box. Polls, because the box is created
+// while the triggering call is still blocked inside it (and must be answered before autoDialogs()).
+static void clickConfirmButton(const QString &text, int tries)
+{
+    for (QWidget *top : QApplication::topLevelWidgets()) {
+        auto *box = qobject_cast<QMessageBox *>(top);
+        if (!box || !box->isVisible()) continue;
+        for (QAbstractButton *button : box->buttons())
+            if (button->text().contains(text)) { button->click(); return; }
+    }
+    if (tries > 0) QTimer::singleShot(5, [text, tries] { clickConfirmButton(text, tries - 1); });
+}
+
 static bool chooseChatAction(MainWindow &window, QListWidget *list, const QString &needle, const QString &actionText,
                              const QString &confirmText = QString())
 {
@@ -259,18 +272,10 @@ static bool chooseChatAction(MainWindow &window, QListWidget *list, const QStrin
         }
         if (action) {
             triggered = true;
+            // The action may open a confirmation box that blocks inside trigger(): keep trying to click it.
+            if (!confirmText.isEmpty()) clickConfirmButton(confirmText, 400);
             action->trigger();
-            if (!confirmText.isEmpty()) {
-                // the action opened a confirmation box: click the requested button
-                QTimer::singleShot(100, [confirmText] {
-                    for (QWidget *top : QApplication::topLevelWidgets()) {
-                        if (auto *box = qobject_cast<QMessageBox *>(top)) {
-                            for (QAbstractButton *button : box->buttons())
-                                if (button->text().contains(confirmText)) { button->click(); return; }
-                        }
-                    }
-                });
-            }
+            for (QMenu *menu : menus) menu->close(); // a triggered action does not end QMenu::exec() by itself
         } else {
             for (QMenu *menu : menus) menu->close(); // nothing matched: don't leave it open
         }
@@ -575,7 +580,7 @@ int main(int argc, char **argv)
     {
         MainWindow w;
         w.show();
-        auto *list = w.findChild<QListWidget *>();
+        auto *list = w.findChild<QListWidget *>("conversationList");
         auto *view = w.findChild<ChatView *>();
         // The composer is a MessageInput (a QTextEdit subclass). Finding it by its type instead of
         // "the first QLineEdit" keeps the test independent of the other line edits of the window
@@ -601,7 +606,7 @@ int main(int argc, char **argv)
         QToolButton *emojiBtn = nullptr;
         for (QToolButton *button : w.findChildren<QToolButton *>()) {
             if (button->toolTip() == QStringLiteral("Attach files")) attachBtn = button;
-            else if (button->toolTip() == QStringLiteral("Emoji and GIFs")) emojiBtn = button;
+            else if (button->toolTip() == QStringLiteral("Emoji, GIFs and stickers")) emojiBtn = button;
         }
         CHECK(attachBtn && emojiBtn);
         if (attachBtn && emojiBtn && input) {
@@ -633,7 +638,7 @@ int main(int argc, char **argv)
                 if (l->text().contains("Connected")) {
                     found = true;
                     CHECK(!l->text().contains("+49"));      // no phone number in the status bar
-                    CHECK(l->text().contains("0.13.99"));   // but the signal-cli version
+                    CHECK(l->text().contains("0.14.9"));   // but the signal-cli version
                 }
             }
             CHECK(found);
@@ -717,7 +722,11 @@ int main(int argc, char **argv)
         CHECK(sendParams["quoteAuthor"].toString() == "+49111");
         CHECK(sendParams["quoteMessage"].toString().contains("look at this"));
         CHECK(sendParams["recipient"].toArray().first().toString() == "+49111");
-        CHECK(sendParams["attachments"].toArray().first().toString() == imgPath);
+        // Files go out under a generic name (signal-<time>.<ext>), not under the name they have on disk.
+        const QString sentAttachment = sendParams["attachments"].toArray().first().toString();
+        CHECK(QFileInfo(sentAttachment).fileName().startsWith("signal-"));
+        CHECK(sentAttachment.endsWith(".png"));
+        CHECK(QFileInfo(sentAttachment).fileName() != QFileInfo(imgPath).fileName());
         CHECK(waitFor([&] { return view->messageCount() == 2; }));
         CHECK(html(view).contains("my reply"));
 
@@ -735,6 +744,8 @@ int main(int argc, char **argv)
             input->setText("hello me");
             QTest::keyClick(input, Qt::Key_Return);
             CHECK(waitFor([&] { return view->messageCount() == 1; }));
+            // The message shows up before the mock has logged the request: wait for the request itself.
+            CHECK(waitFor([&] { return lastCall(logFile, "send")["params"].toObject()["message"].toString() == "hello me"; }));
             const QJsonObject selfSend = lastCall(logFile, "send")["params"].toObject();
             CHECK(selfSend["message"].toString() == "hello me");
             CHECK(selfSend["recipient"].toArray().first().toString() == "+491234567");
@@ -789,9 +800,15 @@ int main(int argc, char **argv)
             CHECK(searchAction);
             if (searchField && searchAction) {
                 CHECK(!searchField->isVisible());
+                w.activateWindow();
+                QTest::qWaitForWindowActive(&w, 1000);
                 searchAction->trigger(); // what pressing Ctrl+K runs
                 CHECK(searchField->isVisible());
-                CHECK(QApplication::focusWidget() == searchField);
+                // Keyboard focus only exists in an active window (not given on every platform, e.g. offscreen).
+                if (w.isActiveWindow())
+                    CHECK(QApplication::focusWidget() == searchField);
+                else
+                    std::printf("  (focus check skipped: the window cannot be activated on this platform)\n");
                 CHECK(searchAction->text() == MainWindow::tr("Hide chat search")); // menu now offers hiding
                 searchField->setText(QStringLiteral("ali"));
                 CHECK(waitFor([&] { return listVisibleHas(list, "Alice"); }));
@@ -860,7 +877,7 @@ int main(int argc, char **argv)
                 });
                 QMetaObject::invokeMethod(list, "itemClicked", Qt::DirectConnection, Q_ARG(QListWidgetItem *, requestsRow));
                 CHECK(waitFor([&] { return !findCall(logFile, "removeContact").isEmpty(); }));
-                CHECK(findCall(logFile, "removeContact")["params"].toObject()["recipient"].toString() == "u-dave");
+                CHECK(findCall(logFile, "removeContact")["params"].toObject()["recipient"].toString() == "+49444");
                 CHECK(waitFor([&] { return listVisibleHas(list, "Dave"); })); // accepted: a normal chat row
                 bool requestsLeft = false;
                 for (int i = 0; i < list->count(); ++i)
@@ -999,13 +1016,13 @@ int main(int argc, char **argv)
                 QTest::keyClick(input, Qt::Key_V, Qt::ControlModifier);
                 CHECK(waitFor([&] { return labelWith("pasted-"); }, 3000));
                 QTest::keyClick(input, Qt::Key_Return);
-                CHECK(waitFor([&] { return !findCall(logFile, "send", 1).isEmpty(); }));
-                const QJsonObject sp = findCall(logFile, "send", 1)["params"].toObject();
+                CHECK(waitFor([&] { return !findCall(logFile, "send", 2).isEmpty(); }));
+                const QJsonObject sp = findCall(logFile, "send", 2)["params"].toObject();
                 CHECK(sp["recipient"].toArray().first().toString() == "+49222");
                 const QString sent = sp["attachments"].toArray().first().toString();
-                CHECK(sent.contains("pasted-") && sent.endsWith(".png"));
+                CHECK(QFileInfo(sent).fileName().startsWith("signal-") && sent.endsWith(".png")); // generic name on the wire
                 CHECK(waitFor([&] { return view->messageCount() == 2; }));
-                CHECK(html(view).contains("[image: pasted-"));
+                CHECK(html(view).contains("[image: signal-")); // sent under the generic name
                 CHECK(!labelWith("pasted-")); // attachment bar is cleared after sending
             }
         }
@@ -1042,13 +1059,13 @@ int main(int argc, char **argv)
             input->setText("draft in progress");
             input->setCursorPosition(5);
             QTest::keyClick(input, Qt::Key_Up);
-            CHECK(input->cursorPosition() == 0);
+            CHECK(input->textCursor().position() == 0);
             CHECK(input->text() == "draft in progress");
             CHECK(!labelWith("Editing message"));
             QTest::keyClick(input, Qt::Key_Down);
-            CHECK(input->cursorPosition() == input->text().size());
+            CHECK(input->textCursor().position() == input->text().size());
             QTest::keyClick(input, Qt::Key_Up, Qt::ShiftModifier);
-            CHECK(input->selectedText() == "draft in progress");
+            CHECK(input->textCursor().selectedText() == "draft in progress");
             QTest::keyClick(input, Qt::Key_Up);
             CHECK(input->text() == "draft in progress");
             CHECK(!labelWith("Editing message"));
@@ -1066,8 +1083,8 @@ int main(int argc, char **argv)
             emit view->editRequested(idx);
             input->setText("hello world");
             QTest::keyClick(input, Qt::Key_Return);
-            CHECK(waitFor([&] { return !findCall(logFile, "send", 2).isEmpty(); }));
-            const QJsonObject ep = findCall(logFile, "send", 2)["params"].toObject();
+            CHECK(waitFor([&] { return !findCall(logFile, "send", 3).isEmpty(); }));
+            const QJsonObject ep = findCall(logFile, "send", 3)["params"].toObject();
             CHECK(ep["message"].toString() == "hello world");
             CHECK(ep["editTimestamp"].toVariant().toLongLong() == now);
             CHECK(ep["recipient"].toArray().first().toString() == "+49222");
@@ -1082,8 +1099,8 @@ int main(int argc, char **argv)
             emit view->editRequested(idx);
             input->setText("hello world!");
             QTest::keyClick(input, Qt::Key_Return);
-            CHECK(waitFor([&] { return !findCall(logFile, "send", 3).isEmpty(); }));
-            CHECK(findCall(logFile, "send", 3)["params"].toObject()["editTimestamp"].toVariant().toLongLong() == now + 1000);
+            CHECK(waitFor([&] { return !findCall(logFile, "send", 4).isEmpty(); }));
+            CHECK(findCall(logFile, "send", 4)["params"].toObject()["editTimestamp"].toVariant().toLongLong() == now + 1000);
             CHECK(waitFor([&] { return html(view).contains("You: hello world! (edited)"); }));
 
             // Empty and unchanged edits send nothing
@@ -1092,12 +1109,12 @@ int main(int argc, char **argv)
             QTest::keyClick(input, Qt::Key_Return);
             QTest::qWait(100);
             CHECK(labelWith("Editing message"));
-            CHECK(findCall(logFile, "send", 4).isEmpty());
+            CHECK(findCall(logFile, "send", 5).isEmpty());
             input->setText("hello world!");
             QTest::keyClick(input, Qt::Key_Return);
             QTest::qWait(100);
             CHECK(!labelWith("Editing message"));
-            CHECK(findCall(logFile, "send", 4).isEmpty());
+            CHECK(findCall(logFile, "send", 5).isEmpty());
 
             // Bob edits his message (incoming edit)
             inject(injectFile, QJsonObject{
@@ -1241,7 +1258,11 @@ int main(int argc, char **argv)
         const QJsonObject deleteParams = findCall(logFile, "remoteDelete")["params"].toObject();
         CHECK(deleteParams["targetTimestamp"].toVariant().toLongLong() == remoteDeleteTs);
         CHECK(deleteParams["recipients"].toArray().first().toString() == "+49111");
-        CHECK(waitFor([&] { return view->messageCount() == 3 && !html(view).contains("delete for everyone"); }));
+        // Like the official clients, a placeholder stays where the message was; its text is gone.
+        CHECK(waitFor([&] { return view->messageCount() == 4 && !html(view).contains("delete for everyone"); }));
+        g_deleteChoice = QStringLiteral("Delete for me"); // remove the placeholder from this device as well
+        emit view->deleteRequested(3);
+        CHECK(waitFor([&] { return view->messageCount() == 3; }));
 
         const qint64 localDeleteTs = QDateTime::currentMSecsSinceEpoch();
         inject(injectFile, QJsonObject{
@@ -1388,7 +1409,7 @@ int main(int argc, char **argv)
         QFile::remove(injectFile);
         MainWindow w;
         w.show();
-        auto *list = w.findChild<QListWidget *>();
+        auto *list = w.findChild<QListWidget *>("conversationList");
         auto *view = w.findChild<ChatView *>();
         CHECK(waitFor([&] { return listHas(list, "Alice"); }));
         CHECK(listHas(list, "Archived chats (1)")); // Carol only: Bob stays unarchived (phone state unchanged)
@@ -1416,7 +1437,9 @@ int main(int argc, char **argv)
         selectItem(list, "Bobby");
         CHECK(waitFor([&] { return view->messageCount() == 3; }));
         CHECK(html(view).contains("Bob: hi from bob, corrected (edited)"));
-        CHECK(html(view).contains("You: phone, via original ts (edited)"));
+        // That message was deleted by the phone at the end of run 1: only the placeholder is restored.
+        CHECK(html(view).contains("You deleted this message."));
+        CHECK(!html(view).contains("phone, via original ts"));
         CHECK(!html(view).contains("wrold"));
         selectItem(list, "Team");
         CHECK(waitFor([&] { return view->messageCount() == 1; }));

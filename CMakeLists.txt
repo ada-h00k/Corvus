@@ -379,6 +379,18 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(history_store_test tests/history_store_test.cpp)
+    target_link_libraries(history_store_test PRIVATE app_core)
+    add_test(NAME history_store COMMAND history_store_test)
+    set_tests_properties(history_store PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 120
+    )
+
+    # Layout benchmark (run by hand: ./chatview_bench [messages]); not part of ctest.
+    add_executable(chatview_bench tests/chatview_bench.cpp)
+    target_link_libraries(chatview_bench PRIVATE app_core)
+
     add_executable(chatview_test tests/chatview_test.cpp)
     target_link_libraries(chatview_test PRIVATE app_core Qt6::Test)
     add_test(NAME chatview COMMAND chatview_test)

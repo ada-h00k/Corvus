@@ -943,10 +943,33 @@ void ChatView::releaseItemRenderResources(int i)
     it.renderResourcesBuilt = false;
 }
 
+size_t ChatView::textMeasureKey(const Message &m, int innerMax) const
+{
+    // The size of the laid-out text depends on the text, its styles, the wrap width and the font.
+    // Colours do not matter. Mentions are resolved to display names that can change, so those
+    // messages are always measured.
+    if (!m.mentions.isEmpty()) return 0;
+    // font().key() builds a string, so hash the font once and only redo it when font or DPI change.
+    const int dpi = logicalDpiX() * 100003 + logicalDpiY() * 101 + int(devicePixelRatioF() * 100);
+    if (m_measureFontHash == 0 || m_measureDpi != dpi || m_measureFont != font()) {
+        m_measureFont = font();
+        m_measureDpi = dpi;
+        m_measureFontHash = qHashMulti(size_t(0x9e3779b9), m_measureFont.key(), dpi);
+    }
+    size_t h = qHashMulti(m_measureFontHash, innerMax, int(m.deleted));
+    if (m.deleted) {
+        h = qHashMulti(h, int(m.outgoing));
+    } else {
+        h = qHashMulti(h, m.text);
+        for (const TextStyleRange &r : m.textStyles) h = qHashMulti(h, r.start, r.length, r.style);
+    }
+    return h ? h : 1;
+}
+
 void ChatView::layoutItem(int i, int y)
 {
     buildItem(i);
-    ensureItemRenderResources(i, false);
+    // The text document is only built when the size is not cached (see below).
     Item &it = m_items[i];
     const Message &m = m_msgs[i];
     const int W = viewport()->width();
@@ -1042,11 +1065,25 @@ void ChatView::layoutItem(int i, int y)
         }
     }
     QSize textSz;
-    if (it.doc) {
-        it.doc->setTextWidth(innerMax);
-        const int ideal = int(std::ceil(it.doc->idealWidth()));
-        it.doc->setTextWidth(qMin(innerMax, ideal + 1));
-        textSz = QSize(qMin(innerMax, ideal + 1), int(std::ceil(it.doc->size().height())));
+    const bool hasText = m.deleted || !m.text.isEmpty();
+    if (hasText) {
+        const size_t cacheKey = textMeasureKey(m, innerMax);
+        const auto cached = cacheKey ? m_textSizeCache.constFind(cacheKey) : m_textSizeCache.constEnd();
+        if (cached != m_textSizeCache.constEnd()) {
+            textSz = cached.value();
+        } else {
+            ensureItemRenderResources(i, false);
+            if (it.doc) {
+                it.doc->setTextWidth(innerMax);
+                const int ideal = int(std::ceil(it.doc->idealWidth()));
+                it.doc->setTextWidth(qMin(innerMax, ideal + 1));
+                textSz = QSize(qMin(innerMax, ideal + 1), int(std::ceil(it.doc->size().height())));
+            }
+            if (cacheKey && it.doc) {
+                if (m_textSizeCache.size() >= 50000) m_textSizeCache.clear(); // bound the memory
+                m_textSizeCache.insert(cacheKey, textSz);
+            }
+        }
         contentW = qMax(contentW, textSz.width());
     }
 
@@ -1090,7 +1127,7 @@ void ChatView::layoutItem(int i, int y)
         it.attRects << QRect(x0, yb, sz.width(), sz.height());
         yb += sz.height() + kGap;
     }
-    if (it.doc) {
+    if (hasText) {
         it.textRect = QRect(x0, yb, textSz.width(), textSz.height());
         yb += textSz.height() + 2;
     }

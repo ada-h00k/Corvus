@@ -130,6 +130,19 @@ pub unsafe extern "C" fn sc_store_append(s: *mut ScStore, record_json: *const c_
     })
 }
 
+/// Encrypt and append a JSON array of records with a single fsync. Returns 0 or an error code.
+#[no_mangle]
+pub unsafe extern "C" fn sc_store_append_batch(s: *mut ScStore, records_json: *const c_char) -> c_int {
+    guard(SC_ERR_PANIC, || {
+        let (Some(s), Some(j)) = (s.as_mut(), cstr(records_json)) else { return SC_ERR_ARG };
+        let Ok(recs) = Record::vec_from_json(j) else { return SC_ERR_ARG };
+        match s.0.append_batch(&recs) {
+            Ok(()) => SC_OK,
+            Err(e) => code(&e),
+        }
+    })
+}
+
 /// Replace the whole history by a JSON array of records (compaction/delete).
 #[no_mangle]
 pub unsafe extern "C" fn sc_store_rewrite(s: *mut ScStore, records_json: *const c_char) -> c_int {

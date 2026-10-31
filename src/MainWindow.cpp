@@ -454,6 +454,7 @@ MainWindow::MainWindow()
     leftLayout->addWidget(m_contactSearch);
     m_contactSearch->installEventFilter(this); // Esc closes the field again
     m_list = new QListWidget;
+    m_list->setObjectName(QStringLiteral("conversationList")); // tests look the list up by name
     m_list->setMinimumWidth(240);
     m_list->setIconSize(QSize(32, 32));
     leftLayout->addWidget(m_list, 1);
@@ -1059,6 +1060,10 @@ MainWindow::MainWindow()
         updateAudioPlaybackView();
     });
     m_notifier = new Notifier(this);
+    // History appends are written by a background thread; failures come back here.
+    m_store.setAppendErrorHandler(this, [this](int rc) {
+        statusBar()->showMessage(tr("Could not save message: %1").arg(HistoryStore::errorText(rc)), 10000);
+    });
     m_tray = new QSystemTrayIcon(AppIcon::tray(0), this);
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &MainWindow::applyTheme);
     m_trayMenu = new QMenu(this);
@@ -2463,9 +2468,11 @@ void MainWindow::removeConversation(const QString &key)
         updateReplyBar();
         updateAttachBar();
     }
-    const int rc = m_store.rewrite(allRecords()); // compacts the file, old ciphertext is gone
-    if (rc != SC_OK)
-        statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
+    // Compacts the file (old ciphertext is gone); runs on the history writer thread.
+    m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+        if (rc != SC_OK)
+            statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
+    });
     refreshList();
     showConversation();
 }
@@ -3078,9 +3085,11 @@ void MainWindow::expireMessages()
     }
     if (!changed) return;
 
-    const int rc = m_store.rewrite(allRecords());
-    if (rc != SC_OK)
-        statusBar()->showMessage(tr("Could not remove expired messages: %1").arg(HistoryStore::errorText(rc)), 10000);
+    // Serialising and encrypting the whole history happens on the history writer thread.
+    m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+        if (rc != SC_OK)
+            statusBar()->showMessage(tr("Could not remove expired messages: %1").arg(HistoryStore::errorText(rc)), 10000);
+    });
     if (m_convs.contains(m_current)) showConversation(true);
     refreshList();
 }
@@ -6117,9 +6126,11 @@ void MainWindow::openMessageRequests()
     connect(&dlg, &MessageRequestsDialog::accepted, this, [this](const QString &key) {
         m_hiddenContacts.remove(key);
         m_declined.remove(key);
-        const int rc = m_store.rewrite(allRecords()); // drop a stored "declined" record, if any
-        if (rc != SC_OK)
-            statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
+        // drop a stored "declined" record, if any
+        m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+            if (rc != SC_OK)
+                statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
+        });
         if (m_convs.contains(key)) {
             m_showArchived = false;
             switchConversation(key);
