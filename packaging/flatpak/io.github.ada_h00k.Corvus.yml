@@ -10,9 +10,11 @@
 # Permissions are kept to the minimum the app really needs; every entry in
 # finish-args below has a reason. The KDE runtime adds a few defaults on top
 # (read-only xdg-config/kdeglobals and the KDE settings bus names) so that Qt
-# follows the Plasma colour scheme; nothing else. There is deliberately NO --filesystem access:
-# files are chosen through the portal file chooser and the app's data lives in
-# ~/.var/app/io.github.ada_h00k.Corvus.
+# follows the Plasma colour scheme; nothing else. There is deliberately no
+# --filesystem access to user data: files are chosen through the portal file
+# chooser and the app's data lives in ~/.var/app/io.github.ada_h00k.Corvus.
+# The only --filesystem entry is the read-only PipeWire socket below, which
+# grants no user data either.
 app-id: io.github.ada_h00k.Corvus
 runtime: org.kde.Platform
 runtime-version: '6.11'
