@@ -12,6 +12,9 @@
 #include "SettingsDialog.h"
 
 #include <QApplication>
+#ifdef HAVE_QT_DBUS
+#include <QDBusConnection>
+#endif
 #include <QAction>
 #include <QClipboard>
 #include <QComboBox>
@@ -64,6 +67,25 @@ static int g_failed = 0;
 static const char *kPass = "test-passphrase-1";
 static QString g_unexpectedBox;
 static QString g_deleteChoice;
+
+#ifdef HAVE_QT_DBUS
+class FakeFileTransferPortal : public QObject
+{
+    Q_OBJECT
+public:
+    QStringList files;
+    QString lastKey;
+    int retrieveCalls = 0;
+
+public slots:
+    QStringList RetrieveFiles(const QString &key, const QVariantMap &)
+    {
+        lastKey = key;
+        ++retrieveCalls;
+        return files;
+    }
+};
+#endif
 
 static bool waitFor(const std::function<bool()> &cond, int ms = 15000)
 {
@@ -453,6 +475,18 @@ int main(int argc, char **argv)
     QApplication::setOrganizationName(QStringLiteral("corvus"));
     QApplication::setApplicationName(QStringLiteral("corvus"));
 
+#ifdef HAVE_QT_DBUS
+    // CTest runs this integration test in dbus-run-session when available.
+    // A small in-process portal mock verifies the real D-Bus method and MIME payload.
+    FakeFileTransferPortal fakePortal;
+    const QDBusConnection sessionBus = QDBusConnection::sessionBus();
+    const bool portalServiceRegistered =
+        sessionBus.isConnected()
+        && sessionBus.registerService(QStringLiteral("org.freedesktop.portal.Documents"))
+        && sessionBus.registerObject(QStringLiteral("/org/freedesktop/portal/documents"),
+                                     &fakePortal, QDBusConnection::ExportAllSlots);
+#endif
+
     const QString firstHistorySecret = HistoryKeychain::generateSecret();
     const QString secondHistorySecret = HistoryKeychain::generateSecret();
     CHECK(firstHistorySecret.size() == 64);
@@ -724,6 +758,28 @@ int main(int argc, char **argv)
                         Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(&w, &drop);
         CHECK(drop.isAccepted());
+
+#ifdef HAVE_QT_DBUS
+        if (portalServiceRegistered) {
+            fakePortal.files = {imgPath};
+            QMimeData portalDrop;
+            portalDrop.setData(QByteArrayLiteral("application/vnd.portal.filetransfer"),
+                               QByteArrayLiteral("mock-transfer-key"));
+            QDragEnterEvent portalDragEnter(QPoint(10, 10), Qt::CopyAction, &portalDrop,
+                                            Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&w, &portalDragEnter);
+            CHECK(portalDragEnter.isAccepted());
+            QDropEvent portalDropEvent(QPointF(10, 10), Qt::CopyAction, &portalDrop,
+                                       Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&w, &portalDropEvent);
+            CHECK(portalDropEvent.isAccepted());
+            CHECK(fakePortal.retrieveCalls == 1);
+            CHECK(fakePortal.lastKey == QStringLiteral("mock-transfer-key"));
+        } else {
+            std::printf("  SKIP portal D-Bus mock: no private session bus available\\n");
+        }
+#endif
+
         input->setText("my reply 😀");
         QTest::keyClick(input, Qt::Key_Return);
         CHECK(waitFor([&] { return !findCall(logFile, "send").isEmpty(); }));
