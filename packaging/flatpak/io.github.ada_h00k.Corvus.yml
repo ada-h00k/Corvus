@@ -18,7 +18,8 @@
 app-id: io.github.ada_h00k.Corvus
 # Qt 6.12's Wayland backend resolves XDG Document Portal file transfers for
 # drag-and-drop. This keeps host files accessible without granting home/host
-# filesystem access to the sandbox.
+# filesystem access to the sandbox. This portal-backed transfer is provided by
+# Qt's Wayland backend; on X11, dropped URI paths still need to be sandbox-visible.
 runtime: org.kde.Platform
 runtime-version: '6.12'
 sdk: org.kde.Sdk
