@@ -33,6 +33,11 @@ finish-args:
   - --nosocket=x11
   # notification sounds (pw-play / paplay) and audio/video attachments
   - --socket=pulseaudio
+  # pw-play is a native PipeWire client and needs the raw PipeWire socket, which
+  # Flatpak cannot expose via a --socket entry; the socket file from the runtime
+  # dir is granted read-only instead. On hosts without PipeWire the mount is
+  # simply skipped (pw-play then cannot connect, as on any PulseAudio-only host).
+  - --filesystem=xdg-run/pipewire-0:ro
   # GPU rendering of the video player (QtMultimedia); drop it to force software rendering
   - --device=dri
   # desktop notifications (freedesktop.org Notifications; also used for the tray fallback)
