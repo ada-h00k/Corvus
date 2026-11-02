@@ -4143,9 +4143,10 @@ bool MainWindow::attachFromMimeData(const QMimeData *md)
 {
     if (!md) return false;
 
-    // Qt 6.12's Wayland backend resolves the XDG Document Portal's
+    // Qt 6.12+ on Wayland resolves the XDG Document Portal's
     // application/vnd.portal.filetransfer token when urls() is requested.
-    // Keep using QMimeData's normal URL API; the Flatpak needs no home access.
+    // The Flathub Flatpak currently uses Qt 6.11; this activates after the
+    // matching KDE 6.12 runtime is published there.
     // 1. files (copied in a file manager, dropped, or a screenshot tool that saved a file)
     QStringList files;
     for (const QUrl &u : md->urls())
