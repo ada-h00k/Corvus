@@ -214,7 +214,15 @@ if(CORVUS_TESTS)
     target_link_libraries(gui_integration_test PRIVATE app_core Qt6::Test)
     target_compile_definitions(gui_integration_test PRIVATE
         MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
-    add_test(NAME gui_integration COMMAND gui_integration_test)
+    if(TARGET Qt6::DBus)
+        find_program(DBUS_RUN_SESSION dbus-run-session)
+    endif()
+    if(DBUS_RUN_SESSION)
+        add_test(NAME gui_integration
+            COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:gui_integration_test>)
+    else()
+        add_test(NAME gui_integration COMMAND gui_integration_test)
+    endif()
 
     add_executable(safety_number_test tests/safety_number_test.cpp)
     target_link_libraries(safety_number_test PRIVATE app_core Qt6::Test)
