@@ -16,8 +16,11 @@
 # The only --filesystem entry is the read-only PipeWire socket below, which
 # grants no user data either.
 app-id: io.github.ada_h00k.Corvus
+# Qt 6.12's Wayland backend resolves XDG Document Portal file transfers for
+# drag-and-drop. This keeps host files accessible without granting home/host
+# filesystem access to the sandbox.
 runtime: org.kde.Platform
-runtime-version: '6.11'
+runtime-version: '6.12'
 sdk: org.kde.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable

@@ -712,7 +712,17 @@ int main(int argc, char **argv)
         const QString imgPath = tmp.path() + "/photo.png";
         CHECK(img.save(imgPath, "PNG"));
         emit view->replyRequested(0);
-        w.addPendingFiles({imgPath});
+        // Exercise the actual MainWindow drop handlers, not just the queue helper.
+        QMimeData droppedFile;
+        droppedFile.setUrls({QUrl::fromLocalFile(imgPath)});
+        QDragEnterEvent dragEnter(QPoint(10, 10), Qt::CopyAction, &droppedFile,
+                                  Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&w, &dragEnter);
+        CHECK(dragEnter.isAccepted());
+        QDropEvent drop(QPointF(10, 10), Qt::CopyAction, &droppedFile,
+                        Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&w, &drop);
+        CHECK(drop.isAccepted());
         input->setText("my reply 😀");
         QTest::keyClick(input, Qt::Key_Return);
         CHECK(waitFor([&] { return !findCall(logFile, "send").isEmpty(); }));
