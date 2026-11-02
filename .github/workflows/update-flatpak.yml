@@ -7,7 +7,7 @@ name: Update Flatpak dependencies
 # one pull request per detected update batch.
 #
 # Not covered, on purpose:
-#   - runtime/sdk (org.kde.Platform '6.11') and org.freedesktop.Platform.ffmpeg-full
+#   - runtime/sdk (org.kde.Platform '6.12') and org.freedesktop.Platform.ffmpeg-full
 #     '25.08': runtime bumps are major version upgrades and belong to a reviewed
 #     manual change. Keep them in sync manually.
 #   - cargo crates: covered by the "cargo" ecosystem in .github/dependabot.yml;
