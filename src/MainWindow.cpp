@@ -100,6 +100,8 @@ static const QString kFolderKey = QStringLiteral("::archived");
 static const QString kBackKey = QStringLiteral("::back");
 static const QString kInvitesKey = QStringLiteral("::invites");
 static const QString kRequestsKey = QStringLiteral("::requests");
+// Shared by dragEnterEvent() and the attachment receiver below.
+static constexpr auto kPortalFileTransferMime = "application/vnd.portal.filetransfer";
 static const QString kContactPrefix = QStringLiteral("contact:");
 static bool isSpecialKey(const QString &key)
 {
@@ -4145,8 +4147,6 @@ void MainWindow::addPendingFiles(const QStringList &files)
 }
 
 namespace {
-constexpr auto kPortalFileTransferMime = "application/vnd.portal.filetransfer";
-
 #ifdef HAVE_QT_DBUS
 // The portal MIME payload is the opaque key returned by StartTransfer().
 // RetrieveFiles() exports the sender's documents into the receiving app's
