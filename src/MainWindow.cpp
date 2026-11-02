@@ -45,6 +45,7 @@
 #ifdef HAVE_QT_DBUS
 #include <QDBusConnection>
 #include <QDBusInterface>
+#include <QDBusReply>
 #endif
 #include <QDir>
 #include <QDialogButtonBox>
@@ -1510,7 +1511,11 @@ void MainWindow::toggleWindow()
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *e)
 {
-    if (e->mimeData()->hasUrls() || e->mimeData()->hasImage()) e->acceptProposedAction();
+    if (e->mimeData()->hasUrls() || e->mimeData()->hasImage()
+#ifdef HAVE_QT_DBUS
+        || e->mimeData()->hasFormat(QString::fromLatin1(kPortalFileTransferMime))
+#endif
+    ) e->acceptProposedAction();
 }
 
 void MainWindow::dropEvent(QDropEvent *e)
@@ -4139,25 +4144,75 @@ void MainWindow::addPendingFiles(const QStringList &files)
     m_input->setFocus();
 }
 
+namespace {
+constexpr auto kPortalFileTransferMime = "application/vnd.portal.filetransfer";
+
+#ifdef HAVE_QT_DBUS
+// The portal MIME payload is the opaque key returned by StartTransfer().
+// RetrieveFiles() exports the sender's documents into the receiving app's
+// document-portal view and returns paths that are readable inside this sandbox.
+static QStringList retrievePortalFileTransfer(const QMimeData *md, QString *error)
+{
+    if (!md || !md->hasFormat(QString::fromLatin1(kPortalFileTransferMime))) return {};
+
+    QByteArray token = md->data(QString::fromLatin1(kPortalFileTransferMime));
+    while (!token.isEmpty() && (token.endsWith('\0') || token.endsWith('\r') || token.endsWith('\n')))
+        token.chop(1);
+    token = token.trimmed();
+    const QString key = QString::fromUtf8(token);
+    if (key.isEmpty() || key.contains(QChar::Null)) {
+        if (error) *error = QObject::tr("The desktop portal supplied an invalid file-transfer token.");
+        return {};
+    }
+
+    const QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.isConnected()) {
+        if (error) *error = QObject::tr("The session D-Bus is not available.");
+        return {};
+    }
+
+    QDBusInterface portal(QStringLiteral("org.freedesktop.portal.Documents"),
+                           QStringLiteral("/org/freedesktop/portal/documents"),
+                           QStringLiteral("org.freedesktop.portal.FileTransfer"), bus);
+    const QDBusReply<QStringList> reply =
+        portal.call(QStringLiteral("RetrieveFiles"), key, QVariantMap{});
+    if (!reply.isValid()) {
+        if (error) *error = reply.error().message();
+        return {};
+    }
+    return reply.value();
+}
+#endif
+} // namespace
+
 bool MainWindow::attachFromMimeData(const QMimeData *md)
 {
     if (!md) return false;
 
-    // Qt 6.12+ on Wayland resolves the XDG Document Portal's
-    // application/vnd.portal.filetransfer token when urls() is requested.
-    // The Flathub Flatpak currently uses Qt 6.11; this activates after the
-    // matching KDE 6.12 runtime is published there.
-    // 1. files (copied in a file manager, dropped, or a screenshot tool that saved a file)
+    // Prefer the portal token when offered. Unlike text/uri-list, it does not
+    // expose a host path: RetrieveFiles() returns paths exported for this app.
+    QString portalError;
     QStringList files;
-    for (const QUrl &u : md->urls())
-        if (u.isLocalFile()) files << u.toLocalFile();
+#ifdef HAVE_QT_DBUS
+    if (md->hasFormat(QString::fromLatin1(kPortalFileTransferMime)))
+        files = retrievePortalFileTransfer(md, &portalError);
+#endif
+
+    // Standard file URLs remain supported for files already visible in the sandbox
+    // (and on desktops which do not implement the File Transfer portal).
+    if (files.isEmpty()) {
+        for (const QUrl &u : md->urls())
+            if (u.isLocalFile()) files << u.toLocalFile();
+    }
     if (!files.isEmpty()) {
         addPendingFiles(files);
         return true;
     }
+    if (!portalError.isEmpty())
+        statusBar()->showMessage(tr("Could not receive files through the desktop portal: %1").arg(portalError), 10000);
 
-    // 2. raw image data (screenshot copied to the clipboard). If there is
-    //    real text as well (e.g. copied from a document), the text wins.
+    // Raw image data (e.g. a screenshot copied to the clipboard). If there is
+    // real text as well (e.g. copied from a document), the text wins.
     if (md->hasImage() && md->text().trimmed().isEmpty()) {
         const QImage img = qvariant_cast<QImage>(md->imageData());
         if (img.isNull() || !m_tmp.isValid()) return false;
