@@ -48,6 +48,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 #include <cstdio>
 #include <cstdlib>
 
