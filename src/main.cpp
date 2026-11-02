@@ -5,13 +5,22 @@
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QLockFile>
 #include <QMessageBox>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QSysInfo>
+#include <cerrno>
 #include <cstdio>
+
+#if defined(Q_OS_UNIX)
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 
 // Brings the running window to the front (also out of the tray). A modal dialog that is open,
 // e.g. the passphrase prompt, gets the focus instead of the blocked main window.
@@ -63,8 +72,58 @@ int main(int argc, char *argv[])
     const QString serverName = QStringLiteral("corvus-")
         + QString::fromLatin1(QCryptographicHash::hash(lockPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(16));
 
-    if (!lock.tryLock(0)) {
-        if (lock.error() == QLockFile::LockFailedError) {
+    // QLockFile detects a stale lock by checking whether a process with the recorded
+    // PID still exists and runs this application. Inside a Flatpak that check is
+    // fooled: every session runs in its own PID namespace whose numbering restarts
+    // at low PIDs, so the PID left over in a lock file of a crashed session (usually
+    // 2) exists again in the next session — often as Corvus itself, under the same
+    // name. The leftover lock then never looks stale and Corvus never starts again.
+    //
+    // In a Flatpak an flock() therefore decides first whether an instance is really
+    // alive: the kernel holds that lock until the owner dies (even on SIGKILL), and
+    // the data directory is shared between the sessions, so the check is independent
+    // of PID namespaces. With the kernel lock held, a contradicting QLockFile is
+    // provably a leftover of this machine and gets removed. Outside Flatpak nothing
+    // changes: PIDs are global there and QLockFile's own stale detection works.
+#if defined(Q_OS_UNIX)
+    const bool inFlatpak = !qEnvironmentVariableIsEmpty("FLATPAK_ID");
+    bool kernelLockHeld = false;  // flock() is ours: no instance runs right now
+    bool instanceRunning = false; // flock() was refused: an instance is alive
+    if (inFlatpak) {
+        const int fd = ::open(QFile::encodeName(lockPath + QStringLiteral(".flock")).constData(),
+                              O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+        if (fd >= 0) {
+            if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+                kernelLockHeld = true; // keep the fd open: closing would release it
+            } else {
+                instanceRunning = errno == EWOULDBLOCK;
+                ::close(fd);
+            }
+        }
+    }
+#else
+    constexpr bool kernelLockHeld = false;
+    constexpr bool instanceRunning = false;
+#endif
+
+    if (!instanceRunning) {
+        if (!lock.tryLock(0) && lock.error() == QLockFile::LockFailedError && kernelLockHeld) {
+            // The kernel lock says no instance is alive, so the remaining QLockFile
+            // is either unreadable or claims an owner on this machine — impossible
+            // now, as explained above. Remove it and try once more. A lock that
+            // names another machine (home on a network share) is left alone.
+            qint64 pid = 0;
+            QString host, appName;
+            if (!lock.getLockInfo(&pid, &host, &appName)
+                || host == QSysInfo::machineHostName()) {
+                lock.removeStaleLockFile();
+                lock.tryLock(0);
+            }
+        }
+    }
+
+    if (instanceRunning || !lock.isLocked()) {
+        if (instanceRunning || lock.error() == QLockFile::LockFailedError) {
             // Another instance owns the history: ask it to show itself, then leave.
             QLocalSocket socket;
             socket.connectToServer(serverName);
