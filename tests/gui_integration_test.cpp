@@ -72,6 +72,7 @@ static QString g_deleteChoice;
 class FakeFileTransferPortal : public QObject
 {
     Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.portal.FileTransfer")
 public:
     QStringList files;
     QString lastKey;
@@ -776,7 +777,7 @@ int main(int argc, char **argv)
             CHECK(fakePortal.retrieveCalls == 1);
             CHECK(fakePortal.lastKey == QStringLiteral("mock-transfer-key"));
         } else {
-            std::printf("  SKIP portal D-Bus mock: no private session bus available\\n");
+            std::printf("  SKIP portal D-Bus mock: no private session bus available\n");
         }
 #endif
 
