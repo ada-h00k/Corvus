@@ -71,6 +71,8 @@ impl Daemon {
     pub async fn new(manager: Mgr, account_dir: &Path, out: mpsc::UnboundedSender<Value>) -> anyhow::Result<Rc<Self>> {
         // corvus decides about link previews itself and passes them with `send` (previewUrl …);
         // presage would otherwise fetch every linked page, revealing the user's IP address to it.
+        // Without presage's `preview` feature there is no fetching to turn off.
+        #[cfg(feature = "preview")]
         manager.set_automatic_link_previews(false);
         let data = manager.registration_data();
         let account = e164(&data.phone_number);
@@ -223,12 +225,20 @@ impl Daemon {
         }
         let mut m = self.manager.clone();
         if who.starts_with('+') {
-            let found = m.discover_contacts_by_phone_number([who]).await?;
-            let Some(sid) = found.into_iter().find_map(|(_, sid)| sid) else {
-                return Err(RpcError::failed(format!("Unregistered user \"{who}\"")));
-            };
-            self.dir.borrow_mut().people.entry(sid.raw_uuid()).or_default().number = Some(who.to_owned());
-            return Ok(sid);
+            // Contact discovery (cdsi) resolves a phone number nobody synced. Without the
+            // cdsi feature only synced contacts can be resolved, like signal-cli without
+            // its own discovery.
+            #[cfg(feature = "cdsi")]
+            {
+                let found = m.discover_contacts_by_phone_number([who]).await?;
+                let Some(sid) = found.into_iter().find_map(|(_, sid)| sid) else {
+                    return Err(RpcError::failed(format!("Unregistered user \"{who}\"")));
+                };
+                self.dir.borrow_mut().people.entry(sid.raw_uuid()).or_default().number = Some(who.to_owned());
+                return Ok(sid);
+            }
+            #[cfg(not(feature = "cdsi"))]
+            return Err(RpcError::failed(format!("Unknown phone number \"{who}\" (contact discovery is not built in)")));
         }
         if who.contains('.') {
             let Some(aci) = m.lookup_username(who).await? else {

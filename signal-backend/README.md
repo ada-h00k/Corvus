@@ -16,6 +16,14 @@ the option above; by hand:
 
     cargo build --release
 
+Contact discovery (`cdsi`, on by default) is what needs libsignal-net and BoringSSL. Build
+without it for a much lighter and faster build; such a binary resolves phone numbers only
+from the synced contacts, like signal-cli without its discovery:
+
+    cargo build --release --no-default-features
+
+The database files are the same for both builds.
+
 ## presage and libsignal-service
 
 corvus-signal needs work that is not in presage and libsignal-service-rs yet. It is built
@@ -43,6 +51,12 @@ and these additions, to be offered upstream:
   (was `unimplemented!`); username reserve/confirm; storage service writes and raw record reads
 - presage: the above in `GroupEdit`, withdrawing an invitation, `set_profile` (with avatar),
   `set_username`, sending to a group leaving out some members, a public `groups_manager`
+- presage: link previews behind an optional `preview` feature (scraper, reqwest, regex, mime).
+  corvus-signal builds without it: it never fetches a page, so the scraper tree and reqwest's
+  aws-lc provider stay out of the build
+- presage-store-sqlite: sqlx default features off (postgres, mysql and any stay out of the tree),
+  and `sqlcipher-custom-crypto` as a feature of its own, so database files open with and without
+  the cdsi feature
 
 ## Behaviour that follows signal-cli
 
