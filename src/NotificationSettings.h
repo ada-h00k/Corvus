@@ -16,6 +16,7 @@ struct NotificationSettings {
     bool startMinimizedInTray = false; // start with the window hidden in the tray
     bool readReceipts = true;       // send and display read receipts
     bool typingIndicators = true;   // send and display typing indicators
+    bool showDeliveryStatus = true; // show sent/delivered/read indicators on outgoing messages
 
     static NotificationSettings load();
     void save() const;

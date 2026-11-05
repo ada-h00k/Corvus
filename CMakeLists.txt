@@ -232,7 +232,15 @@ if(CORVUS_TESTS)
     target_link_libraries(gui_integration_test PRIVATE app_core Qt6::Test)
     target_compile_definitions(gui_integration_test PRIVATE
         MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
-    add_test(NAME gui_integration COMMAND gui_integration_test)
+    if(TARGET Qt6::DBus)
+        find_program(DBUS_RUN_SESSION dbus-run-session)
+    endif()
+    if(DBUS_RUN_SESSION)
+        add_test(NAME gui_integration
+            COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:gui_integration_test>)
+    else()
+        add_test(NAME gui_integration COMMAND gui_integration_test)
+    endif()
 
     add_executable(safety_number_test tests/safety_number_test.cpp)
     target_link_libraries(safety_number_test PRIVATE app_core Qt6::Test)
@@ -384,6 +392,22 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(mentions_test tests/mentions_test.cpp)
+    target_link_libraries(mentions_test PRIVATE app_core Qt6::Test)
+    add_test(NAME mentions COMMAND mentions_test)
+    set_tests_properties(mentions PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
+    add_executable(message_styles_test tests/message_styles_test.cpp)
+    target_link_libraries(message_styles_test PRIVATE app_core Qt6::Test)
+    add_test(NAME message_styles COMMAND message_styles_test)
+    set_tests_properties(message_styles PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(conversation_order_test tests/conversation_order_test.cpp)
     target_link_libraries(conversation_order_test PRIVATE app_core Qt6::Test)
     add_test(NAME conversation_order COMMAND conversation_order_test)
@@ -399,6 +423,18 @@ if(CORVUS_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 60
     )
+
+    add_executable(history_store_test tests/history_store_test.cpp)
+    target_link_libraries(history_store_test PRIVATE app_core)
+    add_test(NAME history_store COMMAND history_store_test)
+    set_tests_properties(history_store PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 120
+    )
+
+    # Layout benchmark (run by hand: ./chatview_bench [messages]); not part of ctest.
+    add_executable(chatview_bench tests/chatview_bench.cpp)
+    target_link_libraries(chatview_bench PRIVATE app_core)
 
     add_executable(chatview_test tests/chatview_test.cpp)
     target_link_libraries(chatview_test PRIVATE app_core Qt6::Test)

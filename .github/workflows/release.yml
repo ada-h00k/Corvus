@@ -429,11 +429,21 @@ jobs:
 
           cat flatpak-build/metadata
 
-          # Only the KDE runtime default "xdg-config/kdeglobals:ro" (Plasma colour scheme) is
-          # accepted as file system access. Everything else, broad devices, sockets or bus
-          # access fails the build. (If one is ever needed on purpose, adjust the patterns.)
+          # Only the KDE runtime default "xdg-config/kdeglobals:ro" (Plasma colour scheme) and
+          # the read-only PipeWire socket "xdg-run/pipewire-0:ro" (native PipeWire clients like
+          # pw-play for notification sounds) are accepted as file system access. Everything
+          # else, broad devices, sockets or bus access fails the build.
+          # (If one is ever needed on purpose, adjust the patterns.)
           forbidden='^filesystems=|^devices=.*all|^sockets=(.*;)?x11;|^sockets=.*(ssh-auth|pcsc|cups|gpg-agent|system-bus)|^org\.freedesktop\.Flatpak=|=own$|^\[System Bus Policy\]'
-          checked="$(grep -v -x 'filesystems=xdg-config/kdeglobals:ro;' flatpak-build/metadata || true)"
+          # Flatpak merges the accepted entries into a single "filesystems=" line
+          # (order depends on runtime defaults vs. finish-args), so an exact-line
+          # exception no longer works. Instead strip both accepted entries from
+          # every filesystems= line and drop lines that end up empty; any other
+          # entry survives and trips the forbidden regex below.
+          checked="$(
+            sed -e '/^filesystems=/{s|xdg-run/pipewire-0:ro;||g; s|xdg-config/kdeglobals:ro;||g; /^filesystems=;*$/d;}' \
+                flatpak-build/metadata
+          )"
           if grep -E "$forbidden" <<< "$checked"; then
             echo "::error::The Flatpak requests more permissions than intended. See the metadata above."
             exit 1

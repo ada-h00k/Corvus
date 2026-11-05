@@ -5,6 +5,8 @@
 #include <QJsonArray>
 #include <QVector>
 
+#include "Model.h"
+
 class QEvent;
 class QMimeData;
 class QMouseEvent;
@@ -32,6 +34,9 @@ public:
     void setText(const QString &text);
     QString text() const;
     QJsonArray textStyles() const;
+    QList<MentionRange> mentionRanges() const;
+    void insertMention(int start, int end, const QString &recipientId, const QString &displayName);
+    void applyMentionFormat(int start, int length, const QString &recipientId);
     QString richText() const { return toHtml(); }
     void setRichText(const QString &html);
 

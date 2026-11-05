@@ -72,6 +72,7 @@ private:
     QPushButton *m_change;
     QCheckBox *m_readReceipts;
     QCheckBox *m_typingIndicators;
+    QCheckBox *m_showDeliveryStatus;
 };
 
 // --- Advanced -------------------------------------------------------------------------------

@@ -76,6 +76,12 @@ struct TextStyleRange {
     QString style;       // BOLD, ITALIC, STRIKETHROUGH, MONOSPACE or SPOILER
 };
 
+struct MentionRange {
+    int start = 0;       // UTF-16 offset of the mentioned name in the Signal message body
+    int length = 0;      // UTF-16 length; Signal may use a single U+FFFC placeholder on receive
+    QString uuid;        // Signal recipient identity (ACI UUID or phone number for legacy accounts)
+};
+
 struct LinkPreview {
     QString url;             // HTTPS URL represented by the preview
     QString title;
@@ -111,6 +117,7 @@ struct Message {
     QString sender;       // display name at the time of receiving
     QString text;
     QList<TextStyleRange> textStyles;
+    QList<MentionRange> mentions;
     bool outgoing = false;
     // Receipt state for outgoing messages: 0=sent, 1=delivered, 2=read.
     int receiptStatus = 0;

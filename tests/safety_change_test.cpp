@@ -141,7 +141,7 @@ int main(int argc, char **argv)
 
     MainWindow w;
     w.show();
-    auto *list = w.findChild<QListWidget *>();
+    auto *list = w.findChild<QListWidget *>("conversationList");
     auto *input = w.findChild<MessageInput *>();
     QWidget *bar = w.findChild<QWidget *>(QStringLiteral("safetyChangedBar"));
     CHECK(list && input && bar);

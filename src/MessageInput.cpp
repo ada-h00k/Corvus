@@ -24,6 +24,7 @@
 namespace {
 constexpr int kCompactHeight = 40;
 constexpr int kExpandedHeight = 140;
+constexpr int kMentionUuidProperty = QTextFormat::UserProperty + 2;
 }
 
 MessageInput::MessageInput(QWidget *parent)
@@ -180,7 +181,30 @@ QJsonArray MessageInput::textStyles() const
         case Bold: return f.fontWeight() >= QFont::DemiBold;
         case Italic: return f.fontItalic();
         case Strike: return f.fontStrikeOut();
-        case Monospace: return f.fontFixedPitch() || f.font().family() == QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+        case Monospace: {
+            // Monospace is an explicitly applied style, never an inherited
+            // one. Unformatted text carries no font properties, and its
+            // resolved family falls back to the system font, so comparing
+            // the family against the platform fixed font would report every
+            // character of a user whose system font is fixed-pitch as
+            // MONOSPACE and send whole messages as monospace. Only explicit
+            // properties count: the fixed-pitch flag set by applyStyle(), or
+            // an explicit font family (set together with the flag by
+            // applyStyle(), and the only part surviving the HTML round-trip
+            // of drafts and edited messages).
+            if (f.hasProperty(QTextFormat::FontFixedPitch))
+                return f.fontFixedPitch();
+            if (f.hasProperty(QTextFormat::FontFamilies)) {
+                const QStringList families = f.fontFamilies().toStringList();
+                // An empty list means the family was explicitly cleared
+                // (applyStyle() remove path): not monospace.
+                return !families.isEmpty() &&
+                       f.font().family() == QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+            }
+            if (f.hasProperty(QTextFormat::FontFamily)) // legacy single-family property
+                return f.font().family() == QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+            return false;
+        }
         case Spoiler: return f.hasProperty(QTextFormat::UserProperty + 1) ||
                                (f.hasProperty(QTextFormat::BackgroundBrush) && f.hasProperty(QTextFormat::ForegroundBrush) &&
                                 f.background().color() == f.foreground().color());
@@ -207,6 +231,73 @@ QJsonArray MessageInput::textStyles() const
         }
     }
     return result;
+}
+
+QList<MentionRange> MessageInput::mentionRanges() const
+{
+    QList<MentionRange> result;
+    const QString plain = toPlainText();
+    int runStart = -1;
+    QString runUuid;
+    for (int pos = 0; pos <= plain.size(); ++pos) {
+        QString uuid;
+        if (pos < plain.size()) {
+            QTextCursor c(document());
+            c.setPosition(pos);
+            c.movePosition(QTextCursor::Right, QTextCursor::KeepAnchor, 1);
+            uuid = c.charFormat().property(kMentionUuidProperty).toString();
+        }
+        if (uuid == runUuid) continue;
+        if (runStart >= 0 && !runUuid.isEmpty())
+            result.append({runStart, pos - runStart, runUuid});
+        runStart = uuid.isEmpty() ? -1 : pos;
+        runUuid = uuid;
+    }
+    return result;
+}
+
+void MessageInput::insertMention(int start, int end, const QString &recipientId, const QString &displayName)
+{
+    if (recipientId.trimmed().isEmpty() || displayName.trimmed().isEmpty()) return;
+    const QString plain = toPlainText();
+    start = qBound(0, start, plain.size());
+    end = qBound(start, end, plain.size());
+
+    QTextCursor cursor(document());
+    cursor.setPosition(start);
+    cursor.setPosition(end, QTextCursor::KeepAnchor);
+    cursor.removeSelectedText();
+    cursor.insertText(QStringLiteral("@"), QTextCharFormat());
+
+    QTextCharFormat mentionFormat;
+    mentionFormat.setProperty(kMentionUuidProperty, recipientId);
+    mentionFormat.setForeground(palette().color(QPalette::Link));
+    mentionFormat.setFontWeight(QFont::DemiBold);
+    cursor.insertText(displayName, mentionFormat);
+    if (cursor.position() >= toPlainText().size() ||
+        (cursor.position() < toPlainText().size() && !toPlainText().at(cursor.position()).isSpace()))
+        cursor.insertText(QStringLiteral(" "), QTextCharFormat());
+    setTextCursor(cursor);
+    setCurrentCharFormat(QTextCharFormat());
+    emit formattingChanged();
+}
+
+void MessageInput::applyMentionFormat(int start, int length, const QString &recipientId)
+{
+    if (recipientId.trimmed().isEmpty() || length <= 0) return;
+    const int textLength = toPlainText().size();
+    start = qBound(0, start, textLength);
+    const int end = qBound(start, start + length, textLength);
+    if (end <= start) return;
+
+    QTextCursor cursor(document());
+    cursor.setPosition(start);
+    cursor.setPosition(end, QTextCursor::KeepAnchor);
+    QTextCharFormat format;
+    format.setProperty(kMentionUuidProperty, recipientId);
+    format.setForeground(palette().color(QPalette::Link));
+    format.setFontWeight(QFont::DemiBold);
+    cursor.mergeCharFormat(format);
 }
 
 bool MessageInput::selectionHasStyle(Style style) const

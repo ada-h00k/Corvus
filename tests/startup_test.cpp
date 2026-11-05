@@ -75,6 +75,7 @@ static QString status(MainWindow &w)
 {
     for (QLabel *l : w.findChildren<QLabel *>()) {
         const QString t = l->text();
+        if (t.startsWith("Connect to")) continue; // the (hidden) sticker picker hint, not the status bar
         if (t.contains("Connect") || t.contains("Disconnected") || t.contains("Not connected")) return t;
     }
     return {};

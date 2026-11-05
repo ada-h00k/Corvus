@@ -1,8 +1,11 @@
 #pragma once
 
 #include <QAbstractScrollArea>
+#include <QFont>
+#include <QHash>
 #include <QImage>
 #include <QPixmap>
+#include <QSize>
 #include <QTextCursor>
 #include <functional>
 #include <memory>
@@ -36,6 +39,7 @@ public:
     void setSelfKey(const QString &key) { m_self = key; }
     void setGroupMode(bool group);
     void setReadReceiptsEnabled(bool enabled);
+    void setDeliveryStatusVisible(bool visible);
     void setAppearance(const Appearance &a);
     Appearance appearance() const { return m_ap; }
 
@@ -151,10 +155,18 @@ private:
 
     QList<Message> m_msgs;
     QList<Item> m_items;
+    // Measured text size per (message text/styles, wrap width, font). Re-laying out a conversation
+    // (resize, switching back to a chat) then skips the expensive QTextDocument::setHtml().
+    QHash<size_t, QSize> m_textSizeCache;
+    size_t textMeasureKey(const Message &m, int innerMax) const; // 0 = do not cache
+    mutable QFont m_measureFont;           // font/DPI the hash below was computed for
+    mutable size_t m_measureFontHash = 0;
+    mutable int m_measureDpi = 0;
     std::function<QString(const QString &)> m_nameOf;
     QString m_self;
     bool m_group = false;
     bool m_showReadReceipts = true;
+    bool m_showDeliveryStatus = true;
     Appearance m_ap;
     int m_layoutWidth = -1;
     int m_renderFirst = -1;

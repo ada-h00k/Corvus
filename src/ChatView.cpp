@@ -5,6 +5,7 @@
 #include <QAbstractTextDocumentLayout>
 #include <QApplication>
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QContextMenuEvent>
 #include <QDateTime>
 #include <QLabel>
@@ -82,7 +83,9 @@ QString linkify(const QString &text)
     return esc;
 }
 
-QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styles, const QColor &fg)
+QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styles,
+                          const QList<MentionRange> &mentions, const QColor &fg,
+                          const std::function<QString(const QString &)> &nameResolver)
 {
     if (text.isEmpty()) return QString();
     const int n = text.size();
@@ -93,8 +96,11 @@ QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styl
         for (int i = a; i < b; ++i) active[i].insert(r.style);
     }
 
-    QString html;
-    int runStart = 0;
+    QList<MentionRange> sortedMentions = mentions;
+    std::sort(sortedMentions.begin(), sortedMentions.end(), [](const MentionRange &a, const MentionRange &b) {
+        return a.start < b.start;
+    });
+
     auto runHtml = [&](int a, int b) {
         if (a >= b) return QString();
         QString css;
@@ -109,11 +115,34 @@ QString styledMessageHtml(const QString &text, const QList<TextStyleRange> &styl
         return css.isEmpty() ? piece : QStringLiteral("<span style=\"%1\">%2</span>").arg(css, piece);
     };
 
-    for (int i = 1; i <= n; ++i) {
-        if (i == n || active[i] != active[runStart]) {
-            html += runHtml(runStart, i);
-            runStart = i;
+    QString html;
+    int i = 0;
+    int mentionIndex = 0;
+    while (i < n) {
+        while (mentionIndex < sortedMentions.size() &&
+               (sortedMentions.at(mentionIndex).start < i || sortedMentions.at(mentionIndex).length <= 0))
+            ++mentionIndex;
+        if (mentionIndex < sortedMentions.size() && sortedMentions.at(mentionIndex).start == i) {
+            const MentionRange range = sortedMentions.at(mentionIndex++);
+            const int consume = text.at(i) == QChar(0xfffc) ? 1 : qMin(range.length, n - i);
+            QString label = range.uuid.isEmpty() ? QString() : (nameResolver ? nameResolver(range.uuid) : range.uuid);
+            if (label.trimmed().isEmpty() || label == range.uuid) {
+                // Avoid exposing a raw UUID as the UI text if signal-cli could not resolve it.
+                const bool looksLikeUuid = range.uuid.count(QLatin1Char('-')) >= 4;
+                label = (range.uuid.isEmpty() || looksLikeUuid)
+                            ? QCoreApplication::translate("ChatView", "mentioned member") : range.uuid;
+            }
+            html += QStringLiteral("<span style=\"color:%1;font-weight:600;\">@%2</span>")
+                        .arg(fg.lighter(125).name(), label.toHtmlEscaped());
+            i += qMax(1, consume);
+            continue;
         }
+        int j = i + 1;
+        while (j < n && active[j] == active[i] &&
+               (mentionIndex >= sortedMentions.size() || sortedMentions.at(mentionIndex).start != j))
+            ++j;
+        html += runHtml(i, j);
+        i = j;
     }
     return html;
 }
@@ -381,6 +410,20 @@ void ChatView::setReadReceiptsEnabled(bool enabled)
     for (int i = 0; i < m_items.size() && i < m_msgs.size(); ++i)
         m_items[i].statusRead = m_showReadReceipts && m_msgs[i].receiptStatus >= 2;
     viewport()->update();
+}
+
+void ChatView::setDeliveryStatusVisible(bool visible)
+{
+    if (m_showDeliveryStatus == visible) return;
+    m_showDeliveryStatus = visible;
+    // This is a local display preference only. Keep receipt processing and stored receipt data
+    // intact so enabling the indicators again immediately restores each message's current state.
+    for (int i = 0; i < m_items.size() && i < m_msgs.size(); ++i) {
+        m_items[i].statusText.clear();
+        if (m_showDeliveryStatus && m_msgs[i].outgoing)
+            m_items[i].statusText = m_msgs[i].receiptStatus >= 1 ? QStringLiteral("✓✓") : QStringLiteral("✓");
+    }
+    relayoutAll();
 }
 
 void ChatView::setAppearance(const Appearance &a)
@@ -831,7 +874,8 @@ void ChatView::buildItem(int i)
     if (m.isEdited() && !m.deleted) it.timeText = tr("edited") + QStringLiteral(" · ") + it.timeText;
     it.statusText.clear();
     it.statusRead = m_showReadReceipts && m.receiptStatus >= 2;
-    if (m.outgoing) it.statusText = m.receiptStatus >= 1 ? QStringLiteral("✓✓") : QStringLiteral("✓");
+    if (m_showDeliveryStatus && m.outgoing)
+        it.statusText = m.receiptStatus >= 1 ? QStringLiteral("✓✓") : QStringLiteral("✓");
     if (!m.outgoing) it.sender = m.sender.isEmpty() ? nameOf(m.authorKey) : m.sender;
     if (m.quote.valid) {
         it.quoteAuthor = nameOf(m.quote.authorKey);
@@ -876,7 +920,7 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
         it.doc->setDocumentMargin(0);
         it.doc->setDefaultFont(font());
         it.doc->setDefaultStyleSheet(QStringLiteral("a { color: %1; text-decoration: underline; }").arg(fg.name()));
-        it.doc->setHtml(styledMessageHtml(m.text, m.textStyles, fg));
+        it.doc->setHtml(styledMessageHtml(m.text, m.textStyles, m.mentions, fg, m_nameOf));
         if (it.textRect.width() > 0) it.doc->setTextWidth(it.textRect.width());
     }
     it.pix.clear();
@@ -899,10 +943,33 @@ void ChatView::releaseItemRenderResources(int i)
     it.renderResourcesBuilt = false;
 }
 
+size_t ChatView::textMeasureKey(const Message &m, int innerMax) const
+{
+    // The size of the laid-out text depends on the text, its styles, the wrap width and the font.
+    // Colours do not matter. Mentions are resolved to display names that can change, so those
+    // messages are always measured.
+    if (!m.mentions.isEmpty()) return 0;
+    // font().key() builds a string, so hash the font once and only redo it when font or DPI change.
+    const int dpi = logicalDpiX() * 100003 + logicalDpiY() * 101 + int(devicePixelRatioF() * 100);
+    if (m_measureFontHash == 0 || m_measureDpi != dpi || m_measureFont != font()) {
+        m_measureFont = font();
+        m_measureDpi = dpi;
+        m_measureFontHash = qHashMulti(size_t(0x9e3779b9), m_measureFont.key(), dpi);
+    }
+    size_t h = qHashMulti(m_measureFontHash, innerMax, int(m.deleted));
+    if (m.deleted) {
+        h = qHashMulti(h, int(m.outgoing));
+    } else {
+        h = qHashMulti(h, m.text);
+        for (const TextStyleRange &r : m.textStyles) h = qHashMulti(h, r.start, r.length, r.style);
+    }
+    return h ? h : 1;
+}
+
 void ChatView::layoutItem(int i, int y)
 {
     buildItem(i);
-    ensureItemRenderResources(i, false);
+    // The text document is only built when the size is not cached (see below).
     Item &it = m_items[i];
     const Message &m = m_msgs[i];
     const int W = viewport()->width();
@@ -998,11 +1065,25 @@ void ChatView::layoutItem(int i, int y)
         }
     }
     QSize textSz;
-    if (it.doc) {
-        it.doc->setTextWidth(innerMax);
-        const int ideal = int(std::ceil(it.doc->idealWidth()));
-        it.doc->setTextWidth(qMin(innerMax, ideal + 1));
-        textSz = QSize(qMin(innerMax, ideal + 1), int(std::ceil(it.doc->size().height())));
+    const bool hasText = m.deleted || !m.text.isEmpty();
+    if (hasText) {
+        const size_t cacheKey = textMeasureKey(m, innerMax);
+        const auto cached = cacheKey ? m_textSizeCache.constFind(cacheKey) : m_textSizeCache.constEnd();
+        if (cached != m_textSizeCache.constEnd()) {
+            textSz = cached.value();
+        } else {
+            ensureItemRenderResources(i, false);
+            if (it.doc) {
+                it.doc->setTextWidth(innerMax);
+                const int ideal = int(std::ceil(it.doc->idealWidth()));
+                it.doc->setTextWidth(qMin(innerMax, ideal + 1));
+                textSz = QSize(qMin(innerMax, ideal + 1), int(std::ceil(it.doc->size().height())));
+            }
+            if (cacheKey && it.doc) {
+                if (m_textSizeCache.size() >= 50000) m_textSizeCache.clear(); // bound the memory
+                m_textSizeCache.insert(cacheKey, textSz);
+            }
+        }
         contentW = qMax(contentW, textSz.width());
     }
 
@@ -1046,7 +1127,7 @@ void ChatView::layoutItem(int i, int y)
         it.attRects << QRect(x0, yb, sz.width(), sz.height());
         yb += sz.height() + kGap;
     }
-    if (it.doc) {
+    if (hasText) {
         it.textRect = QRect(x0, yb, textSz.width(), textSz.height());
         yb += textSz.height() + 2;
     }

@@ -10,10 +10,17 @@
 # Permissions are kept to the minimum the app really needs; every entry in
 # finish-args below has a reason. The KDE runtime adds a few defaults on top
 # (read-only xdg-config/kdeglobals and the KDE settings bus names) so that Qt
-# follows the Plasma colour scheme; nothing else. There is deliberately NO --filesystem access:
-# files are chosen through the portal file chooser and the app's data lives in
-# ~/.var/app/io.github.ada_h00k.Corvus.
+# follows the Plasma colour scheme; nothing else. There is deliberately no
+# --filesystem access to user data: files are chosen through the portal file
+# chooser and the app's data lives in ~/.var/app/io.github.ada_h00k.Corvus.
+# The only --filesystem entry is the read-only PipeWire socket below, which
+# grants no user data either.
 app-id: io.github.ada_h00k.Corvus
+# Flathub currently publishes org.kde.Platform and org.kde.Sdk only through
+# branch 6.11. Keep this on the published branch so CI can resolve both refs.
+# Qt 6.12 adds Wayland XDG Document Portal drag-and-drop support; bump this
+# after Flathub publishes the matching 6.12 runtime and SDK. No broad access
+# to the host filesystem is required for that portal-backed transfer.
 runtime: org.kde.Platform
 runtime-version: '6.11'
 sdk: org.kde.Sdk
@@ -33,6 +40,11 @@ finish-args:
   - --nosocket=x11
   # notification sounds (pw-play / paplay) and audio/video attachments
   - --socket=pulseaudio
+  # pw-play is a native PipeWire client and needs the raw PipeWire socket, which
+  # Flatpak cannot expose via a --socket entry; the socket file from the runtime
+  # dir is granted read-only instead. On hosts without PipeWire the mount is
+  # simply skipped (pw-play then cannot connect, as on any PulseAudio-only host).
+  - --filesystem=xdg-run/pipewire-0:ro
   # GPU rendering of the video player (QtMultimedia); drop it to force software rendering
   - --device=dri
   # desktop notifications (freedesktop.org Notifications; also used for the tray fallback)

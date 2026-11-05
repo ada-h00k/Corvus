@@ -183,7 +183,7 @@ int main(int argc, char **argv)
     w.show();
     CHECK(fake);
     if (!fake) return 1;
-    auto *list = w.findChild<QListWidget *>();
+    auto *list = w.findChild<QListWidget *>("conversationList");
     auto *input = w.findChild<MessageInput *>();
     auto *mic = w.findChild<QToolButton *>("voiceButton");
     QWidget *bar = w.findChild<QWidget *>("recordBar");

@@ -520,6 +520,26 @@ impl Store {
         Ok(())
     }
 
+    /// Encrypt and append several records with a single write and a single fsync.
+    /// All-or-nothing: on failure the file is truncated back to its previous length.
+    /// The on-disk format is identical to calling `append` once per record.
+    pub fn append_batch(&mut self, recs: &[Record]) -> Result<(), StoreError> {
+        if recs.is_empty() {
+            return Ok(());
+        }
+        let mut buf = Vec::new();
+        for (i, rec) in recs.iter().enumerate() {
+            buf.extend_from_slice(&encrypt_record(&self.dek, self.seq + i as u64, rec)?);
+        }
+        if let Err(e) = self.file.write_all(&buf).and_then(|_| self.file.sync_data()) {
+            let _ = self.file.set_len(self.len); // never leave a torn batch behind
+            return Err(e.into());
+        }
+        self.seq += recs.len() as u64;
+        self.len += buf.len() as u64;
+        Ok(())
+    }
+
     /// Replace the whole log (used for compaction after deleting data).
     pub fn rewrite(&mut self, records: &[Record]) -> Result<(), StoreError> {
         let mut data = self.header.to_bytes();
@@ -652,6 +672,41 @@ mod tests {
         drop(s);
         let (_, recs) = Store::open(&p, "pw").unwrap();
         assert_eq!(recs, vec![msg(1), msg(3)]);
+    }
+
+    #[test]
+    fn append_batch_matches_single_appends() {
+        let p = tmp();
+        let mut s = Store::create(&p, "pw", FAST).unwrap();
+        s.append(&msg(0)).unwrap();
+        s.append_batch(&[msg(1), msg(2), msg(3)]).unwrap();
+        s.append_batch(&[]).unwrap(); // no-op
+        s.append(&msg(4)).unwrap(); // seq continues correctly after a batch
+        s.append_batch(&[msg(5)]).unwrap();
+        drop(s);
+        let (mut s, recs) = Store::open(&p, "pw").unwrap();
+        assert_eq!(recs, (0..6).map(msg).collect::<Vec<_>>());
+        s.append_batch(&[msg(6), msg(7)]).unwrap(); // and after reopening
+        drop(s);
+        let (_, recs) = Store::open(&p, "pw").unwrap();
+        assert_eq!(recs, (0..8).map(msg).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn append_batch_torn_tail_is_dropped() {
+        let p = tmp();
+        let mut s = Store::create(&p, "pw", FAST).unwrap();
+        s.append(&msg(1)).unwrap();
+        s.append_batch(&[msg(2), msg(3)]).unwrap();
+        drop(s);
+        let raw = fs::read(&p).unwrap();
+        fs::write(&p, &raw[..raw.len() - 10]).unwrap();
+        let (mut s, recs) = Store::open(&p, "pw").unwrap();
+        assert_eq!(recs, vec![msg(1), msg(2)]);
+        s.append_batch(&[msg(4)]).unwrap();
+        drop(s);
+        let (_, recs) = Store::open(&p, "pw").unwrap();
+        assert_eq!(recs, vec![msg(1), msg(2), msg(4)]);
     }
 
     #[test]

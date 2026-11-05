@@ -5,13 +5,22 @@
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QLockFile>
 #include <QMessageBox>
 #include <QStandardPaths>
 #include <QStringList>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
+
+#if defined(Q_OS_UNIX)
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 
 // Brings the running window to the front (also out of the tray). A modal dialog that is open,
 // e.g. the passphrase prompt, gets the focus instead of the blocked main window.
@@ -63,8 +72,43 @@ int main(int argc, char *argv[])
     const QString serverName = QStringLiteral("corvus-")
         + QString::fromLatin1(QCryptographicHash::hash(lockPath.toUtf8(), QCryptographicHash::Sha1).toHex().left(16));
 
-    if (!lock.tryLock(0)) {
-        if (lock.error() == QLockFile::LockFailedError) {
+    // QLockFile stores a PID and process name. Those values are unreliable in
+    // Flatpak because each launch gets a new PID namespace; after a crash or
+    // reboot, a reused PID can make an old lock file look live.
+    //
+    // Use flock() as the sole source of truth inside Flatpak. The kernel
+    // releases it automatically when the owning process exits, even after
+    // SIGKILL or a reboot. In particular, do not consult QLockFile there:
+    // its persistent PID metadata is exactly what can become misleading.
+    // Outside Flatpak, keep QLockFile's existing stale-lock handling.
+    bool inFlatpak = false;
+    bool instanceRunning = false;
+    int kernelLockFd = -1;
+    int kernelLockError = 0;
+#if defined(Q_OS_UNIX)
+    inFlatpak = !qEnvironmentVariableIsEmpty("FLATPAK_ID");
+    if (inFlatpak) {
+        const QByteArray flockPath = QFile::encodeName(lockPath + QStringLiteral(".flock"));
+        kernelLockFd = ::open(flockPath.constData(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+        if (kernelLockFd < 0) {
+            kernelLockError = errno;
+        } else if (flock(kernelLockFd, LOCK_EX | LOCK_NB) != 0) {
+            kernelLockError = errno;
+            instanceRunning = kernelLockError == EWOULDBLOCK || kernelLockError == EAGAIN;
+            ::close(kernelLockFd);
+            kernelLockFd = -1;
+            if (instanceRunning)
+                kernelLockError = 0;
+        }
+    }
+#endif
+
+    // Keep kernelLockFd open for the application's lifetime. Closing it would
+    // release the Flatpak instance lock.
+    const bool lockAcquired = inFlatpak ? kernelLockFd >= 0 : lock.tryLock(0);
+
+    if (!lockAcquired) {
+        if (instanceRunning || (!inFlatpak && lock.error() == QLockFile::LockFailedError)) {
             // Another instance owns the history: ask it to show itself, then leave.
             QLocalSocket socket;
             socket.connectToServer(serverName);
@@ -73,13 +117,28 @@ int main(int argc, char *argv[])
                 std::fprintf(stderr, "Corvus is already running, bringing it to the front.\n");
                 return 0;
             }
-            qint64 pid = 0;
-            QString host, appName;
-            lock.getLockInfo(&pid, &host, &appName);
-            QMessageBox::warning(nullptr, QObject::tr("Corvus"),
-                                 QObject::tr("Corvus is already running (process %1), but it does not respond.\n\n"
-                                             "Close the other instance first. Two instances would damage the chat history.")
-                                     .arg(pid));
+            if (inFlatpak) {
+                QMessageBox::warning(nullptr, QObject::tr("Corvus"),
+                                     QObject::tr("Corvus is already running, but it does not respond.\n\n"
+                                                 "Close the other instance first. Two instances would damage the chat history."));
+            } else {
+                qint64 pid = 0;
+                QString host, appName;
+                lock.getLockInfo(&pid, &host, &appName);
+                QMessageBox::warning(nullptr, QObject::tr("Corvus"),
+                                     QObject::tr("Corvus is already running (process %1), but it does not respond.\n\n"
+                                                 "Close the other instance first. Two instances would damage the chat history.")
+                                         .arg(pid));
+            }
+        } else if (inFlatpak) {
+            const QString reason = kernelLockError
+                ? QString::fromLocal8Bit(std::strerror(kernelLockError))
+                : QObject::tr("unknown error");
+            std::fprintf(stderr, "Corvus: cannot acquire Flatpak instance lock: %s\n",
+                         reason.toLocal8Bit().constData());
+            QMessageBox::critical(nullptr, QObject::tr("Corvus"),
+                                  QObject::tr("Cannot lock the chat history (%1).\nCheck the permissions of the folder:\n%2")
+                                      .arg(reason, dataDir));
         } else {
             QMessageBox::critical(nullptr, QObject::tr("Corvus"),
                                   QObject::tr("Cannot lock the chat history (%1).\nCheck the permissions of the folder:\n%2")
