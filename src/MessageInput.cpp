@@ -181,7 +181,30 @@ QJsonArray MessageInput::textStyles() const
         case Bold: return f.fontWeight() >= QFont::DemiBold;
         case Italic: return f.fontItalic();
         case Strike: return f.fontStrikeOut();
-        case Monospace: return f.fontFixedPitch() || f.font().family() == QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+        case Monospace: {
+            // Monospace is an explicitly applied style, never an inherited
+            // one. Unformatted text carries no font properties, and its
+            // resolved family falls back to the system font, so comparing
+            // the family against the platform fixed font would report every
+            // character of a user whose system font is fixed-pitch as
+            // MONOSPACE and send whole messages as monospace. Only explicit
+            // properties count: the fixed-pitch flag set by applyStyle(), or
+            // an explicit font family (set together with the flag by
+            // applyStyle(), and the only part surviving the HTML round-trip
+            // of drafts and edited messages).
+            if (f.hasProperty(QTextFormat::FontFixedPitch))
+                return f.fontFixedPitch();
+            if (f.hasProperty(QTextFormat::FontFamilies)) {
+                const QStringList families = f.fontFamilies().toStringList();
+                // An empty list means the family was explicitly cleared
+                // (applyStyle() remove path): not monospace.
+                return !families.isEmpty() &&
+                       f.font().family() == QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+            }
+            if (f.hasProperty(QTextFormat::FontFamily)) // legacy single-family property
+                return f.font().family() == QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+            return false;
+        }
         case Spoiler: return f.hasProperty(QTextFormat::UserProperty + 1) ||
                                (f.hasProperty(QTextFormat::BackgroundBrush) && f.hasProperty(QTextFormat::ForegroundBrush) &&
                                 f.background().color() == f.foreground().color());

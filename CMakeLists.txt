@@ -371,6 +371,14 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(message_styles_test tests/message_styles_test.cpp)
+    target_link_libraries(message_styles_test PRIVATE app_core Qt6::Test)
+    add_test(NAME message_styles COMMAND message_styles_test)
+    set_tests_properties(message_styles PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(conversation_order_test tests/conversation_order_test.cpp)
     target_link_libraries(conversation_order_test PRIVATE app_core Qt6::Test)
     add_test(NAME conversation_order COMMAND conversation_order_test)
