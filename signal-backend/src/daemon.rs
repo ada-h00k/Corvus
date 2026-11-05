@@ -217,28 +217,17 @@ impl Daemon {
         Ok(ServiceId::Aci(Aci::from(uuid)))
     }
 
-    /// Like signal-cli: also a phone number nobody synced (contact discovery) or a username
-    /// ("name.42"). What is found is remembered.
+    /// Also a username ("name.42") if it is not in the contacts yet. A phone number only
+    /// resolves if it is among the synced contacts — contact discovery (CDSI) is not built
+    /// in, Corvus never sends to a number that is not an existing chat. What is found is
+    /// remembered.
     pub(crate) async fn resolve(&self, who: &str) -> Result<ServiceId, RpcError> {
         if let Ok(sid) = self.resolve_local(who) {
             return Ok(sid);
         }
         let mut m = self.manager.clone();
         if who.starts_with('+') {
-            // Contact discovery (cdsi) resolves a phone number nobody synced. Without the
-            // cdsi feature only synced contacts can be resolved, like signal-cli without
-            // its own discovery.
-            #[cfg(feature = "cdsi")]
-            {
-                let found = m.discover_contacts_by_phone_number([who]).await?;
-                let Some(sid) = found.into_iter().find_map(|(_, sid)| sid) else {
-                    return Err(RpcError::failed(format!("Unregistered user \"{who}\"")));
-                };
-                self.dir.borrow_mut().people.entry(sid.raw_uuid()).or_default().number = Some(who.to_owned());
-                return Ok(sid);
-            }
-            #[cfg(not(feature = "cdsi"))]
-            return Err(RpcError::failed(format!("Unknown phone number \"{who}\" (contact discovery is not built in)")));
+            return Err(RpcError::failed(format!("Unknown phone number \"{who}\" (only numbers the phone synced can be resolved; contact discovery is not built in)")));
         }
         if who.contains('.') {
             let Some(aci) = m.lookup_username(who).await? else {

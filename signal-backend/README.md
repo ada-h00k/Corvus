@@ -11,18 +11,15 @@ offers to link the computer with the phone again (the chat history in Corvus is 
 
 ## Building
 
-Needs Rust 1.85+, `protoc`, and clang and cmake (libsignal's BoringSSL). CMake builds it with
-the option above; by hand:
+Needs Rust 1.85+ and `protoc`. CMake builds it with the option above; by hand:
 
     cargo build --release
 
-Contact discovery (`cdsi`, on by default) is what needs libsignal-net and BoringSSL. Build
-without it for a much lighter and faster build; such a binary resolves phone numbers only
-from the synced contacts, like signal-cli without its discovery:
-
-    cargo build --release --no-default-features
-
-The database files are the same for both builds.
+Contact discovery (CDSI) is not built in. A phone number only resolves if the phone
+synced it through the storage service, where signal-cli would look an unsynced number
+up at Signal's contact discovery service. Corvus sends to existing chats and has no
+way to enter a number, so it never needed the lookup — and not building it keeps
+libsignal-net and BoringSSL out of the tree entirely.
 
 ## presage and libsignal-service
 
@@ -55,8 +52,8 @@ and these additions, to be offered upstream:
   corvus-signal builds without it: it never fetches a page, so the scraper tree and reqwest's
   aws-lc provider stay out of the build
 - presage-store-sqlite: sqlx default features off (postgres, mysql and any stay out of the tree),
-  and `sqlcipher-custom-crypto` as a feature of its own, so database files open with and without
-  the cdsi feature
+  and `sqlcipher-custom-crypto` as a feature of its own, so the database files do not depend on
+  other feature choices
 
 ## Behaviour that follows signal-cli
 
@@ -69,6 +66,10 @@ and these additions, to be offered upstream:
 - Attachments, link preview images and stickers are downloaded when a message arrives;
   delivery receipts are sent for received messages.
 - Link previews are only sent when Corvus asks for one (presage's automatic previews are off).
+
+One divergence from signal-cli: contact discovery (CDSI) is not built in, so a phone number
+only resolves to an account if the phone synced it through the storage service. Corvus sends
+to existing chats and never enters a number, so it never needed the lookup.
 
 Data lives in `$XDG_DATA_HOME/corvus-signal` (or `$CORVUS_SIGNAL_DIR`), one directory per
 account. `CORVUS_SIGNAL_LOG` sets the log filter (stderr); `-v`/`-vv` raise the level.

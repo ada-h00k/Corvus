@@ -20,8 +20,8 @@ account; signal-cli's daemon was not started, so only its one-shot commands were
     cmake --build build --parallel
     ./build/corvus
 
-Besides Corvus' usual dependencies this needs `protoc`, plus clang and cmake (libsignal builds
-BoringSSL). The first build takes a few minutes.
+Besides Corvus' usual dependencies this needs `protoc`. Contact discovery (CDSI) is not built
+in, which keeps libsignal-net and BoringSSL out of the tree.
 
 In Corvus, open Settings → Advanced → Choose … and pick `build/corvus-signal`. Corvus then
 finds no account and offers to link the computer. corvus-signal is a new linked device with its

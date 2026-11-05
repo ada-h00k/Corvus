@@ -15,8 +15,8 @@ path = "src/main.rs"
 # The corvus integration branch of presage (it uses the one of libsignal-service-rs): upstream plus
 # the open pull requests corvus needs and corvus' own additions, see README.md.
 presage = { git = "https://github.com/cyberneticangel/presage", rev = "61975095eac4f0a6a930da527b3e7737c9520582" }
-# Custom SQLCipher crypto (not OpenSSL) in every build: the same database files must
-# open with and without the cdsi feature.
+# Custom SQLCipher crypto (not OpenSSL): the database files must not depend on
+# other feature choices.
 presage-store-sqlite = { git = "https://github.com/cyberneticangel/presage", rev = "61975095eac4f0a6a930da527b3e7737c9520582", features = ["sqlcipher-custom-crypto"] }
 
 anyhow = "1.0"
@@ -31,11 +31,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 
 [features]
-default = ["cdsi"]
-# Contact discovery (libsignal-net, BoringSSL): resolves a phone number nobody synced
-# to its account identity, like signal-cli does. Build with --no-default-features
-# without it; such a binary only resolves numbers from the synced contacts.
-cdsi = ["presage/cdsi", "presage-store-sqlite/cdsi"]
+default = []
 # Builds presage with link-preview fetching (scraper + reqwest's aws-lc provider).
 # Off by default: corvus decides about previews itself and passes them with `send`.
 preview = ["presage/preview"]

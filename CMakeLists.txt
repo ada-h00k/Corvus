@@ -37,7 +37,7 @@ set_target_properties(history_store PROPERTIES
 add_dependencies(history_store history_store_cargo)
 
 # ---- Rust: corvus-signal, the signal-cli compatible backend (optional) -----
-# Built on presage/libsignal; needs protoc, plus clang and cmake for libsignal's BoringSSL.
+# Built on presage/libsignal; needs protoc. No BoringSSL: contact discovery is not built in.
 option(CORVUS_RUST_BACKEND "Build corvus-signal, the Rust backend (choose it with Settings → Advanced → Choose …)" OFF)
 if(CORVUS_RUST_BACKEND)
     set(SIGNAL_BACKEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/signal-backend)
