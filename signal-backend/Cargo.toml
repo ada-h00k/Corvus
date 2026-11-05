@@ -20,14 +20,18 @@ presage-store-sqlite = { git = "https://github.com/cyberneticangel/presage", rev
 
 anyhow = "1.0"
 base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 futures = "0.3"
 mime_guess = "2.0"
 rand = "0.9"
 serde_json = "1.0"
-tokio = { version = "1.48", features = ["rt", "macros", "io-std", "io-util", "sync", "time", "fs"] }
+tokio = { version = "1.48", features = ["rt", "io-std", "io-util", "sync", "time", "fs"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# No default features: "ansi" (stderr is read by corvus, not a terminal) and "tracing-log" are not needed.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+
+[dev-dependencies]
+# only used to build envelope timestamps in tests
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # Same patches as the presage workspace; [patch] does not propagate from dependencies.
 [patch.crates-io]
