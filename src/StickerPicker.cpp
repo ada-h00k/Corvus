@@ -137,6 +137,17 @@ void StickerPicker::setSignalCli(SignalCli *cli)
 {
     if (m_cli == cli) return;
     m_cli = cli;
+    ++m_cliGeneration;
+    m_hasLoadedPacks = false;
+    m_refreshInFlight = false;
+    m_packList.clear();
+    m_visiblePacks.clear();
+    m_imageCache.clear();
+    m_imagePending.clear();
+    m_imageFailed.clear();
+    m_sendWhenLoaded.clear();
+    m_imageLoadsInFlight = 0;
+    showPacks();
     refresh();
 }
 
@@ -168,15 +179,26 @@ bool StickerPicker::isValidPackUrl(const QString &raw)
 void StickerPicker::refresh()
 {
     if (!m_cli || !m_cli->isRunning()) {
-        setMessage(tr("Connect to Signal to load sticker packs."), true);
+        if (!m_hasLoadedPacks)
+            setMessage(tr("Connect to Signal to load sticker packs."), true);
         return;
     }
+    // The installed-pack list changes only when the user installs a pack or
+    // switches Signal accounts. Reopening the popup should use the in-memory
+    // copy instead of issuing another RPC and rebuilding every sticker widget.
+    if (m_hasLoadedPacks || m_refreshInFlight) return;
+
+    m_refreshInFlight = true;
+    const quint64 generation = m_cliGeneration;
     setMessage(tr("Loading installed sticker packs…"));
-    m_cli->call(QStringLiteral("listStickerPacks"), {}, [this](const QJsonValue &value, const QString &error) {
+    m_cli->call(QStringLiteral("listStickerPacks"), {}, [this, generation](const QJsonValue &value, const QString &error) {
+        if (generation != m_cliGeneration) return;
+        m_refreshInFlight = false;
         if (!error.isEmpty()) {
             setMessage(tr("Could not load sticker packs: %1").arg(error), true);
             return;
         }
+        m_hasLoadedPacks = true;
         parsePacks(value);
     });
 }
@@ -229,6 +251,7 @@ void StickerPicker::parsePacks(const QJsonValue &value)
 // This avoids a pack-selection dropdown and lets users move between packs by scrolling.
 void StickerPicker::showPacks()
 {
+    const quint64 generation = ++m_renderGeneration;
     while (QLayoutItem *item = m_grid->takeAt(0)) {
         if (QWidget *widget = item->widget()) widget->deleteLater();
         delete item;
@@ -241,10 +264,9 @@ void StickerPicker::showPacks()
     m_stickerButtons.clear();
     m_packHeadings.clear();
     m_categoryButtons.clear();
+    m_visiblePacks.clear();
 
     const QString query = m_searchEdit ? m_searchEdit->text().trimmed() : QString();
-
-    QList<Pack> visiblePacks;
     for (const Pack &pack : m_packList) {
         bool matches = query.isEmpty() || pack.title.contains(query, Qt::CaseInsensitive) ||
                        pack.author.contains(query, Qt::CaseInsensitive);
@@ -256,10 +278,10 @@ void StickerPicker::showPacks()
                 }
             }
         }
-        if (matches) visiblePacks.append(pack);
+        if (matches) m_visiblePacks.append(pack);
     }
 
-    if (visiblePacks.isEmpty()) {
+    if (m_visiblePacks.isEmpty()) {
         auto *empty = new QLabel(m_gridWidget);
         empty->setWordWrap(true);
         empty->setContentsMargins(6, 8, 6, 8);
@@ -274,8 +296,35 @@ void StickerPicker::showPacks()
         return;
     }
 
-    int row = 0;
-    for (const Pack &pack : visiblePacks) {
+    // Creating thousands of QPushButtons in one event-loop turn makes the
+    // popup appear frozen for a moment. Add one small batch at a time so Qt
+    // can paint and handle input while large sticker collections are built.
+    m_renderPackIndex = 0;
+    m_renderStickerIndex = 0;
+    m_renderRow = 0;
+    setMessage(QString());
+    QTimer::singleShot(0, this, [this, generation] { appendStickerBatch(generation); });
+}
+
+void StickerPicker::appendStickerBatch(quint64 generation)
+{
+    if (generation != m_renderGeneration) return;
+
+    if (m_renderPackIndex >= m_visiblePacks.size()) {
+        m_categoryLayout->addStretch(1);
+        for (int column = 0; column < 4; ++column) m_grid->setColumnStretch(column, 1);
+        m_categoryContents->adjustSize();
+        QTimer::singleShot(0, this, [this, generation] {
+            if (generation != m_renderGeneration) return;
+            loadVisibleStickers();
+            updateCategorySelection();
+        });
+        return;
+    }
+
+    const Pack &pack = m_visiblePacks.at(m_renderPackIndex);
+    const bool firstBatch = m_renderStickerIndex == 0;
+    if (firstBatch) {
         auto *heading = new QLabel(m_gridWidget);
         QString headingText = pack.title;
         if (!pack.author.isEmpty()) headingText += QStringLiteral(" · ") + pack.author;
@@ -285,7 +334,7 @@ void StickerPicker::showPacks()
         heading->setFont(headingFont);
         heading->setWordWrap(true);
         heading->setContentsMargins(4, 8, 4, 2);
-        m_grid->addWidget(heading, row++, 0, 1, 4);
+        m_grid->addWidget(heading, m_renderRow++, 0, 1, 4);
         m_packHeadings.insert(pack.id, heading);
 
         auto *category = new QToolButton(m_categoryContents);
@@ -297,10 +346,10 @@ void StickerPicker::showPacks()
         category->setToolTip(headingText);
         category->setAccessibleName(headingText);
         category->setProperty("stickerPackId", pack.id);
-        // Mark the active pack with an outline only; never paint over the sticker icon.
         category->setStyleSheet(QStringLiteral(
             "QToolButton { border: 1px solid transparent; border-radius: 7px; background: transparent; padding: 1px; }"
             "QToolButton:checked { border-color: palette(highlight); background: transparent; }"));
+
         const Sticker *firstSticker = pack.stickers.isEmpty() ? nullptr : &pack.stickers.first();
         if (firstSticker) {
             const QByteArray cached = m_imageCache.value(cacheKey(pack.id, firstSticker->id));
@@ -321,12 +370,9 @@ void StickerPicker::showPacks()
         m_categoryLayout->addWidget(category);
         m_categoryButtons.insert(pack.id, category);
         connect(category, &QToolButton::clicked, this, [this, packId = pack.id] {
-            const QPointer<QLabel> heading = m_packHeadings.value(packId);
-            if (!heading || !m_scroll || !m_gridWidget) return;
-
-            // Scroll to this exact section coordinate instead of merely making the
-            // heading visible (ensureWidgetVisible can stop at a neighbouring section).
-            const int targetY = heading->mapTo(m_gridWidget, QPoint(0, 0)).y();
+            const QPointer<QLabel> packHeading = m_packHeadings.value(packId);
+            if (!packHeading || !m_scroll || !m_gridWidget) return;
+            const int targetY = packHeading->mapTo(m_gridWidget, QPoint(0, 0)).y();
             QScrollBar *bar = m_scroll->verticalScrollBar();
             bar->setValue(qBound(bar->minimum(), targetY, bar->maximum()));
             updateCategorySelection();
@@ -335,56 +381,62 @@ void StickerPicker::showPacks()
         if (pack.stickers.isEmpty()) {
             auto *empty = new QLabel(tr("No stickers available for this pack."), m_gridWidget);
             empty->setContentsMargins(4, 0, 4, 6);
-            m_grid->addWidget(empty, row++, 0, 1, 4);
-            continue;
+            m_grid->addWidget(empty, m_renderRow++, 0, 1, 4);
+            ++m_renderPackIndex;
+            m_renderStickerIndex = 0;
+            QTimer::singleShot(0, this, [this, generation] { appendStickerBatch(generation); });
+            return;
         }
-
-        const int count = pack.stickers.size();
-        for (int i = 0; i < count; ++i) {
-            const Sticker sticker = pack.stickers.at(i);
-            auto *button = new QPushButton(m_gridWidget);
-            button->setFixedSize(78, 78);
-            button->setIconSize(QSize(56, 56));
-            button->setFlat(true);
-            button->setCursor(Qt::PointingHandCursor);
-            button->setToolTip(sticker.emoji.isEmpty() ? pack.title : sticker.emoji);
-            if (!sticker.emoji.isEmpty()) button->setText(sticker.emoji);
-            button->setProperty("stickerPackId", pack.id);
-            button->setProperty("stickerId", sticker.id);
-            const int buttonRow = row + i / 4;
-            m_grid->addWidget(button, buttonRow, i % 4);
-
-            const QString key = cacheKey(pack.id, sticker.id);
-            m_stickerButtons.insert(key, button);
-            const QByteArray cached = m_imageCache.value(key);
-            if (!cached.isEmpty())
-                applyStickerImage(button, cached); // plays, once the sticker is animated
-            connect(button, &QPushButton::clicked, this, [this, packId = pack.id, stickerId = sticker.id] {
-                const QString key = cacheKey(packId, stickerId);
-                const QByteArray data = m_imageCache.value(key);
-                if (!data.isEmpty()) {
-                    emit stickerChosen(packId, stickerId, data);
-                } else {
-                    m_sendWhenLoaded.insert(key);
-                    setMessage(tr("Loading sticker…"));
-                    loadSticker(packId, stickerId);
-                }
-            });
-        }
-        row += (count + 3) / 4;
-        auto *spacer = new QWidget(m_gridWidget);
-        spacer->setFixedHeight(8);
-        m_grid->addWidget(spacer, row++, 0, 1, 4);
     }
 
-    m_categoryLayout->addStretch(1);
-    for (int column = 0; column < 4; ++column) m_grid->setColumnStretch(column, 1);
-    m_categoryContents->adjustSize();
-    setMessage(QString());
-    QTimer::singleShot(0, this, [this] {
-        loadVisibleStickers();
-        updateCategorySelection();
-    });
+    constexpr int kStickerWidgetsPerBatch = 24;
+    const int count = pack.stickers.size();
+    const int first = m_renderStickerIndex;
+    const int last = qMin(first + kStickerWidgetsPerBatch, count);
+    for (int i = first; i < last; ++i) {
+        const Sticker sticker = pack.stickers.at(i);
+        auto *button = new QPushButton(m_gridWidget);
+        button->setFixedSize(78, 78);
+        button->setIconSize(QSize(56, 56));
+        button->setFlat(true);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setToolTip(sticker.emoji.isEmpty() ? pack.title : sticker.emoji);
+        if (!sticker.emoji.isEmpty()) button->setText(sticker.emoji);
+        button->setProperty("stickerPackId", pack.id);
+        button->setProperty("stickerId", sticker.id);
+        const int buttonRow = m_renderRow + i / 4;
+        m_grid->addWidget(button, buttonRow, i % 4);
+
+        const QString key = cacheKey(pack.id, sticker.id);
+        m_stickerButtons.insert(key, button);
+        const QByteArray cached = m_imageCache.value(key);
+        if (!cached.isEmpty())
+            applyStickerImage(button, cached);
+        connect(button, &QPushButton::clicked, this, [this, packId = pack.id, stickerId = sticker.id] {
+            const QString key = cacheKey(packId, stickerId);
+            const QByteArray data = m_imageCache.value(key);
+            if (!data.isEmpty()) {
+                emit stickerChosen(packId, stickerId, data);
+            } else {
+                m_imageFailed.remove(key); // an explicit click may retry a failed preview
+                m_sendWhenLoaded.insert(key);
+                setMessage(tr("Loading sticker…"));
+                loadSticker(packId, stickerId);
+            }
+        });
+    }
+
+    m_renderStickerIndex = last;
+    if (last >= count) {
+        m_renderRow += (count + 3) / 4;
+        auto *spacer = new QWidget(m_gridWidget);
+        spacer->setFixedHeight(8);
+        m_grid->addWidget(spacer, m_renderRow++, 0, 1, 4);
+        ++m_renderPackIndex;
+        m_renderStickerIndex = 0;
+    }
+
+    QTimer::singleShot(0, this, [this, generation] { appendStickerBatch(generation); });
 }
 
 void StickerPicker::updateCategorySelection()
