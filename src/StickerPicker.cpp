@@ -351,18 +351,11 @@ void StickerPicker::appendStickerBatch(quint64 generation)
             "QToolButton:checked { border-color: palette(highlight); background: transparent; }"));
 
         const Sticker *firstSticker = pack.stickers.isEmpty() ? nullptr : &pack.stickers.first();
-        if (firstSticker) {
-            const QByteArray cached = m_imageCache.value(cacheKey(pack.id, firstSticker->id));
-            const QImage image = QImage::fromData(cached);
-            if (!image.isNull()) {
-                category->setIcon(QPixmap::fromImage(image));
-            } else if (!firstSticker->emoji.isEmpty()) {
-                category->setText(firstSticker->emoji);
-                category->setToolButtonStyle(Qt::ToolButtonTextOnly);
-            } else {
-                category->setText(pack.title.left(1).toUpper());
-                category->setToolButtonStyle(Qt::ToolButtonTextOnly);
-            }
+        if (firstSticker && !firstSticker->emoji.isEmpty()) {
+            // Keep category creation cheap; the real image icon is applied
+            // when the first sticker itself is loaded near the viewport.
+            category->setText(firstSticker->emoji);
+            category->setToolButtonStyle(Qt::ToolButtonTextOnly);
         } else {
             category->setText(pack.title.left(1).toUpper());
             category->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -545,7 +538,9 @@ void StickerPicker::applyStickerImage(QPushButton *button, const QByteArray &byt
 void StickerPicker::loadSticker(const QString &packId, int stickerId, QPointer<QPushButton> button)
 {
     const QString key = cacheKey(packId, stickerId);
-    if (m_imageCache.contains(key) || m_imagePending.value(key)) return;
+    constexpr int kMaxConcurrentStickerLoads = 2;
+    if (m_imageCache.contains(key) || m_imagePending.value(key) ||
+        m_imageLoadsInFlight >= kMaxConcurrentStickerLoads) return;
     if (!m_cli || !m_cli->isRunning()) return;
 
     m_imagePending.insert(key, true);
