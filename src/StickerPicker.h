@@ -52,6 +52,7 @@ private:
 
     void parsePacks(const QJsonValue &value);
     void showPacks();
+    void appendStickerBatch(quint64 generation);
     void loadVisibleStickers();
     void addPack();
     void installPack(const QString &uri);
@@ -80,8 +81,18 @@ private:
     QHash<QString, QPointer<QLabel>> m_packHeadings;
     QHash<QString, QPointer<QToolButton>> m_categoryButtons;
     QList<Pack> m_packList;
+    QList<Pack> m_visiblePacks;
+    int m_renderPackIndex = 0;
+    int m_renderStickerIndex = 0;
+    int m_renderRow = 0;
+    quint64 m_renderGeneration = 0;
+    quint64 m_cliGeneration = 0;
+    bool m_hasLoadedPacks = false;
+    bool m_refreshInFlight = false;
+    int m_imageLoadsInFlight = 0;
     QHash<QString, QByteArray> m_imageCache;
     QHash<QString, bool> m_imagePending;
+    QSet<QString> m_imageFailed;
     QHash<QString, QPointer<QPushButton>> m_stickerButtons;
     QSet<QString> m_sendWhenLoaded;
 };
