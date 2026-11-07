@@ -89,6 +89,7 @@ private:
     quint64 m_cliGeneration = 0;
     bool m_hasLoadedPacks = false;
     bool m_refreshInFlight = false;
+    bool m_needsRender = false;
     int m_imageLoadsInFlight = 0;
     QHash<QString, QByteArray> m_imageCache;
     QHash<QString, bool> m_imagePending;
