@@ -409,9 +409,8 @@ void StickerPicker::appendStickerBatch(quint64 generation)
 
         const QString key = cacheKey(pack.id, sticker.id);
         m_stickerButtons.insert(key, button);
-        const QByteArray cached = m_imageCache.value(key);
-        if (!cached.isEmpty())
-            applyStickerImage(button, cached);
+        // Sticker animations are initialized lazily by loadVisibleStickers
+        // only when this button approaches the viewport.
         connect(button, &QPushButton::clicked, this, [this, packId = pack.id, stickerId = sticker.id] {
             const QString key = cacheKey(packId, stickerId);
             const QByteArray data = m_imageCache.value(key);
@@ -470,7 +469,9 @@ void StickerPicker::updateCategorySelection()
 
 void StickerPicker::loadVisibleStickers()
 {
-    if (!m_scroll || !m_gridWidget) return;
+    // Do not fetch or decode sticker images while the popup is closed.
+    if (!isVisible() || !m_scroll || !m_gridWidget) return;
+    constexpr int kMaxConcurrentStickerLoads = 2;
     const int top = m_scroll->verticalScrollBar()->value();
     const int height = m_scroll->viewport()->height();
     const int bottom = top + height;
@@ -478,10 +479,25 @@ void StickerPicker::loadVisibleStickers()
 
     for (auto it = m_stickerButtons.cbegin(); it != m_stickerButtons.cend(); ++it) {
         QPushButton *button = it.value();
-        if (!button || m_imageCache.contains(it.key()) || m_imagePending.value(it.key())) continue;
+        if (!button) continue;
         const int buttonTop = button->mapTo(m_gridWidget, QPoint(0, 0)).y();
         const int buttonBottom = buttonTop + button->height();
         if (buttonBottom < top - preloadMargin || buttonTop > bottom + preloadMargin) continue;
+
+        const QString key = it.key();
+        if (m_imageCache.contains(key)) {
+            // Cached animations are started only when their buttons are near
+            // the viewport. Rebuilding/searching the list must not instantiate
+            // hundreds of QMovie/APNG players for off-screen stickers.
+            if (!button->property("stickerAnimationStarted").toBool()) {
+                applyStickerImage(button, m_imageCache.value(key));
+                button->setProperty("stickerAnimationStarted", true);
+            }
+            continue;
+        }
+        if (m_imagePending.value(key) || m_imageFailed.contains(key) ||
+            m_imageLoadsInFlight >= kMaxConcurrentStickerLoads) continue;
+
         const QString packId = button->property("stickerPackId").toString();
         bool ok = false;
         const int stickerId = button->property("stickerId").toInt(&ok);
@@ -514,7 +530,7 @@ void StickerPicker::applyStickerImage(QPushButton *button, const QByteArray &byt
     buffer->setData(bytes);
     buffer->open(QIODevice::ReadOnly);
     movie->setDevice(buffer);
-    movie->setCacheMode(QMovie::CacheAll);
+    movie->setCacheMode(QMovie::CacheNone);
     movie->setScaledSize(button->iconSize());
     if (movie->isValid()) {
         connect(movie, &QMovie::frameChanged, button, [button, movie] {
@@ -529,31 +545,58 @@ void StickerPicker::applyStickerImage(QPushButton *button, const QByteArray &byt
 void StickerPicker::loadSticker(const QString &packId, int stickerId, QPointer<QPushButton> button)
 {
     const QString key = cacheKey(packId, stickerId);
-    if (m_imageCache.contains(key)) return;
-    if (m_imagePending.value(key)) return;
+    if (m_imageCache.contains(key) || m_imagePending.value(key)) return;
     if (!m_cli || !m_cli->isRunning()) return;
+
     m_imagePending.insert(key, true);
+    ++m_imageLoadsInFlight;
+    const quint64 generation = m_cliGeneration;
     m_cli->call(QStringLiteral("getSticker"),
                 QJsonObject{{QStringLiteral("packId"), packId}, {QStringLiteral("stickerId"), stickerId}},
-                [this, key, button, packId, stickerId](const QJsonValue &value, const QString &error) {
+                [this, generation, key, button, packId, stickerId](const QJsonValue &value, const QString &error) {
+        if (generation != m_cliGeneration) return;
         m_imagePending.remove(key);
-        if (!error.isEmpty()) return;
+        m_imageLoadsInFlight = qMax(0, m_imageLoadsInFlight - 1);
+        if (!error.isEmpty()) {
+            m_imageFailed.insert(key);
+            m_sendWhenLoaded.remove(key);
+            loadVisibleStickers();
+            return;
+        }
         const QJsonObject object = value.toObject();
         QString encoded = object.value(QStringLiteral("data")).toString();
         if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
         if (encoded.isEmpty() && value.isString()) encoded = value.toString();
         const QByteArray bytes = QByteArray::fromBase64(encoded.toLatin1());
-        if (bytes.isEmpty()) return;
+        if (bytes.isEmpty()) {
+            m_imageFailed.insert(key);
+            m_sendWhenLoaded.remove(key);
+            loadVisibleStickers();
+            return;
+        }
         m_imageCache.insert(key, bytes);
-        applyStickerImage(button, bytes);
-        const QImage image = QImage::fromData(bytes);
-        if (!image.isNull()) {
-            const QPointer<QToolButton> category = m_categoryButtons.value(packId);
-            const auto packIt = std::find_if(m_packList.cbegin(), m_packList.cend(), [packId](const Pack &candidate) {
-                return candidate.id == packId;
-            });
-            if (category && packIt != m_packList.cend() && !packIt->stickers.isEmpty() &&
-                packIt->stickers.first().id == stickerId) {
+
+        // The request may finish after the user has scrolled away. Keep the
+        // bytes in cache, but only decode/start animation for a visible button.
+        if (button && isVisible() && m_scroll && m_gridWidget) {
+            const int top = m_scroll->verticalScrollBar()->value();
+            const int height = m_scroll->viewport()->height();
+            const int y = button->mapTo(m_gridWidget, QPoint(0, 0)).y();
+            const int margin = height / 2;
+            if (y + button->height() >= top - margin && y <= top + height + margin) {
+                applyStickerImage(button, bytes);
+                button->setProperty("stickerAnimationStarted", true);
+            }
+        }
+
+        const QPointer<QToolButton> category = m_categoryButtons.value(packId);
+        const auto packIt = std::find_if(m_packList.cbegin(), m_packList.cend(), [packId](const Pack &candidate) {
+            return candidate.id == packId;
+        });
+        if (category && packIt != m_packList.cend() && !packIt->stickers.isEmpty() &&
+            packIt->stickers.first().id == stickerId) {
+            const QImage image = QImage::fromData(bytes);
+            if (!image.isNull()) {
                 category->setIcon(QPixmap::fromImage(image));
                 category->setText(QString());
                 category->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -573,6 +616,7 @@ void StickerPicker::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
     setMoviesPaused(false);
+    loadVisibleStickers();
 }
 
 void StickerPicker::hideEvent(QHideEvent *event)
@@ -610,13 +654,16 @@ void StickerPicker::installPack(const QString &uri)
     }
     m_addButton->setEnabled(false);
     setMessage(tr("Adding sticker pack…"));
+    const quint64 generation = m_cliGeneration;
     m_cli->call(QStringLiteral("addStickerPack"), QJsonObject{{QStringLiteral("uri"), uri}},
-                [this, uri](const QJsonValue &, const QString &error) {
+                [this, generation](const QJsonValue &, const QString &error) {
+        if (generation != m_cliGeneration) return;
         m_addButton->setEnabled(true);
         if (!error.isEmpty()) {
             setMessage(tr("Could not add sticker pack: %1").arg(error), true);
             return;
         }
+        m_hasLoadedPacks = false;
         refresh();
     });
 }
