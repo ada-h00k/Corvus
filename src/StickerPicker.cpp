@@ -251,6 +251,11 @@ void StickerPicker::parsePacks(const QJsonValue &value)
 // This avoids a pack-selection dropdown and lets users move between packs by scrolling.
 void StickerPicker::showPacks()
 {
+    if (!isVisible()) {
+        m_needsRender = true;
+        return;
+    }
+    m_needsRender = false;
     const quint64 generation = ++m_renderGeneration;
     while (QLayoutItem *item = m_grid->takeAt(0)) {
         if (QWidget *widget = item->widget()) widget->deleteLater();
@@ -309,6 +314,10 @@ void StickerPicker::showPacks()
 void StickerPicker::appendStickerBatch(quint64 generation)
 {
     if (generation != m_renderGeneration) return;
+    if (!isVisible()) {
+        m_needsRender = true;
+        return;
+    }
 
     if (m_renderPackIndex >= m_visiblePacks.size()) {
         m_categoryLayout->addStretch(1);
@@ -610,6 +619,7 @@ void StickerPicker::loadSticker(const QString &packId, int stickerId, QPointer<Q
 void StickerPicker::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
+    if (m_needsRender) showPacks();
     setMoviesPaused(false);
     loadVisibleStickers();
 }
@@ -618,6 +628,12 @@ void StickerPicker::hideEvent(QHideEvent *event)
 {
     QWidget::hideEvent(event);
     setMoviesPaused(true);
+    if (m_renderPackIndex < m_visiblePacks.size()) {
+        // Stop constructing off-screen widgets when the user closes the popup.
+        // It will resume from a fresh layout the next time the sticker page opens.
+        ++m_renderGeneration;
+        m_needsRender = true;
+    }
 }
 
 void StickerPicker::setMoviesPaused(bool paused)
