@@ -94,14 +94,14 @@ Corvus has two macOS versions. Install the one you prefer:
 - **Swift / SwiftUI** — native macOS interface; requires macOS 14 or newer.
 - **Qt** — the same cross-platform interface used on Linux and Windows.
 
-First add the Corvus tap. The casks do not bundle a backend yet; Homebrew installs `signal-cli` for it (the tested, recommended setup on macOS for now). `corvus-cli` also publishes an Apple-silicon build (`corvus-cli-macos-aarch64` in its [releases](https://github.com/ada-h00k/corvus-cli/releases/latest)); select it under **Settings → Advanced → Choose …** if you want to use it.
+First add the Corvus tap and install **corvus-cli**, the recommended Signal backend. The Homebrew cask downloads the latest Apple-silicon binary and makes it available as `corvus-cli` on your `PATH`. You do not need Java or a separate manual download.
 
 ```sh
 brew tap ada-h00k/corvus
-brew install signal-cli
+brew install --cask corvus-cli
 ```
 
-Then install **one** version:
+Then install **one** version of Corvus:
 
 ```sh
 brew install --cask corvus-swift
@@ -123,7 +123,7 @@ The Swift and Qt versions use the same local history. Do not run both versions a
 
 Corvus starts `corvus-cli` or `signal-cli` as a separate program. On a first start it looks for the bundled `corvus-cli` (Windows), then for `corvus-cli` and then `signal-cli` on your `PATH`; an executable you chose is always kept. If it cannot find one, open **Settings → Advanced → Choose …** and select the executable. Follow Corvus's account-linking prompt if you have not linked this installation to Signal yet.
 
-The Windows builds and the Flatpak include `corvus-cli`. On Linux, get it from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest); for the `signal-cli` alternative use your distribution's package instructions or the [official signal-cli releases](https://github.com/AsamK/signal-cli/releases). On macOS, `signal-cli` can be installed with Homebrew as shown above.
+The Windows builds and the Flatpak include `corvus-cli`. On Linux, get it from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest); for the `signal-cli` alternative use your distribution's package instructions or the [official signal-cli releases](https://github.com/AsamK/signal-cli/releases). On macOS, install the recommended `corvus-cli` backend with `brew install --cask corvus-cli` as shown above. You can still use `signal-cli` as an alternative: install it separately and select it under **Settings → Advanced → Choose …**.
 
 **Updates of the backend:** **Help → Check for backend update** (also in Settings → Advanced) checks the backend you use: `signal-cli` is compared by version number, `corvus-cli` by build (it reports its commit in `--version`, and the latest [corvus-cli release](https://github.com/ada-h00k/corvus-cli/releases/latest) is compared with it). The Flatpak and the Windows setup bring a new `corvus-cli` with the next Corvus update.
 
