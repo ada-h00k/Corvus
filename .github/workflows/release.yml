@@ -18,6 +18,11 @@ env:
   BUILD_TYPE: Release
   QT_VERSION: "6.12"
   QT_VERSION_WINDOWS: "6.8"
+  # corvus-cli (https://github.com/ada-h00k/corvus-cli) is the Signal backend bundled in the
+  # Windows build. Pinned by commit (release tag "commit-<sha>") and SHA-256 of the Windows zip.
+  # The Flatpak manifest pins the same build for Linux; keep both in step when bumping.
+  CORVUS_CLI_COMMIT: "4d76022c8ff0d2e4bc42d8392c0762024dfa1db9"
+  CORVUS_CLI_WINDOWS_SHA256: "124f6021d57ecbfcd8e2a24381aa189a47c558d6e59b1b21b22f0bc394e85001"
 
 jobs:
   build:
@@ -323,7 +328,7 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
-  # Flatpak (KDE runtime, sandboxed, ships signal-cli and qrencode)
+  # Flatpak (KDE runtime, sandboxed, ships corvus-cli and qrencode)
   # ------------------------------------------------------
   flatpak:
     name: Build Flatpak (x86_64)
@@ -480,7 +485,7 @@ jobs:
           # effective permissions of the installed app
           flatpak info --user --show-permissions "$FLATPAK_APP_ID"
 
-          flatpak run --command=signal-cli "$FLATPAK_APP_ID" --version
+          flatpak run --command=corvus-cli "$FLATPAK_APP_ID" --version
           flatpak run --command=qrencode "$FLATPAK_APP_ID" -V
 
           # every shared library of the executable must be found inside the sandbox
@@ -492,8 +497,16 @@ jobs:
             fi
           '
 
-          # signal-cli has to be found by Corvus through PATH
-          flatpak run --command=sh "$FLATPAK_APP_ID" -c 'command -v signal-cli'
+          # corvus-cli has to be found by Corvus through PATH, and all its shared libraries
+          # must be available inside the sandbox
+          flatpak run --command=sh "$FLATPAK_APP_ID" -c '
+            command -v corvus-cli
+            missing="$(ldd "$(command -v corvus-cli)" | grep "not found" || true)"
+            if [ -n "$missing" ]; then
+              echo "$missing"
+              exit 1
+            fi
+          '
 
       # The unsigned OSTree repository for the Pages job (only if publishing is enabled).
       # It is signed there, so the signing key never reaches the job that builds the code.
@@ -738,7 +751,7 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
-  # Windows (Qt, x86_64): portable zip + English setup with optional signal-cli download
+  # Windows (Qt, x86_64): portable zip + English setup, both with corvus-cli bundled
   # ------------------------------------------------------
   windows-app:
     name: Build Windows x86_64 (Qt + setup)
@@ -901,6 +914,55 @@ jobs:
 
           find stage -maxdepth 1 -type f | sort
 
+      # corvus-cli replaces signal-cli: a single native exe (no Java) plus the OpenSSL DLL it
+      # links dynamically. Both go to <app>\corvus-cli\, where Corvus looks first
+      # (SignalCli::autodetect). The build fails if the download does not match the pinned hash
+      # or the program does not start.
+      - name: Bundle corvus-cli
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+
+          $base = "https://github.com/ada-h00k/corvus-cli/releases/download/commit-$env:CORVUS_CLI_COMMIT"
+          $zip  = Join-Path $env:RUNNER_TEMP 'corvus-cli-windows-x86_64.zip'
+
+          $ok = $false
+          foreach ($attempt in 1..4) {
+            try {
+              Invoke-WebRequest -Uri "$base/corvus-cli-windows-x86_64.zip" -OutFile $zip -UseBasicParsing
+              $ok = $true
+              break
+            } catch {
+              Write-Host "Download attempt $attempt failed: $($_.Exception.Message)"
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          if (-not $ok) { throw 'corvus-cli could not be downloaded' }
+
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($hash -ne $env:CORVUS_CLI_WINDOWS_SHA256) {
+            throw "corvus-cli SHA-256 mismatch: expected $env:CORVUS_CLI_WINDOWS_SHA256, got $hash"
+          }
+
+          $dest = 'stage\corvus-cli'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          foreach ($f in 'corvus-cli.exe', 'libcrypto-3-x64.dll') {
+            if (-not (Test-Path (Join-Path $dest $f))) { throw "$f is missing in the corvus-cli archive" }
+          }
+
+          # corvus-cli is AGPL-3.0 (source: github.com/ada-h00k/corvus-cli): ship its license
+          New-Item -ItemType Directory -Force -Path 'stage\licenses' | Out-Null
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri "https://raw.githubusercontent.com/ada-h00k/corvus-cli/$env:CORVUS_CLI_COMMIT/LICENSE" `
+            -OutFile 'stage\licenses\corvus-cli-LICENSE.txt'
+
+          # Smoke test: starts, finds its DLL, and speaks the signal-cli command line
+          $out = & (Join-Path $dest 'corvus-cli.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'corvus-cli.exe does not run' }
+          Write-Host $out
+
       - name: Build setup and portable zip
         shell: pwsh
         run: |
@@ -922,8 +984,8 @@ jobs:
 
           Get-ChildItem dist | Format-Table Name, Length
 
-      # Install the real setup silently (no signal-cli / Java download) and check that
-      # qrencode.exe really ends up in the install folder and runs from there.
+      # Install the real setup silently and check that qrencode.exe and corvus-cli.exe really end
+      # up in the install folder and run from there.
       - name: Test setup installs qrencode
         shell: pwsh
         run: |
@@ -940,12 +1002,15 @@ jobs:
             throw "Setup exited with code $($p.ExitCode)"
           }
 
-          foreach ($f in 'corvus.exe', 'qrencode.exe') {
+          foreach ($f in 'corvus.exe', 'qrencode.exe', 'corvus-cli\corvus-cli.exe', 'corvus-cli\libcrypto-3-x64.dll') {
             if (-not (Test-Path (Join-Path $dir $f))) { throw "$f was not installed by the setup" }
           }
 
           & (Join-Path $dir 'qrencode.exe') -V
           if ($LASTEXITCODE -ne 0) { throw 'Installed qrencode.exe does not run' }
+
+          & (Join-Path $dir 'corvus-cli\corvus-cli.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'Installed corvus-cli.exe does not run' }
 
           $unins = Get-ChildItem $dir -Filter 'unins*.exe' | Select-Object -First 1
           if ($unins) { Start-Process -FilePath $unins.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait }
@@ -961,7 +1026,7 @@ jobs:
           $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path dist\corvus-windows-x64-portable.zip).Path)
           $names = $zip.Entries | ForEach-Object { $_.FullName }
           $zip.Dispose()
-          foreach ($n in 'corvus.exe', 'qrencode.exe', 'Qt6Core.dll', 'Qt6Widgets.dll') {
+          foreach ($n in 'corvus.exe', 'qrencode.exe', 'Qt6Core.dll', 'Qt6Widgets.dll', 'corvus-cli/corvus-cli.exe', 'corvus-cli/libcrypto-3-x64.dll') {
             if ($names -notcontains $n) { throw "$n is missing in the portable zip" }
           }
           Get-ChildItem dist | Format-Table Name, Length
@@ -1175,14 +1240,14 @@ jobs:
             - `corvus-linux-x86_64` — plain executable
             - `corvus-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
             - `corvus-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
-            - `corvus-linux-x86_64.flatpak` — sandboxed Flatpak bundle incl. signal-cli (`flatpak install --user ./corvus-linux-x86_64.flatpak`)
+            - `corvus-linux-x86_64.flatpak` — sandboxed Flatpak bundle incl. corvus-cli (`flatpak install --user ./corvus-linux-x86_64.flatpak`)
             - `corvus-macos-arm64.zip` — native SwiftUI app for Apple silicon, macOS 14 or newer
             - `corvus-qt-macos-arm64.zip` — Qt app for Apple silicon, including deployed Qt dependencies
-            - `corvus-windows-x64-setup.exe` — Windows setup (English); can download signal-cli from its official GitHub releases
-            - `corvus-windows-x64-portable.zip` — Windows, no installation (unzip and run `corvus.exe`)
+            - `corvus-windows-x64-setup.exe` — Windows setup (English), includes corvus-cli
+            - `corvus-windows-x64-portable.zip` — Windows, no installation (unzip and run `corvus.exe`), includes corvus-cli
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `signal-cli` must be installed separately (not for the Flatpak, which includes it; on Arch e.g. from the AUR, on macOS `brew install signal-cli`; the Windows setup offers to download it).
+            `signal-cli` must be installed separately on Linux (plain executable, installer, Arch), and on macOS (`brew install signal-cli`). The Flatpak and the Windows builds include corvus-cli instead and need nothing else.
           draft: false
           prerelease: false
           make_latest: true

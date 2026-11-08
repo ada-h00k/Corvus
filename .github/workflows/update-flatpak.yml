@@ -3,7 +3,7 @@ name: Update Flatpak dependencies
 # Dependabot has no "flatpak" package ecosystem, so this workflow runs the
 # same tool Flathub itself uses (flatpak-external-data-checker). It scans the
 # x-checker-data annotations in the Flatpak manifest (git tags of libsecret,
-# qtkeychain, libqrencode; signal-cli GitHub releases incl. sha256) and opens
+# qtkeychain, libqrencode; corvus-cli GitHub releases incl. sha256) and opens
 # one pull request per detected update batch.
 #
 # Not covered, on purpose:

@@ -25,7 +25,22 @@ SignalCli::~SignalCli()
 
 QString SignalCli::autodetect()
 {
+#ifdef Q_OS_WIN
+    // corvus-cli, shipped by the Windows setup and the portable zip in <app>/corvus-cli/.
+    // It is preferred: it needs no Java and is what the setup installs.
+    {
+        const QString bundled = QStandardPaths::findExecutable(
+            QStringLiteral("corvus-cli"), {QCoreApplication::applicationDirPath() + QStringLiteral("/corvus-cli")});
+        if (!bundled.isEmpty())
+            return bundled;
+    }
+#endif
     QString p = QStandardPaths::findExecutable(QStringLiteral("signal-cli"));
+    if (!p.isEmpty())
+        return p;
+    // corvus-cli on PATH (the Flatpak ships it as /app/bin/corvus-cli). It speaks the same
+    // JSON-RPC as signal-cli, so Corvus can use either.
+    p = QStandardPaths::findExecutable(QStringLiteral("corvus-cli"));
     if (!p.isEmpty())
         return p;
     const QStringList extra = {

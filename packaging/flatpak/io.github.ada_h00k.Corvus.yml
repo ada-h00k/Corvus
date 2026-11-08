@@ -29,7 +29,7 @@ sdk-extensions:
 command: corvus
 
 finish-args:
-  # signal-cli talks to the Signal servers; GIPHY and the signal-cli update check use HTTPS too
+  # corvus-cli talks to the Signal servers; GIPHY and the update check use HTTPS too
   - --share=network
   # X11 shared memory (needed for the fallback X11 session)
   - --share=ipc
@@ -135,25 +135,26 @@ modules:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
 
-  # signal-cli as the self-contained GraalVM native build: no Java runtime needed.
-  # Corvus finds it on PATH (/app/bin).
-  - name: signal-cli
+  # corvus-cli (https://github.com/ada-h00k/corvus-cli): the Rust Signal backend (presage) that
+  # replaces signal-cli. A single native executable without Java; it speaks signal-cli's
+  # JSON-RPC, so Corvus runs it unchanged. Corvus finds it on PATH (/app/bin).
+  # The binary is the one built by corvus-cli's own release workflow, pinned by commit and
+  # SHA-256 (the release tag is "commit-<sha>"). It only links the runtime's glibc, libstdc++
+  # and libgcc.
+  - name: corvus-cli
     buildsystem: simple
     only-arches: [x86_64]
     build-commands:
-      - install -Dm755 signal-cli /app/bin/signal-cli
+      - install -Dm755 corvus-cli-linux-x86_64 /app/bin/corvus-cli
     sources:
-      - type: archive
-        url: https://github.com/AsamK/signal-cli/releases/download/v0.14.9/signal-cli-0.14.9-Linux-native.tar.gz
-        sha256: a8fab78b5e8053abf3db5725272957ad11d1745b9a16848ddb2ace4743dfa5d5
-        # the archive contains the single file "signal-cli" at its top level
-        strip-components: 0
+      - type: file
+        url: https://github.com/ada-h00k/corvus-cli/releases/download/commit-4d76022c8ff0d2e4bc42d8392c0762024dfa1db9/corvus-cli-linux-x86_64
+        sha256: 60e8fc21b9c500aeba50a5bc267c67b7ae601770cddcbd8b43569217da28ba68
         x-checker-data:
           type: json
-          url: https://api.github.com/repos/AsamK/signal-cli/releases/latest
-          version-query: .tag_name | sub("^v"; "")
-          url-query: .assets[] | select(.name == "signal-cli-" + $version + "-Linux-native.tar.gz")
-            | .browser_download_url
+          url: https://api.github.com/repos/ada-h00k/corvus-cli/releases/latest
+          version-query: .tag_name | sub("^commit-"; "")
+          url-query: .assets[] | select(.name == "corvus-cli-linux-x86_64") | .browser_download_url
 
   - name: corvus
     buildsystem: cmake-ninja

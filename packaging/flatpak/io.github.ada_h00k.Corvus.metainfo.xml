@@ -14,7 +14,7 @@
 
   <description>
     <p>
-      Corvus is a native Qt 6 interface for signal-cli. Link it to your Signal account as an
+      Corvus is a native Qt 6 desktop client for Signal. Link it to your Signal account as an
       additional device and chat from your desktop.
     </p>
     <ul>
@@ -25,7 +25,7 @@
       <li>Encrypted local chat history, protected by the system keyring or a passphrase</li>
     </ul>
     <p>
-      This package includes signal-cli. Corvus is an unofficial client and is not affiliated with
+      This package includes corvus-cli, the Signal backend. Corvus is an unofficial client and is not affiliated with
       Signal.
     </p>
   </description>

@@ -123,7 +123,7 @@
 
         <div class="card rec">
           <h3>Flatpak <span class="tag">Linux · recommended</span></h3>
-          <p>Sandboxed, includes signal-cli, updates with <code>flatpak update</code>.</p>
+          <p>Sandboxed, includes corvus-cli (the Signal backend), updates with <code>flatpak update</code>.</p>
           <pre>flatpak remote-add --user --if-not-exists corvus __BASE_URL__/corvus.flatpakrepo
 flatpak install --user corvus __APP_ID__</pre>
           <p class="note">Or open <a href="__APP_ID__.flatpakref">the .flatpakref file</a> with your software center.</p>
@@ -146,7 +146,7 @@ flatpak install --user corvus __APP_ID__</pre>
 
         <div class="card">
           <h3>Windows</h3>
-          <p>Use <code>corvus-windows-x64-setup.exe</code>. It can download signal-cli for you. A portable ZIP is available too.</p>
+          <p>Use <code>corvus-windows-x64-setup.exe</code>. It includes corvus-cli, the Signal backend, so nothing else is needed. A portable ZIP is available too.</p>
         </div>
 
         <div class="card">

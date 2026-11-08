@@ -28,7 +28,7 @@ Corvus is a desktop interface for [signal-cli](https://github.com/AsamK/signal-c
 - Forward text messages, attachments and stickers to up to five chats at once (Qt version; right-click a message → **Forward…**).
 - Customisable chat colours and appearance.
 
-Corvus is a graphical client, not a replacement for `signal-cli`. You must have `signal-cli` installed and linked to your Signal account. The Windows installer can download it for you.
+Corvus is a graphical client, not a Signal backend of its own. It needs `signal-cli` or [`corvus-cli`](https://github.com/ada-h00k/corvus-cli), a compatible backend written in Rust, linked to your Signal account. The Flatpak and the Windows builds include `corvus-cli`; on other systems install `signal-cli` yourself.
 
 ## Install
 
@@ -70,17 +70,17 @@ flatpak remote-add --user --if-not-exists corvus https://ada-h00k.github.io/Corv
 flatpak install --user corvus io.github.ada_h00k.Corvus
 ```
 
-The Flatpak includes `signal-cli` (the native build, no Java needed) and `qrencode`, so nothing else has to be installed. It runs in a sandbox with these permissions only: network, Wayland/X11, audio, GPU (video player), notifications, tray icon and the Secret Service (history key). It has **no** file system access; attachments are chosen and saved through the file chooser portal. Because of the sandbox, the Flatpak keeps its own data in `~/.var/app/io.github.ada_h00k.Corvus/` and does not see an existing `signal-cli` installation or chat history: link it to your Signal account as a new device on first start.
+The Flatpak includes [`corvus-cli`](https://github.com/ada-h00k/corvus-cli) (the Signal backend that replaces `signal-cli`, no Java needed) and `qrencode`, so nothing else has to be installed. It runs in a sandbox with these permissions only: network, Wayland/X11, audio, GPU (video player), notifications, tray icon and the Secret Service (history key). It has **no** file system access; attachments are chosen and saved through the file chooser portal. Because of the sandbox, the Flatpak keeps its own data in `~/.var/app/io.github.ada_h00k.Corvus/` and does not see an existing `signal-cli` installation or chat history. `corvus-cli` has its own device link as well: link it to your Signal account as a new device on first start.
 
 ### Windows (Qt, x86_64)
 
 1. Download and run `corvus-windows-x64-setup.exe` from the release.
-2. Follow the setup wizard. It installs the Qt runtime and `qrencode` (used to show the QR code when linking a device) with Corvus.
-3. On the `signal-cli` step, you can optionally let the installer download `signal-cli` and a private Java runtime.
+2. Follow the setup wizard. It installs the Qt runtime, `qrencode` (used to show the QR code when linking a device) and [`corvus-cli`](https://github.com/ada-h00k/corvus-cli) with Corvus. `corvus-cli` is the Signal backend that replaces `signal-cli`; there is no Java and nothing to download.
+3. On first start, Corvus finds `corvus-cli` by itself and offers to link the computer with your phone as a new device. If you want to keep using an existing `signal-cli`, select it under **Settings → Advanced → Choose …**.
 
 The installer is for Windows 10 or newer. It does not require administrator rights for a per-user installation. The setup is not code-signed, so Windows SmartScreen may show a warning.
 
-**Portable version:** download `corvus-windows-x64-portable.zip`, extract it, and run `corvus.exe` (`qrencode.exe` is included). You must install and configure `signal-cli` yourself for this option.
+**Portable version:** download `corvus-windows-x64-portable.zip`, extract it, and run `corvus.exe` (`qrencode.exe` and `corvus-cli` are included).
 
 ### macOS (recommended: Homebrew)
 
@@ -116,9 +116,9 @@ The Swift and Qt versions use the same local history. Do not run both versions a
 
 ## First launch
 
-Corvus starts `signal-cli` as a separate program. If it cannot find it, open **Settings → Path to signal-cli** and select the executable. Follow Corvus's account-linking prompt if you have not linked this installation to Signal yet.
+Corvus starts `signal-cli` (or `corvus-cli`, see above) as a separate program. If it cannot find it, open **Settings → Advanced → Choose …** and select the executable. Follow Corvus's account-linking prompt if you have not linked this installation to Signal yet.
 
-On macOS, `signal-cli` can be installed with Homebrew as shown above. On Linux, use your distribution's package instructions or the [official signal-cli releases](https://github.com/AsamK/signal-cli/releases). The Windows setup wizard can install it for you.
+On macOS, `signal-cli` can be installed with Homebrew as shown above. On Linux, use your distribution's package instructions or the [official signal-cli releases](https://github.com/AsamK/signal-cli/releases). The Windows builds and the Flatpak include `corvus-cli` instead.
 
 ## Local data and encryption
 
@@ -128,9 +128,11 @@ Corvus stores its chat history in an encrypted `history.corvus` file. By default
 - macOS: `~/Library/Application Support/corvus/corvus/`
 - Windows: `%APPDATA%\corvus`
 
+`corvus-cli` keeps its own account data in `~/.local/share/corvus-cli/` (Windows: `%USERPROFILE%\.local\share\corvus-cli`; in the Flatpak below `~/.var/app/io.github.ada_h00k.Corvus/data/corvus-cli/`).
+
 **Upgrading from Wren:** Corvus was called Wren before (and signal-cli Qt before that). On first start it moves the existing chat history, settings and keychain entries (history key, GIPHY API key) over automatically; nothing is deleted. If the old version is still running, close it first. The Linux installer and the Arch package replace an existing Wren installation; on macOS you can delete the old `Wren.app`, and macOS may ask once for permission to read the old keychain entries.
 
-**Important:** Corvus's encryption protects its local chat history. It does not encrypt `signal-cli`'s own account data, sessions, contacts or attachments. Protect your home directory or disk with your operating system's disk-encryption feature. A forgotten history passphrase cannot be recovered.
+**Important:** Corvus's encryption protects its local chat history. It does not encrypt the account data of `signal-cli` or `corvus-cli`, sessions, contacts or attachments. Protect your home directory or disk with your operating system's disk-encryption feature. A forgotten history passphrase cannot be recovered.
 
 ## Build from source
 
