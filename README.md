@@ -1,6 +1,6 @@
 # Corvus
 
-Corvus is a desktop interface for [signal-cli](https://github.com/AsamK/signal-cli) with an encrypted local chat history. The Qt app runs on Linux, Windows and macOS; macOS also has a native SwiftUI app.
+Corvus is a desktop client for Signal with an encrypted local chat history. It runs on [corvus-cli](https://github.com/ada-h00k/corvus-cli) (recommended) or, optionally, on [signal-cli](https://github.com/AsamK/signal-cli). The Qt app runs on Linux, Windows and macOS; macOS also has a native SwiftUI app.
 
 ### Linux and Windows (Qt)
 
@@ -16,19 +16,24 @@ Corvus is a desktop interface for [signal-cli](https://github.com/AsamK/signal-c
 
 ## Features
 
-- Link Corvus to your Signal account using `signal-cli`.
+- Link Corvus to your Signal account with `corvus-cli` (recommended) or `signal-cli`.
 - Read and send messages, including group chats, replies and reactions.
 - Send and receive files, images, video and audio.
 - Edit or delete messages, manage archived chats and disappearing messages.
 - Desktop notifications, notification sounds and a tray/menu-bar icon.
 - Encrypted local chat history, protected by the system keychain or a passphrase.
 - View a contact's safety number and mark the contact as verified (Qt version; right-click a chat → *View safety number …*).
-- Record and send voice messages (Qt version; 🎤 button next to the attach button; needs signal-cli 0.14.2 or newer to arrive as a voice note).
-- Send and receive Signal View Once photos (Qt version; select exactly one image and press **1×**; requires signal-cli 0.13.18 or newer).
+- Record and send voice messages (Qt version; 🎤 button next to the attach button; needs signal-cli 0.14.2 or newer, or corvus-cli, to arrive as a voice note).
+- Send and receive Signal View Once photos (Qt version; select exactly one image and press **1×**; requires signal-cli 0.13.18 or newer, or corvus-cli).
 - Forward text messages, attachments and stickers to up to five chats at once (Qt version; right-click a message → **Forward…**).
 - Customisable chat colours and appearance.
 
-Corvus is a graphical client, not a Signal backend of its own. It needs `signal-cli` or [`corvus-cli`](https://github.com/ada-h00k/corvus-cli), a compatible backend written in Rust, linked to your Signal account. The Flatpak and the Windows builds include `corvus-cli`; on other systems install `signal-cli` yourself.
+Corvus is a graphical client; the connection to Signal is made by a separate backend program linked to your Signal account.
+
+- **[corvus-cli](https://github.com/ada-h00k/corvus-cli) (recommended)** is a single native executable written in Rust (built on [presage](https://github.com/whisperfish/presage)). It needs no Java. The Flatpak and the Windows setup include it, so there is nothing else to install there.
+- **[signal-cli](https://github.com/AsamK/signal-cli) (optional alternative)** is the Java original. Corvus works with it as well; install it yourself and select it under **Settings → Advanced → Choose …** if you prefer it or already use it.
+
+Both speak the same JSON-RPC interface, but each has its own device link and its own account data: switching the backend means linking the computer with your phone again (the chat history in Corvus is kept).
 
 ## Install
 
@@ -46,7 +51,7 @@ Download the appropriate package from the [latest GitHub release](https://github
 
 The installer is per-user, does not need `sudo`, and adds Corvus to your application menu. Run it again to update; run `./install.sh --uninstall` to remove it.
 
-The prebuilt executable is dynamically linked and does not include Qt libraries. You need a compatible Qt 6 runtime (the release is built with Qt 6.12), QtKeychain 0.14 or newer, and a desktop keyring such as GNOME Keyring or KWallet. Install `signal-cli` separately and make sure it is available on your `PATH`.
+The prebuilt executable is dynamically linked and does not include Qt libraries. You need a compatible Qt 6 runtime (the release is built with Qt 6.12), QtKeychain 0.14 or newer, and a desktop keyring such as GNOME Keyring or KWallet. Install a backend separately and make sure it is available on your `PATH`: download `corvus-cli-linux-x86_64` from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest), rename it to `corvus-cli` and make it executable (`chmod +x`); or use `signal-cli` as the alternative.
 
 **Arch Linux:** download the `corvus-*.pkg.tar.zst` package from the release and install it with:
 
@@ -54,7 +59,7 @@ The prebuilt executable is dynamically linked and does not include Qt libraries.
 sudo pacman -U ./corvus-*.pkg.tar.zst
 ```
 
-Install `signal-cli` separately, for example from the AUR.
+Install a backend separately: `corvus-cli` from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest) (see above), or `signal-cli` as the alternative, for example from the AUR.
 
 **Flatpak (x86_64):** download `corvus-linux-x86_64.flatpak` from the release and install it with:
 
@@ -89,7 +94,7 @@ Corvus has two macOS versions. Install the one you prefer:
 - **Swift / SwiftUI** — native macOS interface; requires macOS 14 or newer.
 - **Qt** — the same cross-platform interface used on Linux and Windows.
 
-First add the Corvus tap and install `signal-cli` if it is not already installed:
+First add the Corvus tap. The casks do not bundle a backend yet; Homebrew installs `signal-cli` for it (the tested, recommended setup on macOS for now). `corvus-cli` also publishes an Apple-silicon build (`corvus-cli-macos-aarch64` in its [releases](https://github.com/ada-h00k/corvus-cli/releases/latest)); select it under **Settings → Advanced → Choose …** if you want to use it.
 
 ```sh
 brew tap ada-h00k/corvus
@@ -116,9 +121,11 @@ The Swift and Qt versions use the same local history. Do not run both versions a
 
 ## First launch
 
-Corvus starts `signal-cli` (or `corvus-cli`, see above) as a separate program. If it cannot find it, open **Settings → Advanced → Choose …** and select the executable. Follow Corvus's account-linking prompt if you have not linked this installation to Signal yet.
+Corvus starts `corvus-cli` or `signal-cli` as a separate program. On a first start it looks for the bundled `corvus-cli` (Windows), then for `corvus-cli` and then `signal-cli` on your `PATH`; an executable you chose is always kept. If it cannot find one, open **Settings → Advanced → Choose …** and select the executable. Follow Corvus's account-linking prompt if you have not linked this installation to Signal yet.
 
-On macOS, `signal-cli` can be installed with Homebrew as shown above. On Linux, use your distribution's package instructions or the [official signal-cli releases](https://github.com/AsamK/signal-cli/releases). The Windows builds and the Flatpak include `corvus-cli` instead.
+The Windows builds and the Flatpak include `corvus-cli`. On Linux, get it from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest); for the `signal-cli` alternative use your distribution's package instructions or the [official signal-cli releases](https://github.com/AsamK/signal-cli/releases). On macOS, `signal-cli` can be installed with Homebrew as shown above.
+
+**Updates of the backend:** **Help → Check for backend update** (also in Settings → Advanced) checks the backend you use: `signal-cli` is compared by version number, `corvus-cli` by build (it reports its commit in `--version`, and the latest [corvus-cli release](https://github.com/ada-h00k/corvus-cli/releases/latest) is compared with it). The Flatpak and the Windows setup bring a new `corvus-cli` with the next Corvus update.
 
 ## Local data and encryption
 
@@ -161,4 +168,4 @@ The Swift app requires macOS 14 or newer. See [`macos/README.md`](macos/README.m
 
 ## License
 
-Corvus is licensed under the [GNU Affero General Public License v3.0](LICENSE). `signal-cli` is a separate project and is distributed under its own license.
+Corvus is licensed under the [GNU Affero General Public License v3.0](LICENSE). `corvus-cli` and `signal-cli` are separate projects and are distributed under their own licenses (`corvus-cli`: AGPL-3.0, `signal-cli`: GPL-3.0).

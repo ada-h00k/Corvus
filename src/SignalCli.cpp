@@ -25,9 +25,11 @@ SignalCli::~SignalCli()
 
 QString SignalCli::autodetect()
 {
+    // corvus-cli is the recommended backend and is preferred; signal-cli is the alternative.
+    // Both speak the same JSON-RPC. An executable chosen in the settings always wins (see
+    // MainWindow::ensureExecutable), so this only decides for a first start.
 #ifdef Q_OS_WIN
-    // corvus-cli, shipped by the Windows setup and the portable zip in <app>/corvus-cli/.
-    // It is preferred: it needs no Java and is what the setup installs.
+    // corvus-cli shipped by the Windows setup and the portable zip in <app>/corvus-cli/.
     {
         const QString bundled = QStandardPaths::findExecutable(
             QStringLiteral("corvus-cli"), {QCoreApplication::applicationDirPath() + QStringLiteral("/corvus-cli")});
@@ -35,12 +37,11 @@ QString SignalCli::autodetect()
             return bundled;
     }
 #endif
-    QString p = QStandardPaths::findExecutable(QStringLiteral("signal-cli"));
+    // On PATH (the Flatpak ships it as /app/bin/corvus-cli).
+    QString p = QStandardPaths::findExecutable(QStringLiteral("corvus-cli"));
     if (!p.isEmpty())
         return p;
-    // corvus-cli on PATH (the Flatpak ships it as /app/bin/corvus-cli). It speaks the same
-    // JSON-RPC as signal-cli, so Corvus can use either.
-    p = QStandardPaths::findExecutable(QStringLiteral("corvus-cli"));
+    p = QStandardPaths::findExecutable(QStringLiteral("signal-cli"));
     if (!p.isEmpty())
         return p;
     const QStringList extra = {

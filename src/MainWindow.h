@@ -360,7 +360,11 @@ private:
     QHash<QString, QHash<qint64, QString>> m_pendingReadReceipts; // conversation -> timestamp -> author
     QHash<QString, QHash<QString, qint64>> m_typingUntil; // conversation -> peer -> expiration ms
     QString m_account;
-    QString m_version; // e.g. "0.13.12"
+    QString m_version; // signal-cli version, e.g. "0.13.12" (for corvus-cli: the one it is compatible with)
+    QString m_backend = QStringLiteral("signal-cli"); // "signal-cli" or "corvus-cli"
+    QString m_backendVersion; // version of the backend itself, e.g. "0.1.0"
+    QString m_backendBuild;   // corvus-cli: commit of the build ("4d76022"), empty if it does not say
+    QString backendDescription() const;
     QString m_historyProtectionMode;
     bool m_showArchived = false;
     int m_connectGen = 0; // invalidates callbacks of an older connect attempt

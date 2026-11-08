@@ -196,7 +196,7 @@ AdvancedPage::AdvancedPage(QWidget *parent) : QWidget(parent)
     auto *lay = new QVBoxLayout(this);
     lay->setContentsMargins(0, 0, 0, 0);
 
-    auto *cliBox = new QGroupBox(tr("signal-cli"));
+    auto *cliBox = new QGroupBox(tr("Signal backend (corvus-cli or signal-cli)"));
     auto *cl = new QVBoxLayout(cliBox);
     auto *pathRow = new QHBoxLayout;
     pathRow->addWidget(new QLabel(tr("Path:")));
