@@ -20,11 +20,13 @@ struct ComposerArea: View {
                              text: replyText, accent: Theme.senderColor(model.replyQuote.authorKey)) { model.replyQuote = Quote() }
             }
             if !model.pendingFiles.isEmpty {
-                AttachmentTray(files: model.pendingFiles) { f in
-                    model.pendingFiles.removeAll { $0 == f }
-                    if model.pendingFiles.isEmpty { model.pendingGifAnalyticsUrl = nil }
+                AttachmentTray(files: model.pendingFiles, voiceFiles: model.voiceFiles) { f in
+                    model.removePendingFile(f)
                 }
             }
+            if model.recording {
+                RecordBar()
+            } else {
             HStack(alignment: .bottom, spacing: 8) {
                 // The field with the emoji button inside, like the Signal clients.
                 HStack(alignment: .bottom, spacing: 2) {
@@ -53,6 +55,12 @@ struct ComposerArea: View {
                         .frame(width: 30, height: 34)
                 }
                 .help("Search GIPHY GIFs")
+                // The voice recording button sits to the left of the attach-files button (as in the Qt app).
+                Button { model.startVoiceRecording() } label: {
+                    Image(systemName: "mic").font(.system(size: 17)).frame(width: 30, height: 34)
+                }
+                .help("Record a voice message")
+                .disabled(!model.editKey.isEmpty)
                 Button { model.chooseAttachments() } label: {
                     Image(systemName: "paperclip").font(.system(size: 17)).frame(width: 30, height: 34)
                 }
@@ -71,6 +79,7 @@ struct ComposerArea: View {
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
             .disabled(!model.connected)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -113,9 +122,40 @@ private struct ComposerCard: View {
     }
 }
 
+/// Shown instead of the message field while a voice message is being recorded.
+private struct RecordBar: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 10) {
+            TimelineView(.periodic(from: .now, by: 0.6)) { ctx in
+                let on = Int(ctx.date.timeIntervalSinceReferenceDate / 0.6) % 2 == 0
+                Circle().fill(Color.red.opacity(on ? 0.9 : 0.15)).frame(width: 10, height: 10)
+            }
+            Text(VoiceNote.durationText(model.recordingMs))
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+            Text("Recording a voice message …")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            Button("Discard", role: .destructive) { model.cancelVoiceRecording() }
+            Button("Stop") { model.stopVoiceRecording(send: false) }
+                .help("Stop and attach the recording to the message. You can add text before sending.")
+            Button("Send") { model.stopVoiceRecording(send: true) }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!model.connected)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 34)
+        .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Theme.field))
+    }
+}
+
 /// Files queued for the next message: image thumbnails or file chips, each removable.
 private struct AttachmentTray: View {
     let files: [String]
+    var voiceFiles: [String: Int64] = [:]
     let remove: (String) -> Void
 
     var body: some View {
@@ -124,7 +164,16 @@ private struct AttachmentTray: View {
                 ForEach(files, id: \.self) { f in
                     ZStack(alignment: .topTrailing) {
                         Group {
-                            if Media.mimeType(forFile: f).hasPrefix("image/"), let img = NSImage(contentsOfFile: f) {
+                            if let ms = voiceFiles[f] {
+                                VStack(spacing: 4) {
+                                    Image(systemName: "waveform").font(.title3)
+                                    Text("Voice message (\(VoiceNote.durationText(ms)))").font(.caption2).lineLimit(2)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .padding(6)
+                                .frame(width: 110, height: 64)
+                                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.field))
+                            } else if Media.mimeType(forFile: f).hasPrefix("image/"), let img = NSImage(contentsOfFile: f) {
                                 Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
                                     .frame(width: 64, height: 64)
                                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))

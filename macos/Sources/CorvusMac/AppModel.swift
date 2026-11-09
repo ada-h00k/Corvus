@@ -58,6 +58,13 @@ final class AppModel {
     var editTs: Int64 = 0
     private var editDraft = ""
     var composerFocusRequest = 0    // incremented to put the caret into the composer
+    // voice messages
+    var recording = false           // a voice message is being recorded (the record bar replaces the field)
+    var recordingMs: Int64 = 0
+    var voiceFiles: [String: Int64] = [:]   // recorded files (pending or in a draft) -> duration (ms)
+    @ObservationIgnored private var recordKey: String?
+    @ObservationIgnored private var recordSendWhenDone = false
+    @ObservationIgnored private let recorder = VoiceRecorder()
     var composerCursorToEnd = 0
     private var drafts: [String: Draft] = [:]
 
@@ -124,6 +131,15 @@ final class AppModel {
         cli.onStopped = { [weak self] reason in self?.setConnected(false, info: reason) }
         cli.onLogLine = { [weak self] line in self?.showFlash(line, seconds: 5) }
         notifier.onActivate = { [weak self] key in self?.activateConversation(key) }
+        recorder.onDuration = { [weak self] ms in self?.recordingMs = ms }
+        recorder.onFinished = { [weak self] path, ms in self?.onVoiceRecorded(path, ms) }
+        recorder.onFailed = { [weak self] error in
+            guard let self else { return }
+            recording = false
+            recordKey = nil
+            recordSendWhenDone = false
+            Task { await Dialogs.warn("Voice message", "The recording failed: \(error)") }
+        }
     }
 
     // MARK: - Start
@@ -157,6 +173,7 @@ final class AppModel {
     }
 
     func shutdown() {
+        cancelVoiceRecording() // the temporary folder with the recording goes away below
         cli.stop()
         store.close()
         try? FileManager.default.removeItem(at: AppPaths.tempDir)
@@ -1139,6 +1156,12 @@ final class AppModel {
         }
         let staged = Media.stageForSignalCli(files)
         if !files.isEmpty { p["attachments"] = staged.paths }
+        // Recorded voice messages go out as voice notes (shown inline by the Signal apps) when this
+        // signal-cli can do that and nothing but recordings is attached.
+        if !files.isEmpty && files.allSatisfy({ voiceFiles[$0] != nil })
+            && VoiceNote.supportsVoiceNote(signalCliVersion: version) {
+            p["voiceNote"] = true
+        }
         if quote.valid && !quote.authorKey.isEmpty {
             p["quoteTimestamp"] = quote.id
             p["quoteAuthor"] = quote.authorKey
@@ -1215,6 +1238,80 @@ final class AppModel {
             registerGiphyAnalytics(gifAnalytics)
             if pendingGifAnalyticsUrl == gifAnalytics { pendingGifAnalyticsUrl = nil }
         }
+    }
+
+    // MARK: Voice messages
+
+    func startVoiceRecording() {
+        guard connected, let key = current, chats.convs[key] != nil, !recorder.isRecording, !recording else { return }
+        guard editKey.isEmpty else {
+            showFlash("Finish editing the message before recording.", seconds: 5)
+            return
+        }
+        recording = true // the bar shows at once; the microphone prompt may come first
+        recordingMs = 0
+        recordKey = key
+        recordSendWhenDone = false
+        stopTyping()
+        Task {
+            if let why = await VoiceRecorder.prepare() {
+                recording = false
+                recordKey = nil
+                await Dialogs.warn("Voice message", why)
+                return
+            }
+            guard recording, recordKey != nil else { return } // discarded while asking
+            recorder.start(directory: AppPaths.tempDir.appendingPathComponent("voice", isDirectory: true),
+                           baseName: VoiceNote.baseName())
+        }
+    }
+
+    /// Stop and attach the recording (and send it right away with `send`).
+    func stopVoiceRecording(send: Bool) {
+        guard recording else { return }
+        recordSendWhenDone = send
+        if recorder.isRecording { recorder.stop() } else { cancelVoiceRecording() } // onVoiceRecorded() follows
+    }
+
+    func cancelVoiceRecording() {
+        guard recording else { return }
+        recording = false
+        recordKey = nil
+        recordSendWhenDone = false
+        recorder.cancel()
+    }
+
+    private func onVoiceRecorded(_ path: String, _ ms: Int64) {
+        let send = recordSendWhenDone, key = recordKey
+        recording = false
+        recordKey = nil
+        recordSendWhenDone = false
+        guard let key, chats.convs[key] != nil else {
+            try? FileManager.default.removeItem(atPath: path)
+            return
+        }
+        if ms < VoiceNote.minDurationMs { // an accidental click
+            try? FileManager.default.removeItem(atPath: path)
+            showFlash("The recording was too short and was discarded.", seconds: 5)
+            return
+        }
+        voiceFiles[path] = ms
+        if key == current {
+            pendingFiles.append(path)
+            if send { sendMessage() }
+        } else {
+            var d = drafts[key] ?? Draft()
+            if !d.files.contains(path) { d.files.append(path) }
+            drafts[key] = d
+            showFlash("The voice message was kept in the draft of “\(chats.convs[key]!.title)”.", seconds: 8)
+        }
+    }
+
+    /// Removes a queued attachment; a discarded recording is deleted.
+    func removePendingFile(_ f: String) {
+        pendingFiles.removeAll { $0 == f }
+        if voiceFiles.removeValue(forKey: f) != nil { try? FileManager.default.removeItem(atPath: f) }
+        if pendingFiles.isEmpty { pendingGifAnalyticsUrl = nil }
     }
 
     // MARK: Editing

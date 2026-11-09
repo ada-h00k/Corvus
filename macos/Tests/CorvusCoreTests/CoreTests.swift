@@ -522,3 +522,30 @@ final class AttachmentPolicyTests: XCTestCase {
         XCTAssertEqual(AttachmentPolicy.mediaSuffix(filename: "x.terminal", contentType: "text/plain", fallback: "m4a"), "m4a")
     }
 }
+
+final class VoiceNoteTests: XCTestCase {
+    func testDurationText() {
+        XCTAssertEqual(VoiceNote.durationText(0), "0:00")
+        XCTAssertEqual(VoiceNote.durationText(7_400), "0:07")
+        XCTAssertEqual(VoiceNote.durationText(723_000), "12:03")
+        XCTAssertEqual(VoiceNote.durationText(3_723_000), "1:02:03")
+        XCTAssertEqual(VoiceNote.durationText(-5), "0:00")
+    }
+
+    func testVoiceNoteNeedsSignalCli0142() {
+        XCTAssertFalse(VoiceNote.supportsVoiceNote(signalCliVersion: "0.13.12"))
+        XCTAssertFalse(VoiceNote.supportsVoiceNote(signalCliVersion: "0.14.1"))
+        XCTAssertTrue(VoiceNote.supportsVoiceNote(signalCliVersion: "0.14.2"))
+        XCTAssertTrue(VoiceNote.supportsVoiceNote(signalCliVersion: "signal-cli 0.15.0"))
+        XCTAssertTrue(VoiceNote.supportsVoiceNote(signalCliVersion: "1.0"))
+        XCTAssertFalse(VoiceNote.supportsVoiceNote(signalCliVersion: ""))
+        XCTAssertFalse(VoiceNote.supportsVoiceNote(signalCliVersion: "unknown"))
+    }
+
+    func testBaseName() {
+        var c = DateComponents()
+        (c.year, c.month, c.day, c.hour, c.minute, c.second) = (2026, 10, 27, 14, 15, 23)
+        let d = Calendar.current.date(from: c)!
+        XCTAssertEqual(VoiceNote.baseName(d), "voice-message-2026-10-27-14-15-23")
+    }
+}
