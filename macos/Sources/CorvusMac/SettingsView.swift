@@ -92,6 +92,11 @@ private struct AppearanceSettings: View {
             }
             Section("Chat list") {
                 Toggle("Show contact avatars", isOn: $a.showAvatars)
+                Picker("Sort chats", selection: $a.sortAlphabetically) {
+                    Text("Newest first").tag(false)
+                    Text("Alphabetically").tag(true)
+                }
+                .help("Alphabetically keeps the chat list in the same order instead of moving chats with new messages to the top")
             }
             Section("Preview") {
                 VStack(spacing: 6) {

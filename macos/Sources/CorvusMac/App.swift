@@ -213,7 +213,7 @@ struct AppCommands: Commands {
         CommandMenu("Conversation") {
             ForEach(1..<10) { n in
                 Button("Conversation \(n)") {
-                    let list = model.chats.sortedConversations(archived: model.showArchived)
+                    let list = model.chats.sortedConversations(archived: model.showArchived, alphabetical: model.appearance.sortAlphabetically)
                     if n - 1 < list.count { model.openConversation(list[n - 1].key) }
                 }
                 .keyboardShortcut(KeyEquivalent(Character("\(n)")))

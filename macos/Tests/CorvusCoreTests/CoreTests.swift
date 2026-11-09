@@ -817,3 +817,37 @@ final class LinkPreviewTests: XCTestCase {
         XCTAssertFalse(d.linkPreview.isValid)
     }
 }
+
+final class ChatOrderTests: XCTestCase {
+    func testNewestFirstOrAlphabetical() {
+        var s = ChatState()
+        func add(_ key: String, _ title: String, _ order: Int64, archived: Bool = false) {
+            var c = Conversation(key: key, title: title)
+            var m = Message()
+            m.ts = order
+            m.orderTs = order
+            c.msgs = [m]
+            c.archived = archived
+            s.convs[key] = c
+        }
+        add("+1", "zoe", 300)
+        add("+2", "Ärger", 100)
+        add("+3", "anna", 200)
+        add("+4", "Bob", 400, archived: true)
+        add("+5", "anna", 50)   // same name: the key keeps the order stable
+        add("+6", "Chat 10", 10)
+        add("+7", "Chat 9", 20)
+
+        XCTAssertEqual(s.sortedConversations(archived: false).map(\.key), ["+1", "+3", "+2", "+5", "+7", "+6"])
+        // Case and accents do not matter, numbers in names sort as numbers; the archive stays separate.
+        XCTAssertEqual(s.sortedConversations(archived: false, alphabetical: true).map(\.title),
+                       ["anna", "anna", "Ärger", "Chat 9", "Chat 10", "zoe"])
+        XCTAssertEqual(s.sortedConversations(archived: false, alphabetical: true).prefix(2).map(\.key), ["+3", "+5"])
+        XCTAssertEqual(s.sortedConversations(archived: true, alphabetical: true).map(\.key), ["+4"])
+
+        // A new message moves a chat to the top only when sorting by newest.
+        s.convs["+2"]!.msgs[0].orderTs = 999
+        XCTAssertEqual(s.sortedConversations(archived: false).first?.key, "+2")
+        XCTAssertEqual(s.sortedConversations(archived: false, alphabetical: true).first?.key, "+3")
+    }
+}

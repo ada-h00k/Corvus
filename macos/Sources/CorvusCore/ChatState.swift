@@ -344,11 +344,22 @@ public struct ChatState {
 
     // MARK: - Sorting for the chat list
 
-    /// Conversations of one folder, newest activity first.
-    public func sortedConversations(archived: Bool) -> [Conversation] {
+    /// Conversations of one folder: newest activity first, or with `alphabetical` by name only, so the
+    /// order does not change while messages arrive (same rules as the Qt app's ConversationOrder).
+    public func sortedConversations(archived: Bool, alphabetical: Bool = false) -> [Conversation] {
         convs.values.filter { $0.archived == archived }.sorted { a, b in
-            if a.lastTs != b.lastTs { return a.lastTs > b.lastTs }
-            return a.title.localizedStandardCompare(b.title) == .orderedAscending
+            ChatState.before(a, b, alphabetical: alphabetical)
+        }
+    }
+
+    /// Names compared the way people expect: ignoring case, with the language's rules (accents, ä next to a).
+    /// Identical names fall back to the key, so the order is stable.
+    static func before(_ a: Conversation, _ b: Conversation, alphabetical: Bool) -> Bool {
+        if !alphabetical && a.lastTs != b.lastTs { return a.lastTs > b.lastTs }
+        switch a.title.compare(b.title, options: [.caseInsensitive, .numeric], locale: .current) {
+        case .orderedAscending: return true
+        case .orderedDescending: return false
+        case .orderedSame: return a.key < b.key
         }
     }
 }

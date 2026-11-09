@@ -77,6 +77,7 @@ struct Appearance: Equatable {
     var inText: String?
     var radius = 16           // bubble corner radius in points
     var showAvatars = true    // contact avatars in the chat list
+    var sortAlphabetically = false // chat list by name instead of newest message first
 
     static let colorKeys: [(String, WritableKeyPath<Appearance, String?>)] = [
         ("background", \.background), ("outBg", \.outBg), ("outText", \.outText), ("inBg", \.inBg), ("inText", \.inText),
@@ -127,6 +128,7 @@ struct Appearance: Equatable {
         }
         if d.object(forKey: prefix + "radius") != nil { a.radius = min(28, max(0, d.integer(forKey: prefix + "radius"))) }
         if d.object(forKey: prefix + "showAvatars") != nil { a.showAvatars = d.bool(forKey: prefix + "showAvatars") }
+        a.sortAlphabetically = d.bool(forKey: prefix + "sortAlphabetically")
         return a
     }
 
@@ -138,6 +140,7 @@ struct Appearance: Equatable {
         }
         if radius == 16 { d.removeObject(forKey: p + "radius") } else { d.set(radius, forKey: p + "radius") }
         if showAvatars { d.removeObject(forKey: p + "showAvatars") } else { d.set(false, forKey: p + "showAvatars") }
+        if sortAlphabetically { d.set(true, forKey: p + "sortAlphabetically") } else { d.removeObject(forKey: p + "sortAlphabetically") }
     }
 }
 

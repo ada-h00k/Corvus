@@ -191,7 +191,7 @@ private struct Sidebar: View {
         let archived = model.chats.convs.values.filter(\.archived)
         let archivedUnread = archived.reduce(0) { $0 + $1.unread }
         let q = filter.trimmingCharacters(in: .whitespaces)
-        let list = model.chats.sortedConversations(archived: model.showArchived).filter {
+        let list = model.chats.sortedConversations(archived: model.showArchived, alphabetical: model.appearance.sortAlphabetically).filter {
             q.isEmpty || $0.title.localizedCaseInsensitiveContains(q) || $0.key.localizedCaseInsensitiveContains(q)
         }
 
