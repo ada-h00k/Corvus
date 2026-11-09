@@ -59,6 +59,10 @@ private struct GeneralSettings: View {
                 Toggle("Send typing indicators", isOn: Binding(
                     get: { model.privacy.sendTypingIndicators },
                     set: { v in var p = model.privacy; p.sendTypingIndicators = v; model.applyPrivacy(p) }))
+                Toggle("Generate link previews", isOn: Binding(
+                    get: { model.privacy.generateLinkPreviews },
+                    set: { v in var p = model.privacy; p.generateLinkPreviews = v; model.applyPrivacy(p) }))
+                    .help("Fetch the page of an HTTPS link you type (title, description, image) and attach a preview when sending")
             }
             Section("GIPHY") {
                 Button("GIPHY API key …") { Task { await model.configureGiphyApiKey() } }

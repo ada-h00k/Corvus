@@ -98,6 +98,32 @@ public enum ReceiptStatus: Int, Comparable {
     public static func < (a: ReceiptStatus, b: ReceiptStatus) -> Bool { a.rawValue < b.rawValue }
 }
 
+/// A link preview (Signal "previews"): only HTTPS links, and only with a title.
+public struct LinkPreview: Equatable, Hashable, Sendable {
+    public var url = ""              // HTTPS URL represented by the preview (exact spelling from the message body)
+    public var title = ""
+    public var description = ""
+    public var imageId = ""          // signal-cli attachment id of an incoming preview image
+    public var imageContentType = ""
+    public var imageFilename = ""
+    public var imageSize: Int64 = 0
+    public var imagePath = ""        // transient local file used when sending (not stored)
+    public var imageThumb = Data()   // small image kept in the encrypted history
+
+    public init(url: String = "", title: String = "", description: String = "") {
+        self.url = url
+        self.title = title
+        self.description = description
+    }
+
+    public var isValid: Bool {
+        guard let u = URLComponents(string: url), u.scheme?.lowercased() == "https", !(u.host ?? "").isEmpty else { return false }
+        return !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    public var host: String { URLComponents(string: url)?.host ?? url }
+}
+
 public struct Message: Equatable, Identifiable {
     public var ts: Int64 = 0          // ms since epoch: Signal message identity and displayed time
     // Local timeline order is separate from Signal's sender timestamp (`ts`). A sender's
@@ -121,6 +147,7 @@ public struct Message: Equatable, Identifiable {
     public var expirationStartMs: Int64 = 0
     public var deleted = false        // deleted for everyone: only a placeholder is left
     public var receipt = ReceiptStatus.sent // outgoing only: delivered / read by a recipient
+    public var linkPreview = LinkPreview()
 
     public init() {}
 
@@ -140,6 +167,7 @@ public struct Message: Equatable, Identifiable {
         text = ""
         attachments = []
         quote = Quote()
+        linkPreview = LinkPreview()
         reactions = [:]
         editTs = 0
         editCount = 0

@@ -94,6 +94,21 @@ private func parseSticker(_ dm: JSON) -> Attachment? {
     return Attachment.sticker(packId: packId, stickerId: id)
 }
 
+/// The first valid entry of {"previews": [{"url", "title", "description", "image": {"id", "contentType", …}}]}.
+private func parseLinkPreview(_ dm: JSON) -> LinkPreview {
+    for v in jsonArray(dm["previews"]) {
+        let o = jsonObject(v)
+        var lp = LinkPreview(url: jsonString(o["url"]), title: jsonString(o["title"]), description: jsonString(o["description"]))
+        let image = jsonObject(o["image"])
+        lp.imageId = jsonString(image["id"])
+        lp.imageContentType = jsonString(image["contentType"])
+        lp.imageFilename = jsonString(image["filename"])
+        lp.imageSize = jsonInt64(image["size"])
+        if lp.isValid { return lp }
+    }
+    return LinkPreview()
+}
+
 private func parseQuote(_ dm: JSON) -> Quote {
     var q = Quote()
     let o = jsonObject(dm["quote"])
@@ -146,6 +161,7 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
     out.msg.attachments = parseAttachments(dm)
     if let sticker = parseSticker(dm) { out.msg.attachments.append(sticker) }
     out.msg.quote = parseQuote(dm)
+    out.msg.linkPreview = parseLinkPreview(dm)
     out.msg.expiresInSeconds = out.expirationSeconds
     if out.msg.text.isEmpty && out.msg.attachments.isEmpty { return } // receipts, typing, sessions, ...
 

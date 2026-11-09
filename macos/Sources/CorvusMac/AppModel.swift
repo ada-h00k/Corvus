@@ -73,7 +73,14 @@ final class AppModel {
     @ObservationIgnored private var unsentReads: [String: [(author: String, ts: Int64)]] = [:]
 
     // composer (for the current conversation; other conversations keep a Draft)
-    var composerText = ""
+    var composerText = "" { didSet { if composerText != oldValue { updateDraftLinkPreview() } } }
+    // link preview of the composer's first HTTPS link
+    var draftLinkPreview = LinkPreview()
+    var linkPreviewLoading = false
+    @ObservationIgnored private var previewRequestedUrl = ""
+    @ObservationIgnored private var dismissedPreviewUrl = ""
+    @ObservationIgnored private var linkPreviewTask: Task<Void, Never>?
+    @ObservationIgnored private var sendAfterLinkPreview: String?  // composer text when Send waited for the preview
     var replyQuote = Quote()
     var pendingFiles: [String] = []
     var pendingGifAnalyticsUrl: URL?
@@ -775,6 +782,7 @@ final class AppModel {
             cancelEdit() // an edit in progress is dropped and the text typed before it comes back
             stopTyping()
             saveDraft()
+            dismissedPreviewUrl = ""
             current = key
             loadDraft(key)
             closeSearch()
@@ -1280,6 +1288,20 @@ final class AppModel {
             showFlash("Not connected to \(backendName).", seconds: 5)
             return
         }
+        // A preview for the link in this text is still being made: send once it is there (or failed).
+        let pendingPreviewUrl = LinkPreviewRules.firstHttpsLink(composerText)
+        if privacy.generateLinkPreviews && !pendingPreviewUrl.isEmpty && pendingPreviewUrl != dismissedPreviewUrl
+            && linkPreviewLoading && previewRequestedUrl == pendingPreviewUrl {
+            sendAfterLinkPreview = composerText
+            showFlash("Generating link preview …", seconds: 5)
+            return
+        }
+        var previewForSend = LinkPreview()
+        let textPreviewUrl = LinkPreviewRules.firstHttpsLink(text)
+        if privacy.generateLinkPreviews && !textPreviewUrl.isEmpty && textPreviewUrl != dismissedPreviewUrl
+            && draftLinkPreview.isValid && draftLinkPreview.url == textPreviewUrl {
+            previewForSend = draftLinkPreview
+        }
         let files = pendingFiles, quote = replyQuote, gifAnalytics = pendingGifAnalyticsUrl
         stopTyping()
 
@@ -1301,8 +1323,16 @@ final class AppModel {
             }
             atts.append(a)
         }
-        let staged = Media.stageForSignalCli(files)
-        if !files.isEmpty { p["attachments"] = staged.paths }
+        let previewImage = previewForSend.imagePath.isEmpty || !FileManager.default.fileExists(atPath: previewForSend.imagePath)
+            ? [] : [previewForSend.imagePath]
+        let staged = Media.stageForSignalCli(files + previewImage) // the preview image, if any, is the last one
+        if !files.isEmpty { p["attachments"] = Array(staged.paths.prefix(files.count)) }
+        if previewForSend.isValid {
+            p["previewUrl"] = previewForSend.url
+            p["previewTitle"] = previewForSend.title
+            if !previewForSend.description.isEmpty { p["previewDescription"] = previewForSend.description }
+            if !previewImage.isEmpty, let img = staged.paths.last { p["previewImage"] = img }
+        }
         // Recorded voice messages go out as voice notes (shown inline by the Signal apps) when this
         // signal-cli can do that and nothing but recordings is attached.
         if !files.isEmpty && files.allSatisfy({ voiceFiles[$0] != nil })
@@ -1328,6 +1358,8 @@ final class AppModel {
         preview.expiresInSeconds = c.expirationSeconds
         preview.quote = quote
         preview.attachments = atts
+        preview.linkPreview = previewForSend
+        preview.linkPreview.imagePath = ""
 
         let pendingId = UUID().uuidString
         var pending = PendingSend()
@@ -1338,6 +1370,7 @@ final class AppModel {
         chats.convs[key]!.insertSorted(preview)
 
         composerText = ""
+        dismissedPreviewUrl = ""
         pendingFiles = []
         replyQuote = Quote()
         if !files.isEmpty { showFlash("Sending …", seconds: 120) }
@@ -1384,6 +1417,89 @@ final class AppModel {
             }
             registerGiphyAnalytics(gifAnalytics)
             if pendingGifAnalyticsUrl == gifAnalytics { pendingGifAnalyticsUrl = nil }
+        }
+    }
+
+    // MARK: Link previews
+
+    /// Follows the composer: makes (or drops) the preview of its first HTTPS link. Like the Qt app, but the
+    /// page is only fetched once typing pauses for a moment, so half-typed URLs are not requested.
+    private func updateDraftLinkPreview() {
+        let raw = composerText
+        let url = LinkPreviewRules.firstHttpsLink(raw)
+        if let waiting = sendAfterLinkPreview, waiting != raw { sendAfterLinkPreview = nil }
+        if !privacy.generateLinkPreviews || !editKey.isEmpty || url.isEmpty {
+            if url.isEmpty { dismissedPreviewUrl = "" }
+            cancelLinkPreview()
+            return
+        }
+        if url == dismissedPreviewUrl { return }
+        if draftLinkPreview.isValid && draftLinkPreview.url == url { return }
+        if url == previewRequestedUrl { return } // loading, or tried already without a result
+        linkPreviewTask?.cancel()
+        draftLinkPreview = LinkPreview()
+        previewRequestedUrl = url
+        linkPreviewLoading = true
+        linkPreviewTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            if Task.isCancelled { return }
+            let result = await LinkPreviewFetcher.fetch(url)
+            guard let self, !Task.isCancelled, self.previewRequestedUrl == url else { return }
+            self.draftLinkPreview = result ?? LinkPreview()
+            self.linkPreviewLoading = false
+            self.finishPendingLinkPreviewSend()
+        }
+    }
+
+    private func cancelLinkPreview() {
+        linkPreviewTask?.cancel()
+        linkPreviewTask = nil
+        linkPreviewLoading = false
+        previewRequestedUrl = ""
+        if draftLinkPreview != LinkPreview() { draftLinkPreview = LinkPreview() }
+        finishPendingLinkPreviewSend()
+    }
+
+    /// ✕ on the preview: this link is sent without one.
+    func dismissLinkPreview() {
+        dismissedPreviewUrl = draftLinkPreview.url.isEmpty ? previewRequestedUrl : draftLinkPreview.url
+        cancelLinkPreview()
+    }
+
+    private func finishPendingLinkPreviewSend() {
+        guard let text = sendAfterLinkPreview else { return }
+        sendAfterLinkPreview = nil
+        Task { if composerText == text { sendMessage() } }
+    }
+
+    /// The image of a received link preview (signal-cli may still be downloading it: a few retries).
+    private func fetchLinkPreviewThumbnail(_ key: String, ts: Int64, author: String, attempt: Int = 0) {
+        guard let c = chats.convs[key], let mi = chats.findMessage(c, ts: ts, authors: [author]) else { return }
+        let lp = c.msgs[mi].linkPreview
+        guard lp.isValid, !lp.imageId.isEmpty, lp.imageThumb.isEmpty, lp.imageSize <= Media.maxThumbSource else { return }
+        let token = "lp|\(key)|\(ts)|\(author)"
+        guard !thumbPending.contains(token) else { return }
+        thumbPending.insert(token)
+        var p: JSON = ["id": lp.imageId]
+        addRecipient(&p, c)
+        Task { [p] in
+            defer { thumbPending.remove(token) }
+            let data: Data
+            do {
+                data = Data(base64Encoded: jsonString(jsonObject(try await cli.call("getAttachment", p))["data"])) ?? Data()
+            } catch {
+                if attempt < 3 {
+                    try? await Task.sleep(for: .seconds(2 * (attempt + 1)))
+                    thumbPending.remove(token)
+                    fetchLinkPreviewThumbnail(key, ts: ts, author: author, attempt: attempt + 1)
+                }
+                return
+            }
+            guard NSImage(data: data) != nil, let c2 = chats.convs[key], let i = chats.findMessage(c2, ts: ts, authors: [author]),
+                  c2.msgs[i].linkPreview.url == lp.url else { return }
+            let thumb = Media.makeThumbnail(data)
+            chats.convs[key]!.msgs[i].linkPreview.imageThumb = thumb.isEmpty ? data : thumb
+            persist(Records.linkPreviewUpdate(key, chats.convs[key]!.msgs[i]))
         }
     }
 
@@ -1842,6 +1958,7 @@ final class AppModel {
     func attachmentToken(_ m: Message, _ i: Int) -> String { "\(m.id)#\(i)" }
 
     private func fetchThumbnails(_ key: String, ts: Int64, author: String, attempt: Int = 0) {
+        if attempt == 0 { fetchLinkPreviewThumbnail(key, ts: ts, author: author) } // retries on its own
         guard let c = chats.convs[key], let mi = chats.findMessage(c, ts: ts, authors: [author]) else { return }
         let m = c.msgs[mi]
         for (a, att) in m.attachments.enumerated() {
@@ -2175,6 +2292,8 @@ final class AppModel {
         p.save()
         if !p.sendTypingIndicators { stopTyping() }
         if !p.sendReadReceipts { unsentReads.removeAll() } // seen while switched off: never reported later
+        dismissedPreviewUrl = ""
+        updateDraftLinkPreview() // switched on: preview the link already typed; off: drop it
     }
 
     func applyNotifications(_ n: NotificationSettings) {

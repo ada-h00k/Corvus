@@ -30,6 +30,30 @@ public enum Records {
         return a
     }
 
+    // Link preview ("lp"): same keys as the Qt app (src/Records.cpp).
+    private static func linkPreviewToJson(_ lp: LinkPreview) -> JSON {
+        var o: JSON = [:]
+        if !lp.url.isEmpty { o["u"] = lp.url }
+        if !lp.title.isEmpty { o["t"] = lp.title }
+        if !lp.description.isEmpty { o["d"] = lp.description }
+        if !lp.imageId.isEmpty { o["id"] = lp.imageId }
+        if !lp.imageContentType.isEmpty { o["ct"] = lp.imageContentType }
+        if !lp.imageFilename.isEmpty { o["fn"] = lp.imageFilename }
+        if lp.imageSize > 0 { o["sz"] = lp.imageSize }
+        if !lp.imageThumb.isEmpty { o["th"] = lp.imageThumb.base64EncodedString() }
+        return o
+    }
+
+    private static func linkPreviewFromJson(_ o: JSON) -> LinkPreview {
+        var lp = LinkPreview(url: jsonString(o["u"]), title: jsonString(o["t"]), description: jsonString(o["d"]))
+        lp.imageId = jsonString(o["id"])
+        lp.imageContentType = jsonString(o["ct"])
+        lp.imageFilename = jsonString(o["fn"])
+        lp.imageSize = jsonInt64(o["sz"])
+        lp.imageThumb = Data(base64Encoded: jsonString(o["th"])) ?? Data()
+        return lp.isValid ? lp : LinkPreview()
+    }
+
     // Edit state: x = current text, et = timestamp of the latest revision, ec = number of edits.
     private static func editToJson(_ m: Message) -> JSON {
         ["x": m.text, "et": m.editTs, "ec": m.editCount]
@@ -50,14 +74,21 @@ public enum Records {
         var rec: JSON = ["t": "m", "c": conv, "ts": m.ts, "s": m.sender, "x": m.deleted ? "" : m.text,
                          "o": m.outgoing, "au": m.authorKey]
         if m.editCount > 0 && !m.deleted { d["ed"] = editToJson(m) }
+        if m.linkPreview.isValid && !m.deleted { d["lp"] = linkPreviewToJson(m.linkPreview) }
         if m.outgoing && m.receipt > .sent { d["rs"] = m.receipt.rawValue }
         if !d.isEmpty { rec["d"] = d }
         return rec
     }
 
     /// Text edit of a message: an "update" record with the extra "ed"; ts = original timestamp.
+    /// The empty "lp" drops the link preview: it belonged to the old text (as in the Qt app).
     public static func edit(_ conv: String, _ m: Message) -> JSON {
-        ["t": "u", "c": conv, "ts": m.ts, "au": m.authorKey, "d": ["ed": editToJson(m)] as JSON]
+        ["t": "u", "c": conv, "ts": m.ts, "au": m.authorKey, "d": ["ed": editToJson(m), "lp": JSON()] as JSON]
+    }
+
+    /// A late link-preview image (thumbnail fetched after the message arrived).
+    public static func linkPreviewUpdate(_ conv: String, _ m: Message) -> JSON {
+        ["t": "u", "c": conv, "ts": m.ts, "au": m.authorKey, "d": ["lp": linkPreviewToJson(m.linkPreview)] as JSON]
     }
 
     /// Delete for everyone: an "update" record with the extra "dl"; ts = original timestamp.
@@ -98,6 +129,7 @@ public enum Records {
             m.expiresInSeconds = jsonInt(d["ex"])
             m.expirationStartMs = jsonInt64(d["es"])
         }
+        if let lp = d["lp"] as? JSON { m.linkPreview = linkPreviewFromJson(lp) }
         if d["at"] != nil {
             m.attachments = jsonArray(d["at"]).map { attachmentFromJson(jsonObject($0)) }
         }

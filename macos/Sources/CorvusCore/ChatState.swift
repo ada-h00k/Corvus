@@ -178,6 +178,7 @@ public struct ChatState {
         guard let c = convs[key], let i = findMessage(c, ts: targetTs, authors: authors) else { return nil }
         if c.msgs[i].deleted || newTs <= c.msgs[i].latestTs { return nil } // deleted / already applied / outdated revision
         convs[key]!.msgs[i].text = text
+        convs[key]!.msgs[i].linkPreview = LinkPreview() // it belonged to the old text; edits do not regenerate it
         convs[key]!.msgs[i].editTs = newTs
         convs[key]!.msgs[i].editCount += 1
         return Records.edit(key, convs[key]!.msgs[i])

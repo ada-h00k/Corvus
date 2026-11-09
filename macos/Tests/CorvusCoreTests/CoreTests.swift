@@ -739,3 +739,81 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(SignalCli.autodetect(environment: ["PATH": a.path + ":" + b.path], extraDirs: []), a.appendingPathComponent("signal-cli").path)
     }
 }
+
+final class LinkPreviewTests: XCTestCase {
+    func testFirstHttpsLink() {
+        XCTAssertEqual(LinkPreviewRules.firstHttpsLink("see https://example.com/a?b=1."), "https://example.com/a?b=1")
+        XCTAssertEqual(LinkPreviewRules.firstHttpsLink("(https://en.wikipedia.org/wiki/Foo_(bar))"), "https://en.wikipedia.org/wiki/Foo_(bar)")
+        XCTAssertEqual(LinkPreviewRules.firstHttpsLink("[https://example.com/x]"), "https://example.com/x")
+        XCTAssertEqual(LinkPreviewRules.firstHttpsLink("http://example.com only"), "")
+        XCTAssertEqual(LinkPreviewRules.firstHttpsLink("HTTPS://Example.com/Path"), "HTTPS://Example.com/Path") // spelling kept
+        XCTAssertEqual(LinkPreviewRules.firstHttpsLink("no link"), "")
+    }
+
+    func testSafeToFetch() {
+        XCTAssertTrue(LinkPreviewRules.isSafeToFetch(URL(string: "https://example.com/page")))
+        for bad in ["http://example.com", "https://localhost/x", "https://printer.local", "https://intranet",
+                    "https://svc.internal", "https://a.test", "https://127.0.0.1/", "https://10.0.0.1",
+                    "https://[::1]/", "https://user:pw@example.com", "ftp://example.com"] {
+            XCTAssertFalse(LinkPreviewRules.isSafeToFetch(URL(string: bad)), bad)
+        }
+        XCTAssertFalse(LinkPreviewRules.isSafeToFetch(nil))
+    }
+
+    func testParseHtml() {
+        let html = """
+        <html><head><title>Fallback &amp; title</title>
+        <meta property="og:title" content="Caf&eacute; &quot;Raven&quot; &#8211; &#x1F426;">
+        <meta name='description' content='Weekly &lt;news&gt;'>
+        <meta content="/img/card.png" property="og:image">
+        </head></html>
+        """
+        let (lp, image) = LinkPreviewRules.parse(html: html, url: "https://example.com/post")
+        XCTAssertEqual(lp.title, "Caf&eacute; \"Raven\" – 🐦") // unknown named entities stay as they are
+        XCTAssertEqual(lp.description, "Weekly <news>")
+        XCTAssertEqual(image, "/img/card.png")
+        XCTAssertTrue(lp.isValid)
+        XCTAssertEqual(lp.host, "example.com")
+
+        let plain = LinkPreviewRules.parse(html: "<TITLE>\n  Just   a\ttitle </TITLE>", url: "https://e.org")
+        XCTAssertEqual(plain.preview.title, "Just a title")
+        XCTAssertFalse(LinkPreviewRules.parse(html: "<p>nothing</p>", url: "https://e.org").preview.isValid)
+        XCTAssertEqual(LinkPreviewRules.imageSuffix(contentType: "image/JPEG; charset=x"), "jpg")
+        XCTAssertEqual(LinkPreviewRules.imageSuffix(contentType: "image/svg+xml"), "")
+    }
+
+    func testIncomingStoredEditedDeleted() {
+        let pe = parseEnvelope(["sourceNumber": "+49alice", "dataMessage": [
+            "timestamp": 10, "message": "look https://example.com",
+            "previews": [["url": "http://insecure.example", "title": "no"] as JSON,
+                         ["url": "https://example.com", "title": "Example", "description": "Desc",
+                          "image": ["id": "img1", "contentType": "image/png", "size": 99] as JSON] as JSON],
+        ] as JSON])
+        XCTAssertEqual(pe.msg.linkPreview.url, "https://example.com") // the first valid (HTTPS) one
+        XCTAssertEqual(pe.msg.linkPreview.imageId, "img1")
+
+        var s = ChatState()
+        s.account = "+49me"
+        var m = pe.msg
+        m.authorKey = "+49alice"
+        s.addMessage("+49alice", m)
+        // Stored with the message, and a late image as an update record (same keys as the Qt app).
+        var withThumb = s.convs["+49alice"]!.msgs[0]
+        withThumb.linkPreview.imageThumb = Data([1, 2, 3])
+        var r = ChatState()
+        r.loadHistory([Records.message("+49alice", m), Records.linkPreviewUpdate("+49alice", withThumb)])
+        XCTAssertEqual(r.convs["+49alice"]!.msgs[0].linkPreview.title, "Example")
+        XCTAssertEqual(r.convs["+49alice"]!.msgs[0].linkPreview.imageThumb, Data([1, 2, 3]))
+        XCTAssertNil(jsonObject(Records.message("c", Message())["d"])["lp"]) // nothing written without a preview
+
+        // An edit drops the preview (it belonged to the old text), in memory and in the history.
+        let edit = s.applyEdit("+49alice", targetTs: 10, authors: ["+49alice"], text: "changed", newTs: 20)!
+        XCTAssertFalse(s.convs["+49alice"]!.msgs[0].linkPreview.isValid)
+        r.loadHistory([edit])
+        XCTAssertFalse(r.convs["+49alice"]!.msgs[0].linkPreview.isValid)
+
+        var d = m
+        d.markDeleted()
+        XCTAssertFalse(d.linkPreview.isValid)
+    }
+}

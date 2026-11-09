@@ -20,6 +20,9 @@ struct ComposerArea: View {
                              title: "Replying to \(model.displayName(model.replyQuote.authorKey))",
                              text: replyText, accent: Theme.senderColor(model.replyQuote.authorKey)) { model.replyQuote = Quote() }
             }
+            if model.draftLinkPreview.isValid && model.editKey.isEmpty {
+                LinkPreviewDraftCard(preview: model.draftLinkPreview) { model.dismissLinkPreview() }
+            }
             if !model.pendingFiles.isEmpty {
                 AttachmentTray(files: model.pendingFiles, voiceFiles: model.voiceFiles) { f in
                     model.removePendingFile(f)
@@ -127,6 +130,42 @@ private struct ComposerCard: View {
         }
         .padding(8)
         .frame(height: 48)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.field))
+    }
+}
+
+/// The preview that will be sent with the message's link; ✕ sends the link without it.
+private struct LinkPreviewDraftCard: View {
+    let preview: LinkPreview
+    let close: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if !preview.imageThumb.isEmpty, let img = NSImage(data: preview.imageThumb) {
+                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    Image(systemName: "link").font(.title3).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 48, height: 48)
+            .background(Theme.field.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(preview.title).font(.callout.weight(.semibold)).lineLimit(1)
+                if !preview.description.isEmpty {
+                    Text(preview.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Text(preview.host).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button(action: close) { Image(systemName: "xmark.circle.fill").font(.system(size: 15)) }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Remove link preview")
+                .accessibilityLabel("Remove link preview")
+        }
+        .padding(8)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.field))
     }
 }

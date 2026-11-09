@@ -359,6 +359,7 @@ private struct Bubble: View {
                                 .tint(m.outgoing ? fg : Theme.signalBlue)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+                        if m.linkPreview.isValid { LinkPreviewCard(preview: m.linkPreview, foreground: fg) }
                     }
                     MetaRow(message: m, pending: pending, color: fg.opacity(0.7))
                 }
@@ -542,6 +543,41 @@ private struct TypingRow: View {
         case 2: return "\(names[0]) and \(names[1]) are typing"
         default: return "\(names[0]) and \(names.count - 1) others are typing"
         }
+    }
+}
+
+/// A link preview inside a bubble: image, title, description and host; a click opens the link.
+private struct LinkPreviewCard: View {
+    let preview: LinkPreview
+    let foreground: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !preview.imageThumb.isEmpty, let img = NSImage(data: preview.imageThumb) {
+                Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: min(180, max(90, 300 * img.size.height / max(img.size.width, 1))))
+                    .clipped()
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(preview.title).font(.callout.weight(.semibold)).lineLimit(2)
+                if !preview.description.isEmpty {
+                    Text(preview.description).font(.caption).lineLimit(3).opacity(0.85)
+                }
+                Text(preview.host).font(.caption2).opacity(0.7).lineLimit(1)
+            }
+            .foregroundStyle(foreground)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(8)
+        }
+        .frame(maxWidth: 300, alignment: .leading)
+        .background(foreground.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { if let u = URL(string: preview.url), u.scheme?.lowercased() == "https" { NSWorkspace.shared.open(u) } }
+        .help(preview.url)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isLink)
     }
 }
 
