@@ -82,6 +82,18 @@ private func parseAttachments(_ dm: JSON) -> [Attachment] {
     }
 }
 
+/// {"sticker": {"packId": "…", "stickerId": 3}} (signal-cli spells the keys in several ways).
+private func parseSticker(_ dm: JSON) -> Attachment? {
+    let o = jsonObject(dm["sticker"])
+    if o.isEmpty { return nil }
+    let packId = ["packId", "packID", "pack_id"].lazy.map { jsonString(o[$0]) }.first { !$0.isEmpty } ?? ""
+    guard let raw = ["stickerId", "sticker_id", "id"].lazy.compactMap({ o[$0] }).first else { return nil }
+    let id: Int
+    if let n = raw as? NSNumber { id = n.intValue } else if let s = raw as? String, let n = Int(s) { id = n } else { return nil }
+    guard !packId.isEmpty, id >= 0 else { return nil }
+    return Attachment.sticker(packId: packId, stickerId: id)
+}
+
 private func parseQuote(_ dm: JSON) -> Quote {
     var q = Quote()
     let o = jsonObject(dm["quote"])
@@ -132,6 +144,7 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
     out.msg.text = jsonString(dm["message"])
     out.mentions = parseMentions(dm)
     out.msg.attachments = parseAttachments(dm)
+    if let sticker = parseSticker(dm) { out.msg.attachments.append(sticker) }
     out.msg.quote = parseQuote(dm)
     out.msg.expiresInSeconds = out.expirationSeconds
     if out.msg.text.isEmpty && out.msg.attachments.isEmpty { return } // receipts, typing, sessions, ...

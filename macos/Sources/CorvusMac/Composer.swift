@@ -6,6 +6,7 @@ import SwiftUI
 struct ComposerArea: View {
     @Environment(AppModel.self) private var model
     @State private var emojiShown = false
+    @State private var stickersShown = false
 
     var body: some View {
         @Bindable var model = model
@@ -55,6 +56,14 @@ struct ComposerArea: View {
                         .frame(width: 30, height: 34)
                 }
                 .help("Search GIPHY GIFs")
+                Button { stickersShown.toggle() } label: {
+                    Image(systemName: "seal").font(.system(size: 17)).frame(width: 30, height: 34)
+                }
+                .help("Stickers")
+                .disabled(!model.editKey.isEmpty)
+                .popover(isPresented: $stickersShown, arrowEdge: .top) {
+                    StickerPicker { stickersShown = false }
+                }
                 // The voice recording button sits to the left of the attach-files button (as in the Qt app).
                 Button { model.startVoiceRecording() } label: {
                     Image(systemName: "mic").font(.system(size: 17)).frame(width: 30, height: 34)

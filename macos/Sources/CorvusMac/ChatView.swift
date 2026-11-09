@@ -296,6 +296,8 @@ private struct Bubble: View {
         let mediaOnly = m.text.isEmpty && !m.quote.valid && !m.attachments.isEmpty
             && m.attachments.allSatisfy { $0.isImage && !$0.thumb.isEmpty }
         let showSender = isGroup && !m.outgoing && !grouping.joinedAbove
+        // A sticker on its own is shown without a bubble, like in the Signal apps.
+        let stickerOnly = m.text.isEmpty && !m.quote.valid && m.attachments.count == 1 && m.attachments[0].isSticker
 
         Group {
             if m.deleted {
@@ -312,6 +314,12 @@ private struct Bubble: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(shape.fill(bg))
+            } else if stickerOnly {
+                VStack(alignment: m.outgoing ? .trailing : .leading, spacing: 2) {
+                    if showSender { senderLabel }
+                    StickerAttachmentView(message: m, index: 0, attachment: m.attachments[0])
+                    MetaRow(message: m, pending: pending, color: .secondary)
+                }
             } else if mediaOnly {
                 VStack(spacing: 2) {
                     ForEach(Array(m.attachments.enumerated()), id: \.offset) { i, att in

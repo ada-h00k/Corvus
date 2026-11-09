@@ -340,7 +340,7 @@ private struct ConversationRow: View {
         if m.deleted { return m.deletedText }
         var t = m.text.replacingOccurrences(of: "\n", with: " ")
         if t.isEmpty, let a = m.attachments.first {
-            t = a.isGif ? "GIF" : a.isImage ? "📷 Photo" : a.isVideo ? "🎬 Video" : a.isAudio ? "🎤 Audio" : "📎 " + a.filename
+            t = a.isSticker ? "Sticker" : a.isGif ? "GIF" : a.isImage ? "📷 Photo" : a.isVideo ? "🎬 Video" : a.isAudio ? "🎤 Audio" : "📎 " + a.filename
         }
         return (m.outgoing ? "You: " : (conversation.isGroup && !m.sender.isEmpty ? m.sender + ": " : "")) + t
     }

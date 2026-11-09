@@ -621,3 +621,70 @@ final class GroupInfoTests: XCTestCase {
         XCTAssertEqual(GroupInfo.memberParams("ban", ["+3"])["ban"] as? [String], ["+3"])
     }
 }
+
+final class StickerTests: XCTestCase {
+    let pack = "0123456789abcdef0123456789abcdef"
+    let key = String(repeating: "ab", count: 32)
+
+    func testIncomingSticker() {
+        let pe = parseEnvelope(["sourceNumber": "+1", "dataMessage": [
+            "timestamp": 5, "sticker": ["packId": pack, "stickerId": 3] as JSON,
+        ] as JSON])
+        XCTAssertEqual(pe.kind, .message) // a sticker alone is a message
+        XCTAssertEqual(pe.msg.attachments.count, 1)
+        let a = pe.msg.attachments[0]
+        XCTAssertTrue(a.isSticker)
+        XCTAssertTrue(a.isImage)
+        XCTAssertEqual(a.stickerPackId, pack)
+        XCTAssertEqual(a.stickerId, 3)
+        XCTAssertEqual(a.filename, "signal-sticker:\(pack):3.webp") // same convention as the Qt app
+
+        // Other spellings signal-cli has used, and a string id.
+        let alt = parseEnvelope(["sourceNumber": "+1", "dataMessage": [
+            "timestamp": 6, "sticker": ["pack_id": "p", "sticker_id": "7"] as JSON,
+        ] as JSON])
+        XCTAssertEqual(alt.msg.attachments.first?.stickerId, 7)
+        // Broken references are dropped.
+        XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "dataMessage": [
+            "timestamp": 7, "sticker": ["packId": "", "stickerId": 1] as JSON,
+        ] as JSON]).kind, .none)
+    }
+
+    func testStickerAttachmentFields() {
+        var a = Attachment()
+        a.filename = "photo.webp"
+        XCTAssertFalse(a.isSticker)
+        XCTAssertEqual(a.stickerId, -1)
+        a.filename = "signal-sticker:p:x.webp"
+        XCTAssertTrue(a.isSticker)
+        XCTAssertFalse(a.isValidSticker)
+        // A sticker survives a trip through the history records.
+        var m = Message()
+        m.ts = 1
+        m.attachments = [Attachment.sticker(packId: "p", stickerId: 2)]
+        XCTAssertEqual(Records.messageFromRecord(Records.message("c", m)).attachments.first?.stickerId, 2)
+    }
+
+    func testParsePacks() {
+        let packs = StickerPack.parse([
+            ["packId": "b", "title": "Zebras", "stickers": [["id": 0, "emoji": "🦓"] as JSON, ["id": 1] as JSON]] as JSON,
+            ["pack": ["pack_id": "a", "name": "Ants", "manifest": ["stickers": [["emoji": "🐜"] as JSON]] as JSON] as JSON] as JSON,
+            ["title": "no id"] as JSON,
+        ])
+        XCTAssertEqual(packs.map(\.id), ["a", "b"]) // sorted by title, packs without id dropped
+        XCTAssertEqual(packs[0].stickers, [StickerPack.Sticker(id: 0, emoji: "🐜")]) // index as id fallback
+        XCTAssertTrue(packs[1].matches("🦓"))
+        XCTAssertTrue(packs[1].matches("zeb"))
+        XCTAssertFalse(packs[1].matches("ants"))
+        XCTAssertEqual(StickerPack.parse(["packs": [["packId": "x"] as JSON]] as JSON).first?.title, "Sticker pack")
+    }
+
+    func testPackUrl() {
+        XCTAssertTrue(StickerPack.isValidPackUrl("https://signal.art/addstickers/#pack_id=\(pack)&pack_key=\(key)"))
+        XCTAssertTrue(StickerPack.isValidPackUrl("sgnl://addstickers/?pack_id=\(pack)&pack_key=\(key)"))
+        XCTAssertFalse(StickerPack.isValidPackUrl("https://evil.example/addstickers/#pack_id=\(pack)&pack_key=\(key)"))
+        XCTAssertFalse(StickerPack.isValidPackUrl("https://signal.art/addstickers/#pack_id=\(pack)"))
+        XCTAssertFalse(StickerPack.isValidPackUrl("https://signal.art/addstickers/#pack_id=xyz&pack_key=\(key)"))
+        XCTAssertFalse(StickerPack.isValidPackUrl("not a url"))
+    }
+}

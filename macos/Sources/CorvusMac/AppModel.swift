@@ -126,6 +126,16 @@ final class AppModel {
     var profileUsername = ""
     var profileStatus: (text: String, error: Bool)?
 
+    // stickers
+    var stickerPacks: [StickerPack] = []
+    var stickerPacksLoaded = false
+    var stickerStatus: (text: String, error: Bool)?
+    var stickerImages: [String: Data] = [:]          // "packId:stickerId" -> image (WebP / APNG / PNG)
+    @ObservationIgnored private var stickerPacksLoading = false
+    @ObservationIgnored private var stickerQueue: [(pack: String, id: Int)] = []
+    @ObservationIgnored private var stickerRequested: Set<String> = []
+    @ObservationIgnored private var stickerLoadsInFlight = 0
+
     // groups
     var groupSheet: GroupSheet?
     var groupInvitations: [GroupInfo] = []  // groups we are invited to (not yet a member)
@@ -366,6 +376,7 @@ final class AppModel {
     // MARK: - Contacts / groups
 
     private func loadContactsAndGroups() {
+        resetStickers() // another account may have other packs
         avatarTried.removeAll() // ask signal-cli again, avatars may have changed
         avatarBusy.removeAll()
         avatarInFlight = 0
@@ -1134,7 +1145,7 @@ final class AppModel {
         if notify.notifications {
             var preview = m.text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             if preview.count > 240 { preview = String(preview.prefix(240)) + "…" }
-            if preview.isEmpty, let a = m.attachments.first { preview = a.isImage ? "[Image]" : "[File] \(a.filename)" }
+            if preview.isEmpty, let a = m.attachments.first { preview = a.isSticker ? "[Sticker]" : a.isImage ? "[Image]" : "[File] \(a.filename)" }
             var title = c.title, body: String
             switch notify.content {
             case .hidden:
@@ -1365,6 +1376,170 @@ final class AppModel {
             }
             registerGiphyAnalytics(gifAnalytics)
             if pendingGifAnalyticsUrl == gifAnalytics { pendingGifAnalyticsUrl = nil }
+        }
+    }
+
+    // MARK: Stickers
+
+    private func resetStickers() {
+        stickerPacks = []
+        stickerPacksLoaded = false
+        stickerPacksLoading = false
+        stickerImages = [:]
+        stickerQueue = []
+        stickerRequested = []
+        stickerStatus = nil
+    }
+
+    /// The image of one sticker (signal-cli downloads the pack on first use).
+    func fetchSticker(_ packId: String, _ stickerId: Int) async throws -> Data {
+        let res = try await cli.call("getSticker", ["packId": packId, "stickerId": stickerId])
+        var encoded = jsonString(jsonObject(res)["data"])
+        if encoded.isEmpty { encoded = jsonString(jsonObject(res)["base64"]) }
+        if encoded.isEmpty { encoded = jsonString(res) }
+        guard let data = Data(base64Encoded: encoded), !data.isEmpty else { throw RpcError("The sticker could not be loaded.") }
+        return data
+    }
+
+    /// Installed packs; loaded once per connection (reopening the picker uses the copy in memory).
+    func loadStickerPacks(force: Bool = false) {
+        guard connected else {
+            if !stickerPacksLoaded { stickerStatus = ("Connect to Signal to load sticker packs.", true) }
+            return
+        }
+        if (stickerPacksLoaded && !force) || stickerPacksLoading { return }
+        stickerPacksLoading = true
+        stickerStatus = ("Loading installed sticker packs …", false)
+        Task {
+            defer { stickerPacksLoading = false }
+            do {
+                stickerPacks = StickerPack.parse(try await cli.call("listStickerPacks"))
+                stickerPacksLoaded = true
+                stickerStatus = nil
+            } catch {
+                stickerStatus = ("Could not load sticker packs: \(error.localizedDescription)", true)
+            }
+        }
+    }
+
+    func addStickerPack() async {
+        guard let uri = await Dialogs.text("Add sticker pack", "Paste a Signal sticker-pack link (https://signal.art/addstickers/#…):")?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !uri.isEmpty else { return }
+        guard StickerPack.isValidPackUrl(uri) else {
+            stickerStatus = ("Enter a valid Signal sticker-pack link.", true)
+            return
+        }
+        guard connected else {
+            stickerStatus = ("Connect to Signal before installing a sticker pack.", true)
+            return
+        }
+        stickerStatus = ("Adding sticker pack …", false)
+        do {
+            try await cli.call("addStickerPack", ["uri": uri])
+            stickerPacksLoaded = false
+            loadStickerPacks()
+        } catch {
+            stickerStatus = ("Could not add sticker pack: \(error.localizedDescription)", true)
+        }
+    }
+
+    static func stickerKey(_ packId: String, _ id: Int) -> String { "\(packId):\(id)" }
+
+    /// Asks for a sticker image for the picker; at most two loads run at once (like the Qt app),
+    /// so opening a large collection does not flood signal-cli.
+    func requestStickerImage(_ packId: String, _ id: Int) {
+        let k = AppModel.stickerKey(packId, id)
+        guard stickerImages[k] == nil, !stickerRequested.contains(k) else { return }
+        stickerRequested.insert(k)
+        stickerQueue.append((packId, id))
+        pumpStickerQueue()
+    }
+
+    private func pumpStickerQueue() {
+        while stickerLoadsInFlight < 2, !stickerQueue.isEmpty {
+            let (pack, id) = stickerQueue.removeFirst()
+            stickerLoadsInFlight += 1
+            Task {
+                defer {
+                    stickerLoadsInFlight -= 1
+                    pumpStickerQueue()
+                }
+                if let data = try? await fetchSticker(pack, id) { stickerImages[AppModel.stickerKey(pack, id)] = data }
+            }
+        }
+    }
+
+    /// Sends a sticker by reference (a real Signal sticker, not an image upload), with the reply quote if any.
+    func sendSticker(packId: String, stickerId: Int) {
+        guard let key = current, let c = chats.convs[key], !packId.isEmpty, stickerId >= 0 else { return }
+        guard editKey.isEmpty else {
+            showFlash("Send a sticker after finishing the current edit.", seconds: 5)
+            return
+        }
+        guard connected else {
+            showFlash("Not connected to signal-cli.", seconds: 5)
+            return
+        }
+        let quote = replyQuote
+        // A standalone sticker message: no (even empty) message body next to the sticker reference.
+        var p: JSON = ["sticker": "\(packId):\(stickerId)"]
+        if quote.valid && !quote.authorKey.isEmpty {
+            p["quoteTimestamp"] = quote.id
+            p["quoteAuthor"] = quote.authorKey
+            p["quoteMessage"] = quote.text
+        }
+        addRecipient(&p, c)
+
+        var att = Attachment.sticker(packId: packId, stickerId: stickerId)
+        if let data = stickerImages[AppModel.stickerKey(packId, stickerId)] {
+            if let (w, h) = Media.pixelSize(data) { att.width = w; att.height = h }
+            att.thumb = Media.makeThumbnail(data)
+        }
+        var preview = Message()
+        preview.ts = nowMs()
+        while chats.findMessage(chats.convs[key]!, ts: preview.ts, authors: []) != nil { preview.ts += 1 }
+        preview.orderTs = max(preview.ts, (chats.convs[key]!.msgs.last?.sortTs ?? 0) + 1)
+        preview.outgoing = true
+        preview.authorKey = account
+        preview.expiresInSeconds = c.expirationSeconds
+        preview.quote = quote
+        preview.attachments = [att]
+
+        let pendingId = UUID().uuidString
+        var pending = PendingSend()
+        pending.conversationKey = key
+        pending.temporaryTimestamp = preview.ts
+        pending.message = preview
+        chats.pendingSends[pendingId] = pending
+        chats.convs[key]!.insertSorted(preview)
+        replyQuote = Quote()
+        stopTyping()
+        scrollToMessage(index: chats.convs[key]!.msgs.firstIndex { $0.id == preview.id } ?? 0)
+
+        Task { [p] in
+            var result: Any?
+            var err: String?
+            do { result = try await cli.call("send", p) } catch { err = error.localizedDescription }
+            guard let pendingNow = chats.pendingSends[pendingId] else { return }
+            if let err, !pendingNow.echoReceived {
+                chats.removePendingPreview(pendingNow)
+                chats.pendingSends.removeValue(forKey: pendingId)
+                showFlash("Sticker could not be sent: \(err)", seconds: 9)
+                if quote.valid {
+                    if key == current { if !replyQuote.valid { replyQuote = quote } }
+                    else if !(drafts[key]?.reply.valid ?? false) { var d = drafts[key] ?? Draft(); d.reply = quote; drafts[key] = d }
+                }
+                return
+            }
+            if pendingNow.echoReceived {
+                chats.pendingSends.removeValue(forKey: pendingId)
+            } else {
+                var ts = jsonInt64(jsonObject(result)["timestamp"])
+                if ts <= 0 { ts = nowMs() }
+                persist(chats.finalizePendingSend(pendingId, timestamp: ts))
+                listChanged()
+                if att.thumb.isEmpty { fetchThumbnails(key, ts: ts, author: account) } // picker had no image yet
+            }
         }
     }
 
@@ -1662,7 +1837,8 @@ final class AppModel {
         guard let c = chats.convs[key], let mi = chats.findMessage(c, ts: ts, authors: [author]) else { return }
         let m = c.msgs[mi]
         for (a, att) in m.attachments.enumerated() {
-            if !att.isImage || !att.thumb.isEmpty || att.id.isEmpty || att.size > Media.maxThumbSource { continue }
+            if !att.isImage || !att.thumb.isEmpty || att.size > Media.maxThumbSource { continue }
+            if att.isSticker ? !att.isValidSticker : att.id.isEmpty { continue }
             let token = "\(key)|\(ts)|\(author)|\(a)"
             if thumbPending.contains(token) { continue }
             thumbPending.insert(token)
@@ -1672,8 +1848,12 @@ final class AppModel {
                 defer { thumbPending.remove(token) }
                 let data: Data
                 do {
-                    let res = try await cli.call("getAttachment", p)
-                    data = Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
+                    if att.isSticker {
+                        data = try await fetchSticker(att.stickerPackId, att.stickerId)
+                    } else {
+                        let res = try await cli.call("getAttachment", p)
+                        data = Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
+                    }
                 } catch {
                     // signal-cli may still be downloading it: retry a few times
                     if attempt < 3 {
@@ -1698,6 +1878,7 @@ final class AppModel {
 
     func fetchAttachmentData(_ key: String, _ att: Attachment) async throws -> Data {
         if !att.path.isEmpty, let d = FileManager.default.contents(atPath: att.path) { return d }
+        if att.isValidSticker { return try await fetchSticker(att.stickerPackId, att.stickerId) }
         guard !att.id.isEmpty, let c = chats.convs[key] else { throw RpcError("The attachment is no longer available.") }
         var p: JSON = ["id": att.id]
         addRecipient(&p, c)
@@ -1705,12 +1886,12 @@ final class AppModel {
         return Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
     }
 
-    /// Animated GIFs: the stored preview is a still image, so the original is fetched on demand.
+    /// Animated GIFs and stickers: the stored preview is a still image, so the original is fetched on demand.
     func loadAnimatedGif(_ m: Message, _ i: Int) {
         guard let key = current, i < m.attachments.count else { return }
         let att = m.attachments[i]
         let token = attachmentToken(m, i)
-        guard att.isGif, att.size <= Media.maxThumbSource, animatedGifs[token] == nil, !gifPending.contains(token) else { return }
+        guard att.isGif || att.isValidSticker, att.size <= Media.maxThumbSource, animatedGifs[token] == nil, !gifPending.contains(token) else { return }
         gifPending.insert(token)
         Task {
             defer { gifPending.remove(token) }
