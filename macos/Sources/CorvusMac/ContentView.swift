@@ -26,6 +26,13 @@ struct ContentView: View {
                     if let c = model.currentConversation { ChatHeader(conversation: c) }
                 }
                 ToolbarItem(placement: .automatic) {
+                    if let c = model.currentConversation, c.isGroup {
+                        Button { model.openGroupSettings(c.key) } label: { Label("Group settings", systemImage: "person.3") }
+                            .help("Group settings")
+                            .disabled(!model.connected)
+                    }
+                }
+                ToolbarItem(placement: .automatic) {
                     Button { model.searchVisible ? model.closeSearch() : model.openSearch() } label: {
                         Label("Search", systemImage: "magnifyingglass")
                     }
@@ -40,6 +47,9 @@ struct ContentView: View {
         .background(WindowAccessor())
         .sheet(isPresented: $model.linkSheetShown) {
             LinkView(executable: model.cli.executable) { model.finishLinking($0) }
+        }
+        .sheet(item: $model.groupSheet) { sheet in
+            GroupSheetView(sheet: sheet)
         }
         .sheet(isPresented: Binding(get: { model.giphyApiKey != nil }, set: { if !$0 { model.giphyApiKey = nil } })) {
             if let key = model.giphyApiKey {
@@ -174,6 +184,7 @@ private struct Sidebar: View {
             switch key {
             case "::archived": model.showArchived = true
             case "::back": model.showArchived = false
+            case "::invitations": model.openGroupInvitations()
             default: model.openConversation(key)
             }
         })
@@ -219,7 +230,20 @@ private struct Sidebar: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .selectionDisabled()
-                } else if !archived.isEmpty && q.isEmpty {
+                } else if !model.groupInvitations.isEmpty && q.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "envelope")
+                            .font(.system(size: 15))
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(Theme.field))
+                        Text("Group invitations").fontWeight(.semibold)
+                        Spacer()
+                        Text("\(model.groupInvitations.count)").foregroundStyle(Theme.signalBlue)
+                    }
+                    .padding(.vertical, 2)
+                    .tag("::invitations")
+                }
+                if !model.showArchived && !archived.isEmpty && q.isEmpty {
                     HStack(spacing: 10) {
                         Image(systemName: "archivebox")
                             .font(.system(size: 15))
@@ -342,6 +366,11 @@ private struct ConversationMenu: View {
                 Label(c.localNickname.isEmpty ? "Set nickname …" : "Change nickname …", systemImage: "person.text.rectangle")
             }
             if !c.localNickname.isEmpty { Button("Remove nickname") { model.setNickname(c.key, "") } }
+            Divider()
+        }
+        if c.isGroup {
+            Button { model.openGroupSettings(c.key) } label: { Label("Group settings …", systemImage: "person.3") }
+                .disabled(!model.connected)
             Divider()
         }
         Button { model.setArchived(c.key, !c.archived) } label: {

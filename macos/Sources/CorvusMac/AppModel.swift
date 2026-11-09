@@ -13,6 +13,27 @@ struct Draft {
     var isEmpty: Bool { text.isEmpty && !reply.valid && files.isEmpty }
 }
 
+/// Group dialogs shown as sheets on the main window.
+enum GroupSheet: Identifiable, Equatable {
+    case create
+    case settings(groupId: String)
+    case invitations
+
+    var id: String {
+        switch self {
+        case .create: return "create"
+        case .settings(let g): return "settings:" + g
+        case .invitations: return "invitations"
+        }
+    }
+}
+
+/// A person who can be added to a group: key (number / UUID / username) and display name.
+struct GroupContact: Identifiable, Hashable {
+    var id: String
+    var name: String
+}
+
 struct UpdateHint: Equatable {
     var version: String
     var url: URL
@@ -104,6 +125,10 @@ final class AppModel {
     // profile
     var profileUsername = ""
     var profileStatus: (text: String, error: Bool)?
+
+    // groups
+    var groupSheet: GroupSheet?
+    var groupInvitations: [GroupInfo] = []  // groups we are invited to (not yet a member)
 
     // sheets
     var linkSheetShown = false
@@ -389,26 +414,7 @@ final class AppModel {
                 showFlash("Could not load contacts: \(error.localizedDescription)", seconds: 8)
             }
         }
-        Task {
-            guard let res = try? await cli.call("listGroups") else { return }
-            for gv in jsonArray(res) {
-                let g = jsonObject(gv)
-                if g["isMember"] != nil && !jsonBool(g["isMember"]) { continue }
-                let id = jsonString(g["id"])
-                if id.isEmpty { continue }
-                var title = jsonString(g["name"])
-                if title.isEmpty { title = "Group" }
-                let key = "g:" + id
-                chats.ensure(key, title: title, group: true)
-                chats.convs[key]!.title = title
-                let expiration = jsonInt(g["messageExpirationTime"])
-                if chats.convs[key]!.expirationSeconds != expiration {
-                    chats.convs[key]!.expirationSeconds = expiration
-                    persist(Records.expiration(key, expiration))
-                }
-            }
-            listChanged()
-        }
+        Task { await refreshGroups() }
     }
 
     // MARK: - Encrypted history
@@ -876,6 +882,128 @@ final class AppModel {
             return
         }
         scrollToMessage(index: i)
+    }
+
+    // MARK: - Groups
+
+    /// Reloads the groups from signal-cli: titles and timers of our groups, and open invitations.
+    func refreshGroups() async {
+        guard let res = try? await cli.call("listGroups") else { return }
+        var invitations: [GroupInfo] = []
+        for gv in jsonArray(res) {
+            let g = jsonObject(gv)
+            let info = GroupInfo.parseOne(g)
+            if !info.isMember {
+                if info.isInvitation(for: account) { invitations.append(info) }
+                continue
+            }
+            if info.id.isEmpty { continue }
+            let title = info.name.isEmpty ? "Group" : info.name
+            let key = "g:" + info.id
+            chats.ensure(key, title: title, group: true)
+            chats.convs[key]!.title = title
+            if chats.convs[key]!.expirationSeconds != info.expiration {
+                chats.convs[key]!.expirationSeconds = info.expiration
+                persist(Records.expiration(key, info.expiration))
+            }
+        }
+        for g in invitations where !groupInvitations.contains(where: { $0.id == g.id }) {
+            showFlash("You were invited to the group “\(g.name.isEmpty ? "Group" : g.name)”.", seconds: 10)
+        }
+        groupInvitations = invitations
+        listChanged()
+    }
+
+    /// One group as signal-cli knows it now.
+    func loadGroup(_ groupId: String) async throws -> GroupInfo {
+        let res = try await cli.call("listGroups", ["groupId": [groupId]])
+        guard let info = GroupInfo.find(res, id: groupId) else { throw RpcError("signal-cli does not know this group.") }
+        return info
+    }
+
+    /// "updateGroup" for an existing group (`groupId` set) or a new one; returns signal-cli's result.
+    @discardableResult
+    func updateGroup(_ groupId: String?, _ params: JSON) async throws -> Any {
+        var p = params
+        if let groupId { p["groupId"] = groupId }
+        return try await cli.call("updateGroup", p)
+    }
+
+    /// Leaves a group; `successor` names the new admin when we are the only one.
+    func quitGroup(_ groupId: String, successor: String? = nil) async throws {
+        var p: JSON = ["groupId": groupId]
+        if let successor { p["admin"] = [successor] }
+        try await cli.call("quitGroup", p)
+    }
+
+    /// People that can be added to a group: contacts plus 1:1 chats, without ourselves, by name.
+    func groupContacts() -> [GroupContact] {
+        var people: [String: String] = chats.contactNames
+        for c in chats.convs.values where !c.isGroup { people[c.key] = c.title.isEmpty ? c.key : c.title }
+        return people
+            .filter { $0.key != account && chats.resolveKey($0.key) != account }
+            .map { GroupContact(id: $0.key, name: $0.value) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// "You", the person's name, or the id.
+    func memberName(_ id: String) -> String {
+        let key = chats.resolveKey(id)
+        if !account.isEmpty && (id == account || key == account) { return "You" }
+        if let c = chats.convs[key], !c.isGroup, c.title != key { return c.title }
+        return chats.contactNames[key] ?? id
+    }
+
+    private var canTalkToCli: Bool {
+        if !connected { showFlash("Not connected to signal-cli.", seconds: 5) }
+        return connected
+    }
+
+    func newGroup() {
+        guard canTalkToCli else { return }
+        groupSheet = .create
+    }
+
+    func openGroupSettings(_ key: String) {
+        guard let c = chats.convs[key], c.isGroup, canTalkToCli else { return }
+        groupSheet = .settings(groupId: String(key.dropFirst(2)))
+    }
+
+    func openGroupInvitations() {
+        guard !groupInvitations.isEmpty, canTalkToCli else { return }
+        groupSheet = .invitations
+    }
+
+    /// After creating / joining: load the group and open its chat.
+    func showGroup(_ groupId: String) async {
+        await refreshGroups()
+        let key = "g:" + groupId
+        guard !groupId.isEmpty, chats.convs[key] != nil else { return }
+        showArchived = chats.convs[key]!.archived
+        openConversation(key)
+    }
+
+    func groupLeft(_ groupId: String) async {
+        let key = "g:" + groupId
+        showFlash("You left “\(chats.convs[key]?.title ?? "the group")”.", seconds: 8)
+        await refreshGroups()
+    }
+
+    func joinGroupByLink() async {
+        guard canTalkToCli,
+              let uri = await Dialogs.text("Join group", "Group invite link (https://signal.group/#…):")?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !uri.isEmpty else { return }
+        do {
+            let o = jsonObject(try await cli.call("joinGroup", ["uri": uri]))
+            if jsonBool(o["onlyRequested"]) {
+                showFlash("Join request sent. An admin has to approve it.", seconds: 10)
+            } else {
+                showFlash("Joined the group.", seconds: 8)
+            }
+            await showGroup(jsonString(o["groupId"]))
+        } catch {
+            await Dialogs.warn("Join group", "Could not join the group: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Receiving

@@ -549,3 +549,75 @@ final class VoiceNoteTests: XCTestCase {
         XCTAssertEqual(VoiceNote.baseName(d), "voice-message-2026-10-27-14-15-23")
     }
 }
+
+final class GroupInfoTests: XCTestCase {
+    let sample: JSON = [
+        "id": "G1", "name": "Hikers", "description": "Weekend trips", "isMember": true,
+        "messageExpirationTime": 3600,
+        "members": [["number": "+49me", "uuid": "u-me", "isAdmin": true] as JSON,
+                    ["number": "+49bob", "uuid": "u-bob", "isAdmin": false] as JSON],
+        "pendingMembers": [["uuid": "u-carol"] as JSON],
+        "requestingMembers": [["number": "+49dave"] as JSON],
+        "banned": [["number": "+49eve"] as JSON],
+        "permissionAddMember": "ONLY_ADMINS", "permissionEditDetails": "every-member",
+        "groupInviteLink": "https://signal.group/#abc",
+    ]
+
+    func testParse() {
+        let g = GroupInfo.parseOne(sample)
+        XCTAssertEqual(g.id, "G1")
+        XCTAssertEqual(g.expiration, 3600)
+        XCTAssertEqual(g.members.map(\.id), ["+49me", "+49bob"])
+        XCTAssertEqual(g.pending.map(\.id), ["u-carol"])
+        XCTAssertEqual(g.requesting.map(\.id), ["+49dave"])
+        XCTAssertEqual(g.banned.map(\.id), ["+49eve"])
+        XCTAssertEqual(g.permAddMember, .onlyAdmins)
+        XCTAssertEqual(g.permEditDetails, .everyMember)
+        XCTAssertEqual(g.permSendMessage, .everyMember) // missing = every member
+        XCTAssertTrue(g.isAdmin("u-me"))
+        XCTAssertFalse(g.isAdmin("+49bob"))
+        XCTAssertTrue(g.canAddMembers("+49me"))
+        XCTAssertFalse(g.canAddMembers("+49bob"))     // only admins
+        XCTAssertTrue(g.canEditDetails("+49bob"))
+        XCTAssertFalse(g.canEditDetails("+49stranger"))
+        XCTAssertEqual(GroupInfo.find([sample, ["id": "G2"] as JSON], id: "G2")?.id, "G2")
+        XCTAssertNil(GroupInfo.find([sample], id: "nope"))
+    }
+
+    func testOlderSignalCliListsAdminsSeparately() {
+        let g = GroupInfo.parseOne(["id": "G", "members": [["number": "+1"] as JSON, ["number": "+2"] as JSON],
+                                    "admins": [["number": "+2"] as JSON]])
+        XCTAssertEqual(g.members.filter(\.admin).map(\.id), ["+2"])
+    }
+
+    func testInvitation() {
+        var g = GroupInfo.parseOne(["id": "G", "isMember": false, "pendingMembers": [["number": "+49me"] as JSON]])
+        XCTAssertTrue(g.isInvitation(for: "+49me"))
+        XCTAssertFalse(g.isInvitation(for: "+49other"))
+        g.isTerminated = true
+        XCTAssertFalse(g.isInvitation(for: "+49me"))
+    }
+
+    func testChangesAndParams() {
+        let g = GroupInfo.parseOne(sample)
+        var e = GroupInfo.Edit()
+        e.name = "Hikers"                 // unchanged
+        e.description = "Mountains"
+        e.permAddMember = .onlyAdmins     // unchanged
+        e.permSendMessage = .onlyAdmins
+        e.linkState = .enabledWithApproval
+        let p = g.changes(e)
+        XCTAssertNil(p["name"])
+        XCTAssertEqual(jsonString(p["description"]), "Mountains")
+        XCTAssertNil(p["setPermissionAddMember"])
+        XCTAssertEqual(jsonString(p["setPermissionSendMessages"]), "only-admins")
+        XCTAssertEqual(jsonString(p["link"]), "enabled-with-approval")
+        XCTAssertTrue(g.changes(GroupInfo.Edit()).isEmpty)
+
+        let c = GroupInfo.createParams(name: "New", description: "", members: ["+1", "+2"], avatarPath: "")
+        XCTAssertEqual(jsonString(c["name"]), "New")
+        XCTAssertNil(c["description"])
+        XCTAssertEqual(c["member"] as? [String], ["+1", "+2"])
+        XCTAssertEqual(GroupInfo.memberParams("ban", ["+3"])["ban"] as? [String], ["+3"])
+    }
+}

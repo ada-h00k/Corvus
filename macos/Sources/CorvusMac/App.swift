@@ -191,6 +191,16 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("New conversation …") { Task { await model.newConversation() } }
                 .keyboardShortcut("n")
+            Button("New group …") { model.newGroup() }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(!model.connected)
+            Button("Join group via link …") { Task { await model.joinGroupByLink() } }
+                .disabled(!model.connected)
+            Button("Group settings …") { if let k = model.current { model.openGroupSettings(k) } }
+                .disabled(!model.connected || !(model.currentConversation?.isGroup ?? false))
+            Button("Group invitations …") { model.openGroupInvitations() }
+                .disabled(!model.connected || model.groupInvitations.isEmpty)
+            Divider()
             Button("Link device …") { Task { await model.linkDevice() } }
             Button("Reconnect") { model.reconnect() }
                 .keyboardShortcut("r")
