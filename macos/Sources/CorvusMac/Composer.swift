@@ -395,6 +395,19 @@ struct MessageInput: NSViewRepresentable {
             case #selector(NSResponder.moveUp(_:)):
                 if textView.string.isEmpty { return model.editLastMessage() }
                 return false
+            // Page Up / Page Down / Home / End scroll the chat while typing (the field itself is at most 6 lines).
+            case #selector(NSResponder.scrollPageUp(_:)), #selector(NSResponder.pageUp(_:)):
+                ChatScroller.shared.page(-1)
+                return true
+            case #selector(NSResponder.scrollPageDown(_:)), #selector(NSResponder.pageDown(_:)):
+                ChatScroller.shared.page(1)
+                return true
+            case #selector(NSResponder.scrollToBeginningOfDocument(_:)):
+                ChatScroller.shared.toEnd(top: true)
+                return true
+            case #selector(NSResponder.scrollToEndOfDocument(_:)):
+                ChatScroller.shared.toEnd(top: false)
+                return true
             case #selector(NSResponder.moveUpAndModifySelection(_:)):
                 // Shift+↑ selects the whole current draft.
                 if !textView.string.isEmpty {

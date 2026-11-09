@@ -98,6 +98,11 @@ final class AppModel {
     var composerCursorToEnd = 0
     private var drafts: [String: Draft] = [:]
 
+    // chat list search (⌘K) and keyboard navigation
+    var chatFilter = ""
+    var chatSearchFocusRequest = 0          // incremented to put the caret into the chat list's search field
+    @ObservationIgnored var chatSearchFocused = false
+
     // search in the current conversation
     var searchVisible = false
     var searchText = "" { didSet { updateSearch(selectFirst: true) } }
@@ -846,6 +851,47 @@ final class AppModel {
         guard historyReady, chats.hasExpiredMessages(now: now), chats.expireMessages(now: now) else { return }
         rewriteHistory("remove expired messages")
         if let key = current, chats.convs[key] != nil { updateSearch() }
+    }
+
+    // MARK: - Chat list navigation
+
+    /// The chats as the list shows them (folder, sort order, search).
+    var visibleConversations: [Conversation] {
+        chats.visibleConversations(archived: showArchived, alphabetical: appearance.sortAlphabetically, query: chatFilter)
+    }
+
+    /// ⌘1 … ⌘9
+    func openConversation(atListIndex i: Int) {
+        let list = visibleConversations
+        if i >= 0 && i < list.count { openConversation(list[i].key) }
+    }
+
+    /// ⌥⌘↑ / ⌥⌘↓: previous / next chat in the list (no wrap-around).
+    func stepConversation(_ delta: Int) {
+        let list = visibleConversations
+        let cur = current.flatMap { k in list.firstIndex { $0.key == k } }
+        guard let t = ChatState.step(current: cur, count: list.count, delta: delta) else { return }
+        openConversation(list[t].key)
+    }
+
+    /// ⌘K: into the chat list's search field; again (or Esc there): back to the message field.
+    func toggleChatSearch() {
+        if chatSearchFocused { endChatSearch() } else { chatSearchFocusRequest += 1 }
+    }
+
+    func endChatSearch() {
+        chatFilter = ""
+        chatSearchFocused = false
+        composerFocusRequest += 1
+    }
+
+    /// Return in the chat search: open the first match.
+    func openFirstChatMatch() {
+        guard let first = visibleConversations.first else { return }
+        let key = first.key
+        chatFilter = ""
+        chatSearchFocused = false
+        openConversation(key)
     }
 
     // MARK: - Search

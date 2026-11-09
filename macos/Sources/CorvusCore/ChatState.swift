@@ -352,6 +352,24 @@ public struct ChatState {
         }
     }
 
+    /// The chats shown in the list: sorted, and narrowed to `query` (title or key contains it).
+    public func visibleConversations(archived: Bool, alphabetical: Bool, query: String) -> [Conversation] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return sortedConversations(archived: archived, alphabetical: alphabetical).filter {
+            q.isEmpty || $0.title.localizedCaseInsensitiveContains(q) || $0.key.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    /// Row to switch to from `current` (nil: none) when moving `delta` (-1 up, +1 down) through `count` chats.
+    /// Does not wrap around; nil if there is nowhere to go. Without a current row the first (down) or last (up)
+    /// one is used. Same rules as the Qt app's ConversationOrder::step.
+    public static func step(current: Int?, count: Int, delta: Int) -> Int? {
+        if count <= 0 || delta == 0 { return nil }
+        guard let c = current, c >= 0, c < count else { return delta > 0 ? 0 : count - 1 }
+        let t = c + (delta > 0 ? 1 : -1)
+        return t < 0 || t >= count ? nil : t
+    }
+
     /// Names compared the way people expect: ignoring case, with the language's rules (accents, ä next to a).
     /// Identical names fall back to the key, so the order is stable.
     static func before(_ a: Conversation, _ b: Conversation, alphabetical: Bool) -> Bool {

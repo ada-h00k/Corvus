@@ -176,7 +176,7 @@ private struct WindowAccessor: NSViewRepresentable {
 
 private struct Sidebar: View {
     @Environment(AppModel.self) private var model
-    @State private var filter = ""
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         let selection = Binding<String?>(get: { model.current }, set: { key in
@@ -190,18 +190,25 @@ private struct Sidebar: View {
         })
         let archived = model.chats.convs.values.filter(\.archived)
         let archivedUnread = archived.reduce(0) { $0 + $1.unread }
-        let q = filter.trimmingCharacters(in: .whitespaces)
-        let list = model.chats.sortedConversations(archived: model.showArchived, alphabetical: model.appearance.sortAlphabetically).filter {
-            q.isEmpty || $0.title.localizedCaseInsensitiveContains(q) || $0.key.localizedCaseInsensitiveContains(q)
-        }
+        @Bindable var model = model
+        let q = model.chatFilter.trimmingCharacters(in: .whitespaces)
+        let list = model.visibleConversations
 
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search chats", text: $filter).textFieldStyle(.plain)
-                    if !filter.isEmpty {
-                        Button { filter = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    TextField("Search chats", text: $model.chatFilter)
+                        .textFieldStyle(.plain)
+                        .focused($searchFocused)
+                        .onSubmit { model.openFirstChatMatch() }
+                        .onKeyPress(.escape) {
+                            model.endChatSearch()
+                            return .handled
+                        }
+                        .help("Search chats (⌘K) · Return opens the first match · Esc goes back")
+                    if !model.chatFilter.isEmpty {
+                        Button { model.chatFilter = "" } label: { Image(systemName: "xmark.circle.fill") }
                             .buttonStyle(.borderless)
                             .foregroundStyle(.secondary)
                     }
@@ -274,6 +281,8 @@ private struct Sidebar: View {
 
             ConnectionFooter()
         }
+        .onChange(of: model.chatSearchFocusRequest) { _, _ in searchFocused = true }
+        .onChange(of: searchFocused) { _, focused in model.chatSearchFocused = focused }
     }
 }
 

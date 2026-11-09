@@ -851,3 +851,30 @@ final class ChatOrderTests: XCTestCase {
         XCTAssertEqual(s.sortedConversations(archived: false, alphabetical: true).first?.key, "+3")
     }
 }
+
+final class ChatNavigationTests: XCTestCase {
+    func testStep() {
+        XCTAssertEqual(ChatState.step(current: nil, count: 3, delta: 1), 0)   // nothing selected: first
+        XCTAssertEqual(ChatState.step(current: nil, count: 3, delta: -1), 2)  // … or last
+        XCTAssertEqual(ChatState.step(current: 0, count: 3, delta: 1), 1)
+        XCTAssertEqual(ChatState.step(current: 2, count: 3, delta: -1), 1)
+        XCTAssertNil(ChatState.step(current: 2, count: 3, delta: 1))          // no wrap-around
+        XCTAssertNil(ChatState.step(current: 0, count: 3, delta: -1))
+        XCTAssertNil(ChatState.step(current: 0, count: 0, delta: 1))
+        XCTAssertEqual(ChatState.step(current: 7, count: 3, delta: 1), 0)     // stale index: like none
+    }
+
+    func testVisibleConversationsFilter() {
+        var s = ChatState()
+        for (k, t, o) in [("+1", "Zoe", Int64(3)), ("+2", "anna", 2), ("+493", "Annika", 1)] {
+            var c = Conversation(key: k, title: t)
+            var m = Message()
+            m.orderTs = o
+            c.msgs = [m]
+            s.convs[k] = c
+        }
+        XCTAssertEqual(s.visibleConversations(archived: false, alphabetical: false, query: "").map(\.key), ["+1", "+2", "+493"])
+        XCTAssertEqual(s.visibleConversations(archived: false, alphabetical: true, query: " ann ").map(\.key), ["+2", "+493"])
+        XCTAssertEqual(s.visibleConversations(archived: false, alphabetical: false, query: "+49").map(\.key), ["+493"]) // by number too
+    }
+}

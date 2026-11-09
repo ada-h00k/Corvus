@@ -211,12 +211,17 @@ struct AppCommands: Commands {
                 .disabled(model.current == nil)
         }
         CommandMenu("Conversation") {
+            // ⌘↑ / ⌘↓ move the caret in the message field, so previous / next chat is ⌥⌘↑ / ⌥⌘↓ (as in Signal Desktop).
+            Button("Previous chat") { model.stepConversation(-1) }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            Button("Next chat") { model.stepConversation(1) }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            Button("Search chats") { model.toggleChatSearch() }
+                .keyboardShortcut("k")
+            Divider()
             ForEach(1..<10) { n in
-                Button("Conversation \(n)") {
-                    let list = model.chats.sortedConversations(archived: model.showArchived, alphabetical: model.appearance.sortAlphabetically)
-                    if n - 1 < list.count { model.openConversation(list[n - 1].key) }
-                }
-                .keyboardShortcut(KeyEquivalent(Character("\(n)")))
+                Button("Conversation \(n)") { model.openConversation(atListIndex: n - 1) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(n)")))
             }
         }
         CommandGroup(after: .appSettings) {

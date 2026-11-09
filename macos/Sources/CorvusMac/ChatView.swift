@@ -145,6 +145,7 @@ private struct MessageList: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+                .background(ChatScroller.Finder())
             }
             .defaultScrollAnchor(.bottom)
             .background(model.appearance.backgroundColor)
@@ -164,6 +165,54 @@ private struct MessageList: View {
                 if let id = msgs.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
         }
+    }
+}
+
+/// Keyboard scrolling of the chat (Page Up / Page Down / Home / End) while the focus is in the message field.
+/// SwiftUI's ScrollView offers no paging, so this works on the NSScrollView underneath it.
+@MainActor
+final class ChatScroller {
+    static let shared = ChatScroller()
+    weak var scrollView: NSScrollView?
+
+    /// Placed inside the chat's ScrollView; remembers the NSScrollView around it.
+    struct Finder: NSViewRepresentable {
+        func makeNSView(context: Context) -> NSView { NSView() }
+        func updateNSView(_ v: NSView, context: Context) {
+            DispatchQueue.main.async { if let sv = v.enclosingScrollView { ChatScroller.shared.scrollView = sv } }
+        }
+    }
+
+    /// One screen up (-1) or down (+1), keeping a little of the previous screen in view.
+    func page(_ direction: Int) {
+        guard let g = geometry() else { return }
+        let step = (g.clip.bounds.height - g.insets) * 0.9 * CGFloat(direction)
+        scroll(g.clip, to: g.y + (g.flipped ? step : -step), min: g.minY, max: g.maxY)
+    }
+
+    func toEnd(top: Bool) {
+        guard let g = geometry() else { return }
+        scroll(g.clip, to: top == g.flipped ? g.minY : g.maxY, min: g.minY, max: g.maxY)
+    }
+
+    /// Scroll range of the clip view, including the toolbar's content insets (the origin may go negative).
+    private func geometry() -> (clip: NSClipView, y: CGFloat, minY: CGFloat, maxY: CGFloat, insets: CGFloat, flipped: Bool)? {
+        guard let sv = scrollView, sv.window != nil, let doc = sv.documentView else { return nil }
+        let clip = sv.contentView
+        let lead = doc.isFlipped ? sv.contentInsets.top : sv.contentInsets.bottom
+        let trail = doc.isFlipped ? sv.contentInsets.bottom : sv.contentInsets.top
+        let minY = -lead
+        let maxY = max(minY, doc.frame.height - clip.bounds.height + trail)
+        return (clip, clip.bounds.origin.y, minY, maxY, sv.contentInsets.top + sv.contentInsets.bottom, doc.isFlipped)
+    }
+
+    private func scroll(_ clip: NSClipView, to y: CGFloat, min lo: CGFloat, max hi: CGFloat) {
+        let target = NSPoint(x: clip.bounds.origin.x, y: Swift.min(Swift.max(lo, y), hi))
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            clip.animator().setBoundsOrigin(target)
+        }
+        clip.enclosingScrollView?.reflectScrolledClipView(clip)
     }
 }
 
