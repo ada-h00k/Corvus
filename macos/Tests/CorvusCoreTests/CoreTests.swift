@@ -878,3 +878,50 @@ final class ChatNavigationTests: XCTestCase {
         XCTAssertEqual(s.visibleConversations(archived: false, alphabetical: false, query: "+49").map(\.key), ["+493"]) // by number too
     }
 }
+
+final class MentionComposeTests: XCTestCase {
+    func testQuery() {
+        XCTAssertEqual(MentionCompose.query(in: "hi @an", cursor: 6)?.start, 3)
+        XCTAssertEqual(MentionCompose.query(in: "hi @an", cursor: 6)?.query, "an")
+        XCTAssertEqual(MentionCompose.query(in: "@", cursor: 1)?.query, "")         // just typed "@": everybody
+        XCTAssertNil(MentionCompose.query(in: "mail@host", cursor: 9))              // e-mail address, not a mention
+        XCTAssertNil(MentionCompose.query(in: "a_@b", cursor: 4))
+        XCTAssertNil(MentionCompose.query(in: "@an na", cursor: 6))                 // a space ends it
+        XCTAssertNil(MentionCompose.query(in: "no at", cursor: 5))
+        XCTAssertEqual(MentionCompose.query(in: "😀 @x", cursor: 5)?.start, 3)      // UTF-16 offsets
+        XCTAssertNil(MentionCompose.query(in: "@" + String(repeating: "a", count: 49), cursor: 50))
+    }
+
+    func testAdjust() {
+        let m = ComposerMention(start: 4, length: 5, id: "+1", name: "Alice") // "hi @Alice …"
+        // typing in front (also right before the "@") moves it
+        XCTAssertEqual(MentionCompose.adjust([m], editing: NSRange(location: 0, length: 0), replacementLength: 2).first?.start, 6)
+        XCTAssertEqual(MentionCompose.adjust([m], editing: NSRange(location: 3, length: 0), replacementLength: 1).first?.start, 5)
+        // typing after it leaves it alone
+        XCTAssertEqual(MentionCompose.adjust([m], editing: NSRange(location: 9, length: 0), replacementLength: 3), [m])
+        // touching the name or its "@" makes it plain text
+        XCTAssertTrue(MentionCompose.adjust([m], editing: NSRange(location: 6, length: 1), replacementLength: 0).isEmpty)
+        XCTAssertTrue(MentionCompose.adjust([m], editing: NSRange(location: 3, length: 1), replacementLength: 0).isEmpty)
+    }
+
+    func testPrepareLikeQt() {
+        // "  Hi @Alice and @Bob!  " -> "Hi Alice and Bob!" with the names at their new places
+        let raw = "  Hi @Alice and @Bob!  "
+        let mentions = [ComposerMention(start: 6, length: 5, id: "+1", name: "Alice"),
+                        ComposerMention(start: 17, length: 3, id: "u-2", name: "Bob")]
+        let p = MentionCompose.prepare(raw, mentions: mentions)
+        XCTAssertEqual(p.text, "Hi Alice and Bob!")
+        XCTAssertEqual(MentionCompose.cliArguments(p.mentions), ["3:5:+1", "13:3:u-2"])
+
+        // A mention whose text was changed in the meantime is sent as plain text.
+        let stale = MentionCompose.prepare("Hi @Alicia", mentions: [ComposerMention(start: 4, length: 5, id: "+1", name: "Alice")])
+        XCTAssertEqual(stale.text, "Hi @Alicia")
+        XCTAssertTrue(stale.mentions.isEmpty)
+
+        // Emoji before a mention: offsets stay in UTF-16 units.
+        let emoji = MentionCompose.prepare("😀 @Bo", mentions: [ComposerMention(start: 4, length: 2, id: "+2", name: "Bo")])
+        XCTAssertEqual(emoji.text, "😀 Bo")
+        XCTAssertEqual(MentionCompose.cliArguments(emoji.mentions), ["3:2:+2"])
+        XCTAssertEqual(MentionCompose.prepare("   ", mentions: []).text, "")
+    }
+}

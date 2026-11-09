@@ -10,6 +10,7 @@ struct Draft {
     var reply = Quote()
     var files: [String] = []
     var gifAnalyticsUrl: URL?
+    var mentions: [ComposerMention] = []
     var isEmpty: Bool { text.isEmpty && !reply.valid && files.isEmpty }
 }
 
@@ -97,6 +98,13 @@ final class AppModel {
     @ObservationIgnored private let recorder = VoiceRecorder()
     var composerCursorToEnd = 0
     private var drafts: [String: Draft] = [:]
+
+    // @mentions in the message field (groups)
+    var mentionSuggestions: [GroupContact] = []
+    var mentionSelection = 0
+    @ObservationIgnored var mentionTrigger: (start: Int, end: Int)?  // "@query" being replaced (UTF-16)
+    @ObservationIgnored var composerMentions: [ComposerMention] = []  // kept up to date by the message field
+    @ObservationIgnored private var groupMembers: [String: [String]] = [:] // "g:<id>" -> member keys (without us)
 
     // chat list search (⌘K) and keyboard navigation
     var chatFilter = ""
@@ -802,13 +810,16 @@ final class AppModel {
 
     private func saveDraft() {
         guard let key = current else { return }
-        let d = Draft(text: composerText, reply: replyQuote, files: pendingFiles, gifAnalyticsUrl: pendingGifAnalyticsUrl)
+        let d = Draft(text: composerText, reply: replyQuote, files: pendingFiles, gifAnalyticsUrl: pendingGifAnalyticsUrl,
+                      mentions: MentionCompose.valid(composerMentions, in: composerText))
         if d.isEmpty { drafts.removeValue(forKey: key) } else { drafts[key] = d }
     }
 
     private func loadDraft(_ key: String) {
         let d = drafts.removeValue(forKey: key) ?? Draft() // the composer owns it while the chat is open
         composerText = d.text
+        composerMentions = d.mentions
+        hideMentionSuggestions()
         replyQuote = d.reply
         pendingFiles = d.files
         pendingGifAnalyticsUrl = d.gifAnalyticsUrl
@@ -851,6 +862,62 @@ final class AppModel {
         guard historyReady, chats.hasExpiredMessages(now: now), chats.expireMessages(now: now) else { return }
         rewriteHistory("remove expired messages")
         if let key = current, chats.convs[key] != nil { updateSearch() }
+    }
+
+    // MARK: - @mentions
+
+    /// How a mentioned person is written ("@Name"): the same for sent and received mentions, so our own message
+    /// reads the same before and after signal-cli echoes it. "" if nothing better than the id is known.
+    func mentionName(_ id: String) -> String {
+        let key = chats.resolveKey(id)
+        if key.isEmpty { return "" }
+        if let c = chats.convs[key], !c.isGroup, c.title != key { return c.title }
+        if let n = chats.contactNames[key], !n.isEmpty { return n }
+        return displayName(key) == key ? "" : displayName(key)
+    }
+
+    /// Follows the caret in the message field: suggests group members while an "@query" is being typed
+    /// (only in groups, not while editing). Same rules as the Qt app.
+    func updateMentionSuggestions(text: String, cursor: Int) {
+        guard let key = current, let c = chats.convs[key], c.isGroup, editKey.isEmpty, connected,
+              let (start, query) = MentionCompose.query(in: text, cursor: cursor),
+              !composerMentions.contains(where: { $0.start - 1 == start }) // the caret is in a finished mention
+        else {
+            hideMentionSuggestions()
+            return
+        }
+        var found: [GroupContact] = []
+        for id in groupMembers[key] ?? [] {
+            var name = mentionName(id).trimmingCharacters(in: .whitespaces)
+            if name.isEmpty { name = id }
+            if !query.isEmpty && !name.localizedCaseInsensitiveContains(query) && !id.localizedCaseInsensitiveContains(query) {
+                continue
+            }
+            found.append(GroupContact(id: id, name: name))
+        }
+        found.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        found = Array(found.prefix(8))
+        guard !found.isEmpty else {
+            hideMentionSuggestions()
+            return
+        }
+        mentionTrigger = (start, cursor)
+        if found != mentionSuggestions {
+            mentionSuggestions = found
+            mentionSelection = 0
+        }
+    }
+
+    func hideMentionSuggestions() {
+        mentionTrigger = nil
+        if !mentionSuggestions.isEmpty { mentionSuggestions = [] }
+        mentionSelection = 0
+    }
+
+    func moveMentionSelection(_ delta: Int) {
+        let n = mentionSuggestions.count
+        guard n > 0 else { return }
+        mentionSelection = (mentionSelection + (delta > 0 ? 1 : n - 1)) % n
     }
 
     // MARK: - Chat list navigation
@@ -973,6 +1040,12 @@ final class AppModel {
             if info.id.isEmpty { continue }
             let title = info.name.isEmpty ? "Group" : info.name
             let key = "g:" + info.id
+            var members: [String] = []
+            for m in info.members where !m.isPerson(account) {
+                let k = chats.resolveKey(m.id)
+                if !k.isEmpty && k != account && !members.contains(k) { members.append(k) }
+            }
+            groupMembers[key] = members
             chats.ensure(key, title: title, group: true)
             chats.convs[key]!.title = title
             if chats.convs[key]!.expirationSeconds != info.expiration {
@@ -1086,8 +1159,7 @@ final class AppModel {
         if pe.kind == .none { return }
         if !pe.mentions.isEmpty {
             pe.msg.text = applyMentions(pe.msg.text, pe.mentions) { m in
-                let key = chats.resolveKey(m.number.isEmpty ? m.uuid : m.number)
-                let n = key.isEmpty ? "" : displayName(key)
+                let n = mentionName(m.number.isEmpty ? m.uuid : m.number)
                 return n.isEmpty ? (m.name.isEmpty ? m.number : m.name) : n
             }
         }
@@ -1352,7 +1424,12 @@ final class AppModel {
         stopTyping()
 
         var p: JSON = [:]
-        if !text.isEmpty { p["message"] = text }
+        if !text.isEmpty {
+            // @mentions: signal-cli gets the text without the "@" in front of each name, plus their positions.
+            let prepared = c.isGroup ? MentionCompose.prepare(composerText, mentions: composerMentions) : (text: text, mentions: [ComposerMention]())
+            p["message"] = prepared.text
+            if !prepared.mentions.isEmpty { p["mention"] = MentionCompose.cliArguments(prepared.mentions) }
+        }
         var atts: [Attachment] = []
         for f in files {
             var a = Attachment()
@@ -1416,6 +1493,8 @@ final class AppModel {
         chats.convs[key]!.insertSorted(preview)
 
         composerText = ""
+        composerMentions = []
+        hideMentionSuggestions()
         dismissedPreviewUrl = ""
         pendingFiles = []
         replyQuote = Quote()

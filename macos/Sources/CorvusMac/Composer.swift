@@ -20,6 +20,9 @@ struct ComposerArea: View {
                              title: "Replying to \(model.displayName(model.replyQuote.authorKey))",
                              text: replyText, accent: Theme.senderColor(model.replyQuote.authorKey)) { model.replyQuote = Quote() }
             }
+            if !model.mentionSuggestions.isEmpty {
+                MentionSuggestions()
+            }
             if model.draftLinkPreview.isValid && model.editKey.isEmpty {
                 LinkPreviewDraftCard(preview: model.draftLinkPreview) { model.dismissLinkPreview() }
             }
@@ -131,6 +134,50 @@ private struct ComposerCard: View {
         .padding(8)
         .frame(height: 48)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.field))
+    }
+}
+
+/// Group members matching the "@query" being typed; ↑ ↓ Return / Tab, or a click, take one.
+private struct MentionSuggestions: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let list = model.mentionSuggestions
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(list.enumerated()), id: \.element.id) { i, who in
+                        HStack(spacing: 10) {
+                            if let c = model.chats.convs[who.id] {
+                                AvatarView(image: model.avatarImage(c), size: 26)
+                            } else {
+                                AvatarView(image: Media.placeholderAvatar(key: who.id, title: who.name), size: 26)
+                            }
+                            Text(who.name).lineLimit(1)
+                            if who.name != who.id {
+                                Text(who.id).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(i == model.mentionSelection ? Theme.signalBlue.opacity(0.18) : .clear))
+                        .contentShape(Rectangle())
+                        .onTapGesture { NotificationCenter.default.post(name: MessageInput.acceptMention, object: i) }
+                        .id(who.id)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(i == model.mentionSelection ? [.isButton, .isSelected] : .isButton)
+                    }
+                }
+                .padding(4)
+            }
+            .frame(height: CGFloat(min(list.count, 5)) * 36 + 8)
+            .onChange(of: model.mentionSelection) { _, i in
+                if i < list.count { proxy.scrollTo(list[i].id) }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.field))
+        .accessibilityLabel("Mention suggestions")
     }
 }
 
@@ -258,6 +305,7 @@ private struct AttachmentTray: View {
 /// edits the last message, Esc cancels an edit, and pasting a screenshot or files attaches them.
 struct MessageInput: NSViewRepresentable {
     static let insertText = Notification.Name("MessageInput.insertText")
+    static let acceptMention = Notification.Name("MessageInput.acceptMention") // object: index into the suggestions
 
     static let spellCheckKey = "composer.spellCheck"
 
@@ -306,6 +354,9 @@ struct MessageInput: NSViewRepresentable {
         guard let tv = c.textView else { return }
         if tv.string != text {
             tv.string = text
+            // Replaced from outside (sent, chat switched, draft restored): keep only mentions that still stand.
+            model.composerMentions = MentionCompose.valid(model.composerMentions, in: text)
+            c.highlightMentions()
             tv.needsDisplay = true
         }
         tv.isEditable = model.connected
@@ -335,6 +386,7 @@ struct MessageInput: NSViewRepresentable {
         var cursorRequest = 0
         private var heightConstraint: NSLayoutConstraint?
         private var observer: NSObjectProtocol?
+        private var mentionObserver: NSObjectProtocol?
 
         init(_ parent: MessageInput) {
             self.parent = parent
@@ -349,6 +401,65 @@ struct MessageInput: NSViewRepresentable {
                     tv.window?.makeFirstResponder(tv)
                 }
             }
+            mentionObserver = NotificationCenter.default.addObserver(forName: MessageInput.acceptMention, object: nil, queue: .main) { [weak self] n in
+                MainActor.assumeIsolated {
+                    guard let self, let i = n.object as? Int else { return }
+                    self.acceptMention(i)
+                    self.textView?.window?.makeFirstResponder(self.textView)
+                }
+            }
+        }
+
+        // MARK: @mentions
+
+        /// Mentions move with the text in front of them; one that an edit touches becomes plain text.
+        func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+            let model = parent.model
+            if !model.composerMentions.isEmpty {
+                model.composerMentions = MentionCompose.adjust(model.composerMentions, editing: range,
+                                                               replacementLength: ((replacementString ?? "") as NSString).length)
+            }
+            return true
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = textView, !tv.hasMarkedText() else { return }
+            let sel = tv.selectedRange()
+            if sel.length == 0 { parent.model.updateMentionSuggestions(text: tv.string, cursor: sel.location) }
+            else { parent.model.hideMentionSuggestions() }
+        }
+
+        /// Replaces the "@query" with "@Name " and remembers the mention.
+        func acceptMention(_ index: Int) {
+            let model = parent.model
+            guard let tv = textView, let trig = model.mentionTrigger, index >= 0, index < model.mentionSuggestions.count else {
+                model.hideMentionSuggestions()
+                return
+            }
+            let who = model.mentionSuggestions[index]
+            let s = tv.string as NSString
+            guard trig.start >= 0, trig.end <= s.length, trig.end >= trig.start else { return model.hideMentionSuggestions() }
+            let range = NSRange(location: trig.start, length: trig.end - trig.start)
+            let next = trig.end < s.length ? s.substring(with: NSRange(location: trig.end, length: 1)) : ""
+            let insert = "@" + who.name + (next.isEmpty || next.rangeOfCharacter(from: .whitespacesAndNewlines) == nil ? " " : "")
+            model.hideMentionSuggestions()
+            guard tv.shouldChangeText(in: range, replacementString: insert) else { return } // also moves later mentions
+            model.composerMentions.append(ComposerMention(start: trig.start + 1, length: (who.name as NSString).length,
+                                                          id: who.id, name: who.name))
+            tv.textStorage?.replaceCharacters(in: range, with: NSAttributedString(string: insert, attributes: tv.typingAttributes))
+            tv.setSelectedRange(NSRange(location: trig.start + (insert as NSString).length, length: 0))
+            tv.didChangeText()
+        }
+
+        /// Mentions in link colour (temporary attributes: the field stays plain text).
+        func highlightMentions() {
+            guard let tv = textView, let lm = tv.layoutManager else { return }
+            let full = NSRange(location: 0, length: (tv.string as NSString).length)
+            lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: full)
+            for m in MentionCompose.valid(parent.model.composerMentions, in: tv.string) {
+                lm.addTemporaryAttribute(.foregroundColor, value: NSColor.linkColor,
+                                         forCharacterRange: NSRange(location: m.start - 1, length: m.length + 1))
+            }
         }
 
         func textDidChange(_ notification: Notification) {
@@ -357,6 +468,9 @@ struct MessageInput: NSViewRepresentable {
                 parent.text = tv.string
                 parent.onUserEdit?()
             }
+            highlightMentions()
+            let sel = tv.selectedRange()
+            if sel.length == 0 && !tv.hasMarkedText() { parent.model.updateMentionSuggestions(text: tv.string, cursor: sel.location) }
             updateHeight()
         }
 
@@ -378,6 +492,18 @@ struct MessageInput: NSViewRepresentable {
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             let model = parent.model
             let flags = NSApp.currentEvent?.modifierFlags ?? []
+            // While the @mention suggestions are open: ↑ ↓ choose, Return / Tab take, Esc closes (as in the Qt app).
+            if !model.mentionSuggestions.isEmpty {
+                switch selector {
+                case #selector(NSResponder.moveUp(_:)): model.moveMentionSelection(-1); return true
+                case #selector(NSResponder.moveDown(_:)): model.moveMentionSelection(1); return true
+                case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+                    acceptMention(model.mentionSelection)
+                    return true
+                case #selector(NSResponder.cancelOperation(_:)): model.hideMentionSuggestions(); return true
+                default: break
+                }
+            }
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
                 if flags.contains(.shift) || flags.contains(.option) {
