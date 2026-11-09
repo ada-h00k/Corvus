@@ -1,6 +1,50 @@
 import Foundation
 
-/// Result of a one-shot signal-cli call.
+/// Which Signal backend runs, from its `--version` line. corvus-cli (recommended) and signal-cli
+/// speak the same JSON-RPC; feature checks always use the signal-cli version it is compatible with.
+///   signal-cli:  "signal-cli 0.14.9"
+///   corvus-cli:  "corvus-cli 0.1.0 [(<commit>)] compatible with signal-cli 0.14.9"
+public struct BackendInfo: Equatable, Sendable {
+    public var name = "signal-cli"   // "corvus-cli" | "signal-cli"
+    public var version = ""          // the backend's own version
+    public var build = ""            // corvus-cli: commit it was built from (lowercase), if reported
+    public var signalVersion = ""    // signal-cli version (the same as `version` for signal-cli)
+
+    public init(name: String = "signal-cli", version: String = "", build: String = "", signalVersion: String = "") {
+        self.name = name
+        self.version = version
+        self.build = build
+        self.signalVersion = signalVersion
+    }
+
+    public var isCorvusCli: Bool { name == "corvus-cli" }
+
+    public static func parse(versionLine: String) -> BackendInfo {
+        let line = versionLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let re = try! NSRegularExpression(
+            pattern: #"^corvus-cli\s+(\S+)(?:\s+\(([0-9a-fA-F]{7,40})\))?\s+compatible with signal-cli\s+(\S+)"#)
+        if let m = re.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {
+            func group(_ i: Int) -> String { Range(m.range(at: i), in: line).map { String(line[$0]) } ?? "" }
+            return BackendInfo(name: "corvus-cli", version: group(1), build: group(2).lowercased(), signalVersion: group(3))
+        }
+        let v = line.split(separator: " ").last.map(String.init) ?? line
+        return BackendInfo(name: "signal-cli", version: v, signalVersion: v)
+    }
+
+    /// "corvus-cli 0.1.0 (2ab8c86)" / "signal-cli 0.14.9"
+    public var description: String {
+        var d = "\(name) \(version)"
+        if !build.isEmpty { d += " (\(build.prefix(7)))" }
+        return d
+    }
+
+    /// The backend an executable most likely is, before its version is known.
+    public static func name(forExecutable path: String) -> String {
+        (path as NSString).lastPathComponent.lowercased().contains("corvus-cli") ? "corvus-cli" : "signal-cli"
+    }
+}
+
+/// Result of a one-shot backend call.
 public struct CliResult: Sendable {
     public var ok = false          // started, exited normally with code 0
     public var timedOut = false
@@ -9,6 +53,7 @@ public struct CliResult: Sendable {
     public var err = ""
     public var startError = ""     // set when the process could not be started at all
     public var command = ""        // for diagnostics
+    public var backend = "signal-cli" // name used in messages ("corvus-cli" / "signal-cli")
     public var ms: Int64 = 0
 
     public init() {}
@@ -16,9 +61,9 @@ public struct CliResult: Sendable {
     /// Human-readable description of what went wrong ("" if ok).
     public func describe() -> String {
         if ok { return "" }
-        if !startError.isEmpty { return "signal-cli could not be started: \(startError)" }
-        if timedOut { return "signal-cli did not answer in time." }
-        var text = "signal-cli exited with code \(exitCode)."
+        if !startError.isEmpty { return "\(backend) could not be started: \(startError)" }
+        if timedOut { return "\(backend) did not answer in time." }
+        var text = "\(backend) exited with code \(exitCode)."
         let e = err.trimmingCharacters(in: .whitespacesAndNewlines)
         if !e.isEmpty { text += "\n\n" + (e.count > 700 ? String(e.prefix(700)) + "…" : e) }
         return text
@@ -31,7 +76,8 @@ public struct RpcError: Error, LocalizedError {
     public var errorDescription: String? { message }
 }
 
-/// Thin layer around the externally installed signal-cli.
+/// Thin layer around the externally installed Signal backend: corvus-cli (recommended) or signal-cli.
+/// The type keeps its old name; both programs speak the same JSON-RPC.
 /// Only the CLI program is invoked (one-shot commands and "signal-cli -a <account> jsonRpc" as a
 /// long-running process). There is no dependency on signal-cli internals, so signal-cli can be
 /// updated independently of this GUI.
@@ -57,15 +103,29 @@ public final class SignalCli {
 
     public var isRunning: Bool { proc != nil }
 
+    /// "corvus-cli" or "signal-cli", from the executable's name (for messages).
+    public var backendName: String { BackendInfo.name(forExecutable: executable) }
+
     // MARK: - Helpers
 
-    nonisolated public static func autodetect(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+    /// The usual install locations, searched after PATH: apps started from Finder get a minimal PATH without Homebrew.
+    nonisolated public static var defaultExtraDirs: [String] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return ["/opt/homebrew/bin", "/usr/local/bin", "/opt/signal-cli/bin", home + "/.local/bin", home + "/bin"]
+    }
+
+    nonisolated public static func autodetect(environment: [String: String] = ProcessInfo.processInfo.environment,
+                                              extraDirs: [String] = SignalCli.defaultExtraDirs) -> String {
+        // corvus-cli is the recommended backend and is preferred; signal-cli is the alternative. An executable
+        // chosen in the settings always wins, so this only decides for a first start. Unlike the Qt app, corvus-cli
+        // is also looked for in the extra folders: on macOS, Homebrew's folder is usually not on a Finder app's PATH.
         var dirs = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        dirs += ["/opt/homebrew/bin", "/usr/local/bin", "/opt/signal-cli/bin", home + "/.local/bin", home + "/bin"]
-        for d in dirs {
-            let p = (d as NSString).appendingPathComponent("signal-cli")
-            if FileManager.default.isExecutableFile(atPath: p) { return p }
+        dirs += extraDirs
+        for name in ["corvus-cli", "signal-cli"] {
+            for d in dirs {
+                let p = (d as NSString).appendingPathComponent(name)
+                if FileManager.default.isExecutableFile(atPath: p) { return p }
+            }
         }
         return ""
     }
@@ -135,7 +195,7 @@ public final class SignalCli {
         }
         let status = r.ok ? "ok" : !r.startError.isEmpty ? "START FAILED: " + r.startError
             : r.timedOut ? "TIMEOUT" : "exit code \(r.exitCode)"
-        var line = "signal-cli: \((exe as NSString).lastPathComponent) \(args.joined(separator: " ")) -> \(status) (\(r.ms) ms)"
+        var line = "\(BackendInfo.name(forExecutable: exe)): \((exe as NSString).lastPathComponent) \(args.joined(separator: " ")) -> \(status) (\(r.ms) ms)"
         if !r.out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { line += " | stdout: " + show(r.out) }
         if !r.err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { line += " | stderr: " + show(r.err) }
         log(line)
@@ -151,6 +211,7 @@ public final class SignalCli {
     nonisolated static func runBlocking(exe: String, args: [String], timeout: TimeInterval) -> CliResult {
         var r = CliResult()
         r.command = exe + " " + args.joined(separator: " ")
+        r.backend = BackendInfo.name(forExecutable: exe)
         let start = Date()
         let p = Process()
         configure(p, executable: exe, arguments: args)
@@ -195,7 +256,7 @@ public final class SignalCli {
         return r
     }
 
-    /// "signal-cli 0.13.12" -> (result, first output line)
+    /// "signal-cli 0.13.12" / "corvus-cli 0.1.0 (…) compatible with signal-cli 0.14.9" -> (result, first output line)
     public func queryVersion() async -> (CliResult, String) {
         let r = await run(["--version"], timeout: 60)
         let first = r.out.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? ""
@@ -277,7 +338,7 @@ public final class SignalCli {
     /// Sends a JSON-RPC request; returns its "result" or throws its error message.
     @discardableResult
     public func call(_ method: String, _ params: JSON = [:]) async throws -> Any {
-        guard proc != nil, let input = stdinPipe else { throw RpcError("signal-cli is not running") }
+        guard proc != nil, let input = stdinPipe else { throw RpcError("\(backendName) is not running") }
         let id = nextId
         nextId += 1
         var req: JSON = ["jsonrpc": "2.0", "method": method, "id": id]
@@ -320,7 +381,7 @@ public final class SignalCli {
         proc = nil
         stdinPipe = nil
         endActivity()
-        var reason = "signal-cli exited (exit code \(code))"
+        var reason = "\(backendName) exited (exit code \(code))"
         if !lastErrLine.isEmpty { reason += ": " + lastErrLine }
         failPending(reason)
         onStopped?(reason)

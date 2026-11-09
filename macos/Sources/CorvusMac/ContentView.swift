@@ -416,7 +416,7 @@ private struct ConnectionFooter: View {
             .padding(.horizontal, 12)
             if let hint = model.updateHint {
                 Link(destination: hint.url) {
-                    Label("signal-cli \(hint.version) available", systemImage: "arrow.down.circle")
+                    Label("\(hint.backend) \(hint.version) available", systemImage: "arrow.down.circle")
                 }
                 .padding(.horizontal, 12)
             }

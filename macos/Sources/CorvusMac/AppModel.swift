@@ -35,6 +35,7 @@ struct GroupContact: Identifiable, Hashable {
 }
 
 struct UpdateHint: Equatable {
+    var backend: String             // "corvus-cli" / "signal-cli"
     var version: String
     var url: URL
 }
@@ -53,7 +54,8 @@ final class AppModel {
     var statusText = "Not connected"
     var flash: String?              // transient status bar message
     var updateHint: UpdateHint?
-    var version = ""                // e.g. "0.13.12"
+    var version = ""                // signal-cli version (for corvus-cli: the one it is compatible with); feature checks use it
+    var backend = BackendInfo()     // which backend runs: corvus-cli (recommended) or signal-cli
     var historyProtectionMode = ""  // "keychain" | "passphrase"
     var historyReady = false
 
@@ -228,19 +230,24 @@ final class AppModel {
         flash = nil
     }
 
-    // MARK: - signal-cli
+    // MARK: - Signal backend (corvus-cli / signal-cli)
+
+    /// "corvus-cli" or "signal-cli": the connected backend, else what the chosen executable looks like.
+    var backendName: String { backend.version.isEmpty ? cli.backendName : backend.name }
 
     func ensureExecutable() async -> Bool {
         var exe = UserDefaults.standard.string(forKey: "executable") ?? ""
         if exe.isEmpty || !FileManager.default.fileExists(atPath: exe) { exe = SignalCli.autodetect() }
         while exe.isEmpty {
-            let r = await Dialogs.ask("signal-cli not found",
-                                      "signal-cli is not installed or not in PATH.\n\nThis app requires a separately installed signal-cli "
-                                          + "(for example: brew install signal-cli).",
-                                      buttons: ["Choose path …", "Open download page", "Close"], style: .warning)
+            let r = await Dialogs.ask("Signal backend not found",
+                                      "Neither corvus-cli nor signal-cli was found.\n\nThis app needs a separately installed backend. "
+                                          + "corvus-cli is recommended:\n\nbrew tap ada-h00k/corvus\nbrew install --cask corvus-cli\n\n"
+                                          + "signal-cli works as well.",
+                                      buttons: ["Choose path …", "Get corvus-cli", "Get signal-cli", "Close"], style: .warning)
             switch r {
             case 0: exe = pickExecutable() ?? ""
-            case 1: NSWorkspace.shared.open(URL(string: "https://github.com/AsamK/signal-cli/releases")!)
+            case 1: NSWorkspace.shared.open(URL(string: "https://github.com/ada-h00k/corvus-cli/releases/latest")!)
+            case 2: NSWorkspace.shared.open(URL(string: "https://github.com/AsamK/signal-cli/releases")!)
             default: return false
             }
         }
@@ -251,7 +258,7 @@ final class AppModel {
 
     private func pickExecutable() -> String? {
         let panel = NSOpenPanel()
-        panel.title = "Select signal-cli"
+        panel.title = "Select corvus-cli or signal-cli"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.treatsFilePackagesAsDirectories = true
@@ -286,10 +293,11 @@ final class AppModel {
         let (vr, versionLine) = await cli.queryVersion()
         guard gen == connectGen else { return }
         if !vr.ok {
-            await showCliProblem("signal-cli could not be run.", vr)
+            await showCliProblem("\(cli.backendName) could not be run.", vr)
             return
         }
-        version = versionLine.split(separator: " ").last.map(String.init) ?? versionLine
+        backend = BackendInfo.parse(versionLine: versionLine)
+        version = backend.signalVersion
 
         let (ar, accounts) = await cli.queryAccounts()
         guard gen == connectGen else { return }
@@ -300,7 +308,7 @@ final class AppModel {
         }
         if accounts.isEmpty {
             setConnected(false, info: "no account linked")
-            if await Dialogs.confirm("No account", "signal-cli reports that no account is set up yet.\nLink this device with your phone now?",
+            if await Dialogs.confirm("No account", "\(backendName) reports that no account is set up yet.\nLink this device with your phone now?",
                                      ok: "Link device …"), gen == connectGen {
                 await linkDevice()
             }
@@ -334,8 +342,8 @@ final class AppModel {
         setConnected(false, info: title)
         let info = r.describe() + "\n\nCommand: " + SignalCli.maskNumbers(r.command)
             + "\n\nThis does not mean that no account is linked. Check that the command works in a terminal "
-            + "(the non-native signal-cli build needs Java)."
-        switch await Dialogs.ask(title, info, buttons: ["Retry", "Choose signal-cli …", "Close"], style: .warning) {
+            + "(the non-native signal-cli build needs Java; corvus-cli does not)."
+        switch await Dialogs.ask(title, info, buttons: ["Retry", "Choose backend …", "Close"], style: .warning) {
         case 0: await connectAccount()
         case 1: chooseExecutable()
         default: break
@@ -345,7 +353,7 @@ final class AppModel {
     func setConnected(_ on: Bool, info: String = "") {
         connected = on
         if on {
-            statusText = "Connected · signal-cli \(version)"
+            statusText = "Connected · \(backend.description)"
         } else {
             statusText = info.isEmpty ? "Not connected" : "Disconnected: \(info)"
         }
@@ -928,7 +936,7 @@ final class AppModel {
     /// One group as signal-cli knows it now.
     func loadGroup(_ groupId: String) async throws -> GroupInfo {
         let res = try await cli.call("listGroups", ["groupId": [groupId]])
-        guard let info = GroupInfo.find(res, id: groupId) else { throw RpcError("signal-cli does not know this group.") }
+        guard let info = GroupInfo.find(res, id: groupId) else { throw RpcError("\(backendName) does not know this group.") }
         return info
     }
 
@@ -966,7 +974,7 @@ final class AppModel {
     }
 
     private var canTalkToCli: Bool {
-        if !connected { showFlash("Not connected to signal-cli.", seconds: 5) }
+        if !connected { showFlash("Not connected to \(backendName).", seconds: 5) }
         return connected
     }
 
@@ -1269,7 +1277,7 @@ final class AppModel {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let key = current, let c = chats.convs[key], !(text.isEmpty && pendingFiles.isEmpty) else { return }
         guard connected else {
-            showFlash("Not connected to signal-cli.", seconds: 5)
+            showFlash("Not connected to \(backendName).", seconds: 5)
             return
         }
         let files = pendingFiles, quote = replyQuote, gifAnalytics = pendingGifAnalyticsUrl
@@ -1477,7 +1485,7 @@ final class AppModel {
             return
         }
         guard connected else {
-            showFlash("Not connected to signal-cli.", seconds: 5)
+            showFlash("Not connected to \(backendName).", seconds: 5)
             return
         }
         let quote = replyQuote
@@ -2205,7 +2213,7 @@ final class AppModel {
     }
 
     func applySignalUsername(_ username: String) {
-        guard connected else { return reportProfileStatus("Connect to signal-cli before editing your profile.", error: true) }
+        guard connected else { return reportProfileStatus("Connect to \(backendName) before editing your profile.", error: true) }
         Task {
             do {
                 let res = try await cli.call("updateAccount", ["username": username, "deleteUsername": false])
@@ -2219,7 +2227,7 @@ final class AppModel {
     }
 
     func sendProfileUpdate(_ params: JSON, success: String) {
-        guard connected else { return reportProfileStatus("Connect to signal-cli before editing your profile.", error: true) }
+        guard connected else { return reportProfileStatus("Connect to \(backendName) before editing your profile.", error: true) }
         Task {
             do {
                 try await cli.call("updateProfile", params)
@@ -2319,43 +2327,82 @@ final class AppModel {
         return .orderedSame
     }
 
+    private func github(_ path: String) async throws -> JSON {
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/" + path)!)
+        req.setValue("corvus", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let code = (resp as? HTTPURLResponse)?.statusCode, code != 200 { throw RpcError("GitHub answered with HTTP \(code).") }
+        return (try JSONSerialization.jsonObject(with: data)) as? JSON ?? [:]
+    }
+
+    /// signal-cli publishes numbered releases ("v0.14.9"). corvus-cli publishes one release per commit
+    /// (tag "commit-<sha>"), so it is compared by commit: the installed build reports its commit in --version,
+    /// and GitHub's compare API says whether the latest build is ahead of it. (Same as the Qt app.)
     func checkForUpdates(silent: Bool) {
+        let info = backend
+        let name = info.name
+        let corvus = info.isCorvusCli
+        let repo = corvus ? "ada-h00k/corvus-cli" : "AsamK/signal-cli"
         Task {
-            var req = URLRequest(url: URL(string: "https://api.github.com/repos/AsamK/signal-cli/releases/latest")!)
-            req.setValue("corvus", forHTTPHeaderField: "User-Agent")
-            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            let o: JSON
+            if info.version.isEmpty {
+                if !silent { await Dialogs.info("Update check", "The installed backend version is not known yet. Connect first.") }
+                return
+            }
+            var newer = false, unknown = false
+            var latest = "", url = URL(string: "https://github.com/\(repo)/releases/latest")!
             do {
-                let (data, _) = try await URLSession.shared.data(for: req)
-                o = (try JSONSerialization.jsonObject(with: data)) as? JSON ?? [:]
+                let o = try await github(repo + "/releases/latest")
+                latest = jsonString(o["tag_name"])
+                if let u = URL(string: jsonString(o["html_url"])) { url = u }
+                if !corvus {
+                    if latest.hasPrefix("v") { latest.removeFirst() }
+                    newer = !latest.isEmpty && AppModel.compareVersions(latest, info.version) == .orderedDescending
+                } else {
+                    if latest.hasPrefix("commit-") { latest.removeFirst(7) }
+                    let sha = latest.lowercased()
+                    latest = "(\(sha.prefix(7)))"
+                    if info.build.isEmpty {
+                        unknown = true
+                    } else if !(sha.hasPrefix(info.build) || info.build.hasPrefix(sha)) {
+                        // Is the latest build ahead of the installed one? (It may also be older or on another branch.)
+                        newer = jsonString(try await github(repo + "/compare/\(info.build)...\(sha)")["status"]) == "ahead"
+                    }
+                }
             } catch {
                 if !silent { await Dialogs.warn("Update check", "Could not reach GitHub:\n\(error.localizedDescription)") }
                 return
             }
-            var latest = jsonString(o["tag_name"])
-            if latest.hasPrefix("v") { latest.removeFirst() }
-            let url = URL(string: jsonString(o["html_url"])) ?? URL(string: "https://github.com/AsamK/signal-cli/releases")!
-            let newer = !latest.isEmpty && AppModel.compareVersions(latest, version) == .orderedDescending
-            updateHint = newer ? UpdateHint(version: latest, url: url) : nil
+            updateHint = newer ? UpdateHint(backend: name, version: latest, url: url) : nil
             if silent { return }
+            let installed = info.description
             if newer {
+                let how = corvus
+                    ? "Update corvus-cli the way you installed it (e.g. brew upgrade --cask corvus-cli) or download it from the release page. "
+                    : "Update signal-cli the way you usually do (e.g. brew upgrade signal-cli) – this app does not need to be changed for that. "
                 let r = await Dialogs.ask("Update available",
-                                          "Installed: signal-cli \(version)\nLatest version: signal-cli \(latest)\n\nUpdate signal-cli the way you "
-                                              + "usually do (e.g. brew upgrade signal-cli) – this app does not need to be changed for that. "
-                                              + "Afterwards choose “File → Reconnect”.",
+                                          "Installed: \(installed)\nLatest version: \(name) \(latest)\n\n\(how)Afterwards choose “File → Reconnect”.",
+                                          buttons: ["Open release page", "Close"])
+                if r == 0 { NSWorkspace.shared.open(url) }
+            } else if unknown {
+                let r = await Dialogs.ask("Update check",
+                                          "Installed: \(installed)\nLatest build: \(name) \(latest)\n\nThis corvus-cli does not report which build "
+                                              + "it is, so Corvus cannot tell whether it is up to date. Builds that do report it are compared automatically.",
                                           buttons: ["Open release page", "Close"])
                 if r == 0 { NSWorkspace.shared.open(url) }
             } else {
-                await Dialogs.info("Update check", version.isEmpty ? "The installed signal-cli version is not known yet."
-                                       : "signal-cli \(version) is up to date.")
+                await Dialogs.info("Update check", "\(installed) is up to date.")
             }
         }
     }
 
     func showAbout() {
         let credits = NSMutableAttributedString(
-            string: "Graphical front end for signal-cli.\nsignal-cli is used as a standalone program and is not part of this app.\n\n"
-                + "Path: \(cli.executable)\nVersion: \(version)\n\nChat history (encrypted): \(AppPaths.historyPath)",
+            string: "Graphical front end for a Signal backend: corvus-cli (recommended) or signal-cli.\n"
+                + "The backend is used as a standalone program and is not part of this app.\n\n"
+                + "Backend: \(backend.version.isEmpty ? backendName : backend.description)\nPath: \(cli.executable)"
+                + (backend.isCorvusCli ? "\nCompatible with signal-cli \(version)" : "")
+                + "\n\nChat history (encrypted): \(AppPaths.historyPath)",
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor])
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .applicationName: "Corvus"])
         NSApp.activate(ignoringOtherApps: true)

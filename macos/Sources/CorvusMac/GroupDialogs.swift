@@ -330,7 +330,7 @@ private struct GroupSettingsView: View {
             Picker("Invite link:", selection: Binding(get: { link }, set: { link = $0; linkTouched = true })) {
                 ForEach(GroupLinkState.allCases, id: \.self) { Text($0.label).tag($0) }
             }
-            .help("signal-cli does not report whether admin approval is required. The setting is only sent when you change it here.")
+            .help("The backend does not report whether admin approval is required. The setting is only sent when you change it here.")
             LabeledContent("") {
                 HStack {
                     Text(info.inviteLink.isEmpty ? "(no link)" : info.inviteLink)

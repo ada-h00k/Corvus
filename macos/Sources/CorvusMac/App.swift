@@ -222,10 +222,11 @@ struct AppCommands: Commands {
         CommandGroup(after: .appSettings) {
             Button("History protection …") { Task { await model.changeHistoryProtection() } }
             Button("GIPHY API key …") { Task { await model.configureGiphyApiKey() } }
-            Button("Path to signal-cli …") { model.chooseExecutable() }
+            Button("Signal backend …") { model.chooseExecutable() }
         }
         CommandGroup(replacing: .help) {
-            Button("Check for signal-cli update") { model.checkForUpdates(silent: false) }
+            Button("Check for backend update") { model.checkForUpdates(silent: false) }
+            Button("corvus-cli on GitHub") { NSWorkspace.shared.open(URL(string: "https://github.com/ada-h00k/corvus-cli")!) }
             Button("signal-cli on GitHub") { NSWorkspace.shared.open(URL(string: "https://github.com/AsamK/signal-cli")!) }
         }
     }

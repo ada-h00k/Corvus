@@ -23,16 +23,20 @@ private struct GeneralSettings: View {
 
     var body: some View {
         Form {
-            Section("signal-cli") {
+            Section("Signal backend (corvus-cli or signal-cli)") {
+                LabeledContent("Backend", value: model.backendName)
                 LabeledContent("Path") {
                     Text(model.cli.executable.isEmpty ? "not found" : model.cli.executable)
                         .textSelection(.enabled)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                LabeledContent("Version", value: model.version.isEmpty ? "–" : model.version)
+                LabeledContent("Version", value: model.backend.version.isEmpty ? "–" : model.backend.description)
+                if model.backend.isCorvusCli {
+                    LabeledContent("Compatible with", value: "signal-cli \(model.version)")
+                }
                 HStack {
-                    Button("Choose signal-cli …") { model.chooseExecutable() }
+                    Button("Choose …") { model.chooseExecutable() }
                     Button("Reconnect") { model.reconnect() }
                     Button("Check for update") { model.checkForUpdates(silent: false) }
                 }
@@ -214,7 +218,7 @@ private struct ProfileSettings: View {
     var body: some View {
         Form {
             if !model.connected {
-                Text("Connect to signal-cli before editing your profile.").foregroundStyle(.secondary)
+                Text("Connect to \(model.backendName) before editing your profile.").foregroundStyle(.secondary)
             }
             Section("Signal username") {
                 LabeledContent("Current", value: model.profileUsername.isEmpty ? "…" : model.profileUsername)

@@ -688,3 +688,54 @@ final class StickerTests: XCTestCase {
         XCTAssertFalse(StickerPack.isValidPackUrl("not a url"))
     }
 }
+
+final class BackendTests: XCTestCase {
+    func testParseVersionLine() {
+        let c = BackendInfo.parse(versionLine: "corvus-cli 0.1.0 (2AB8C86) compatible with signal-cli 0.14.9\n")
+        XCTAssertTrue(c.isCorvusCli)
+        XCTAssertEqual(c.version, "0.1.0")
+        XCTAssertEqual(c.build, "2ab8c86")
+        XCTAssertEqual(c.signalVersion, "0.14.9") // feature checks (e.g. voice notes) use this
+        XCTAssertEqual(c.description, "corvus-cli 0.1.0 (2ab8c86)")
+
+        let noBuild = BackendInfo.parse(versionLine: "corvus-cli 0.2.0 compatible with signal-cli 0.15.1")
+        XCTAssertEqual(noBuild.build, "")
+        XCTAssertEqual(noBuild.signalVersion, "0.15.1")
+
+        let s = BackendInfo.parse(versionLine: "signal-cli 0.14.10")
+        XCTAssertFalse(s.isCorvusCli)
+        XCTAssertEqual(s.version, "0.14.10")
+        XCTAssertEqual(s.signalVersion, "0.14.10")
+        XCTAssertEqual(s.description, "signal-cli 0.14.10")
+    }
+
+    func testNameForExecutable() {
+        XCTAssertEqual(BackendInfo.name(forExecutable: "/opt/homebrew/bin/corvus-cli"), "corvus-cli")
+        XCTAssertEqual(BackendInfo.name(forExecutable: "/opt/homebrew/Caskroom/corvus-cli/x/corvus-cli-macos-aarch64"), "corvus-cli")
+        XCTAssertEqual(BackendInfo.name(forExecutable: "/opt/homebrew/bin/signal-cli"), "signal-cli")
+        var r = CliResult()
+        r.backend = "corvus-cli"
+        r.timedOut = true
+        XCTAssertEqual(r.describe(), "corvus-cli did not answer in time.")
+    }
+
+    func testAutodetectPrefersCorvusCli() throws {
+        let fm = FileManager.default
+        let a = fm.temporaryDirectory.appendingPathComponent("corvus-autodetect-\(UUID().uuidString)")
+        let b = a.appendingPathComponent("second")
+        try fm.createDirectory(at: b, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: a) }
+        func exe(_ dir: URL, _ name: String) throws {
+            let p = dir.appendingPathComponent(name).path
+            fm.createFile(atPath: p, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        }
+        // signal-cli comes first on PATH, corvus-cli later: corvus-cli still wins.
+        try exe(a, "signal-cli")
+        try exe(b, "corvus-cli")
+        XCTAssertEqual(SignalCli.autodetect(environment: ["PATH": a.path + ":" + b.path], extraDirs: []), b.appendingPathComponent("corvus-cli").path)
+        // Also when corvus-cli is only in an extra folder (Homebrew, not on a Finder app's PATH).
+        XCTAssertEqual(SignalCli.autodetect(environment: ["PATH": a.path], extraDirs: [b.path]), b.appendingPathComponent("corvus-cli").path)
+        try fm.removeItem(at: b.appendingPathComponent("corvus-cli"))
+        XCTAssertEqual(SignalCli.autodetect(environment: ["PATH": a.path + ":" + b.path], extraDirs: []), a.appendingPathComponent("signal-cli").path)
+    }
+}

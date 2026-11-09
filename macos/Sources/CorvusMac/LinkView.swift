@@ -67,7 +67,7 @@ struct LinkView: View {
 
     private func start() {
         uri = ""
-        status = "Waiting for signal-cli …"
+        status = "Waiting for \(BackendInfo.name(forExecutable: executable)) …"
         running = true
         let p = Process()
         SignalCli.configure(p, executable: executable, arguments: ["link", "-n", name.trimmingCharacters(in: .whitespaces)])
@@ -115,7 +115,7 @@ struct LinkView: View {
             process = p
         } catch {
             running = false
-            status = "signal-cli could not be started: \(error.localizedDescription)"
+            status = "\(BackendInfo.name(forExecutable: executable)) could not be started: \(error.localizedDescription)"
         }
     }
 

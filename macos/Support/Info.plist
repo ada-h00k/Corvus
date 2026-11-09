@@ -35,6 +35,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>AGPL-3.0 licensed. signal-cli is a separate program.</string>
+    <string>AGPL-3.0 licensed. The Signal backend (corvus-cli or signal-cli) is a separate program.</string>
 </dict>
 </plist>
