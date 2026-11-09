@@ -179,6 +179,8 @@ private struct Sidebar: View {
     @FocusState private var searchFocused: Bool
 
     var body: some View {
+        // First in the body: older Swift (Xcode 16 in CI) rejects a shadowing @Bindable after `model` was used.
+        @Bindable var model = model
         let selection = Binding<String?>(get: { model.current }, set: { key in
             guard let key else { return }
             switch key {
@@ -190,7 +192,6 @@ private struct Sidebar: View {
         })
         let archived = model.chats.convs.values.filter(\.archived)
         let archivedUnread = archived.reduce(0) { $0 + $1.unread }
-        @Bindable var model = model
         let q = model.chatFilter.trimmingCharacters(in: .whitespaces)
         let list = model.visibleConversations
 
