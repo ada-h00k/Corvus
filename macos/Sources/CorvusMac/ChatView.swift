@@ -111,6 +111,8 @@ private struct MessageList: View {
     @Environment(AppModel.self) private var model
     let conversation: Conversation
 
+    static let typingRowId = "typing-indicator"
+
     private func sameRun(_ a: Message, _ b: Message) -> Bool {
         a.outgoing == b.outgoing && a.authorKey == b.authorKey && abs(a.ts - b.ts) <= Theme.groupGapMs
             && Calendar.current.isDate(a.time, inSameDayAs: b.time)
@@ -118,6 +120,7 @@ private struct MessageList: View {
 
     var body: some View {
         let msgs = conversation.msgs
+        let typers = (model.typing[conversation.key] ?? [:]).keys.sorted()
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -133,6 +136,12 @@ private struct MessageList: View {
                             .padding(.top, g.joinedAbove ? 2 : (newDay ? 2 : 10))
                             .id(m.id)
                     }
+                    if !typers.isEmpty {
+                        TypingRow(conversation: conversation, typers: typers)
+                            .padding(.top, 10)
+                            .id(MessageList.typingRowId)
+                            .transition(.opacity)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -142,6 +151,10 @@ private struct MessageList: View {
             .onChange(of: msgs.last?.id) { _, id in
                 guard let id else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
+            }
+            .onChange(of: typers.isEmpty) { _, none in
+                guard !none else { return }
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(MessageList.typingRowId, anchor: .bottom) }
             }
             .onChange(of: model.scrollRequest?.serial) { _, _ in
                 guard let id = model.scrollRequest?.id else { return }
@@ -418,11 +431,109 @@ private struct MetaRow: View {
             if message.isEdited { Text("Edited") }
             Text(message.time.formatted(date: .omitted, time: .shortened))
             if message.outgoing {
-                Image(systemName: pending ? "circle.dotted" : "checkmark.circle")
+                if pending || message.deleted {
+                    if pending { Image(systemName: "circle.dotted").help("Sending") }
+                } else {
+                    ReceiptIcon(status: message.receipt)
+                }
             }
         }
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(color)
+    }
+}
+
+/// Signal's delivery ticks: one outlined check = sent, two outlined = delivered, two filled = read.
+private struct ReceiptIcon: View {
+    let status: ReceiptStatus
+    private static let size: CGFloat = 11   // the glyph's box at the meta row's 10 pt font
+    private static let shift: CGFloat = 5   // how far the front circle sits right of the back one
+
+    var body: some View {
+        let symbol = status == .read ? "checkmark.circle.fill" : "checkmark.circle"
+        Group {
+            if status == .sent {
+                Image(systemName: symbol)
+            } else {
+                // Two circles stacked like Signal's: the front one half covers the back one, and the back
+                // one is cut out around it (with a small gap) so the outlines never cross.
+                // The back circle has no check of its own (as in Signal); only its uncovered crescent shows.
+                ZStack(alignment: .leading) {
+                    Image(systemName: status == .read ? "circle.fill" : "circle")
+                        .frame(width: Self.size, height: Self.size)
+                        .mask {
+                            Rectangle()
+                                .overlay {
+                                    Circle()
+                                        .frame(width: Self.size + 2.5, height: Self.size + 2.5)
+                                        .offset(x: Self.shift)
+                                        .blendMode(.destinationOut)
+                                }
+                                .compositingGroup()
+                        }
+                    Image(systemName: symbol)
+                        .frame(width: Self.size, height: Self.size)
+                        .offset(x: Self.shift)
+                }
+                .frame(width: Self.size + Self.shift, height: Self.size, alignment: .leading)
+            }
+        }
+        .help(status == .read ? "Read" : status == .delivered ? "Delivered" : "Sent")
+        .accessibilityLabel(status == .read ? "Read" : status == .delivered ? "Delivered" : "Sent")
+    }
+}
+
+/// "… is typing": three pulsing dots in an incoming bubble at the end of the chat.
+private struct TypingRow: View {
+    @Environment(AppModel.self) private var model
+    let conversation: Conversation
+    let typers: [String]   // sender keys
+
+    var body: some View {
+        let a = model.appearance
+        HStack(alignment: .bottom, spacing: 8) {
+            if conversation.isGroup, let first = typers.first {
+                Group {
+                    if let c = model.chats.convs[first] { AvatarView(image: model.avatarImage(c), size: 28) }
+                    else { AvatarView(image: Media.placeholderAvatar(key: first, title: model.displayName(first)), size: 28) }
+                }
+                .frame(width: 28, height: 28)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                if conversation.isGroup {
+                    Text(label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.senderColor(typers.first ?? ""))
+                }
+                TimelineView(.animation(minimumInterval: 1.0 / 20)) { ctx in
+                    let t = ctx.date.timeIntervalSinceReferenceDate
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { i in
+                            Circle()
+                                .fill(a.inTextColor)
+                                .frame(width: 7, height: 7)
+                                .opacity(0.3 + 0.6 * max(0, sin((t * 2 * .pi / 1.2) - Double(i) * 0.9)))
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: CGFloat(a.radius), style: .continuous).fill(a.inBgColor))
+            Spacer(minLength: 80)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+    }
+
+    private var label: String {
+        let names = typers.map { model.displayName($0) }
+        switch names.count {
+        case 0: return ""
+        case 1: return conversation.isGroup ? "\(names[0]) is typing" : "Typing"
+        case 2: return "\(names[0]) and \(names[1]) are typing"
+        default: return "\(names[0]) and \(names.count - 1) others are typing"
+        }
     }
 }
 

@@ -38,6 +38,16 @@ final class AppModel {
 
     var appearance = Appearance.load()
     var notify = NotificationSettings.load()
+    var privacy = ChatPrivacy.load()
+
+    // typing indicators of others: conversation key -> sender key -> expiry (ms)
+    var typing: [String: [String: Int64]] = [:]
+    // own typing indicator: the chat it was last sent to and when
+    @ObservationIgnored private var typingKey: String?
+    @ObservationIgnored private var typingSentMs: Int64 = 0
+    @ObservationIgnored private var typingStopTask: Task<Void, Never>?
+    // incoming messages whose read receipt is due once their chat is read: conversation key -> (author, ts)
+    @ObservationIgnored private var unsentReads: [String: [(author: String, ts: Int64)]] = [:]
 
     // composer (for the current conversation; other conversations keep a Draft)
     var composerText = ""
@@ -123,7 +133,10 @@ final class AppModel {
         started = true
         notifier.setUp()
         timers.append(Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.expireMessages() }
+            MainActor.assumeIsolated {
+                self?.expireMessages()
+                self?.expireTyping()
+            }
         })
         // Contacts change their picture at any time and signal-cli does not announce it: look again regularly.
         timers.append(Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
@@ -688,8 +701,11 @@ final class AppModel {
         guard await Dialogs.confirm("Delete conversation", "Delete “\(c.title)” and its stored messages from this computer?",
                                     ok: "Delete", destructive: true) else { return }
         if key == editKey { cancelEdit() }
+        if key == typingKey { stopTyping() }
         chats.convs.removeValue(forKey: key)
         drafts.removeValue(forKey: key)
+        unsentReads.removeValue(forKey: key)
+        typing.removeValue(forKey: key)
         if key == current {
             current = nil
             composerText = ""
@@ -715,12 +731,14 @@ final class AppModel {
         guard chats.convs[key] != nil else { return }
         if key != current {
             cancelEdit() // an edit in progress is dropped and the text typed before it comes back
+            stopTyping()
             saveDraft()
             current = key
             loadDraft(key)
             closeSearch()
         }
         chats.convs[key]!.unread = 0
+        sendReadReceipts(key)
         persist(chats.startIncomingExpirationTimers(key, now: nowMs()))
         notifier.close(key) // the notification for this chat is obsolete now
         composerFocusRequest += 1
@@ -747,6 +765,7 @@ final class AppModel {
         lastInputMs = nowMs()
         if let key = current, chats.convs[key] != nil {
             persist(chats.startIncomingExpirationTimers(key, now: nowMs()))
+            sendReadReceipts(key)
             if chats.convs[key]!.unread > 0 {
                 chats.convs[key]!.unread = 0
                 notifier.close(key)
@@ -885,6 +904,22 @@ final class AppModel {
             // Like the official clients: only the author can delete a message for everyone.
             applyDelete(key, ts: pe.targetTs, authors: [pe.outgoing ? account : srcKey])
             return
+        case .receipt:
+            var recs: [JSON] = []
+            for ts in pe.receiptTimestamps {
+                if let rec = chats.applyReceipt(ts: ts, level: pe.receiptLevel, preferredKey: key) { recs.append(rec) }
+            }
+            persist(recs)
+            return
+        case .typing:
+            guard chats.convs[key] != nil, !srcKey.isEmpty, srcKey != account else { return }
+            if pe.typingStarted {
+                typing[key, default: [:]][srcKey] = nowMs() + 15_000 // Signal's timeout without a refresh
+            } else if typing[key]?[srcKey] != nil {
+                typing[key]!.removeValue(forKey: srcKey)
+                if typing[key]!.isEmpty { typing.removeValue(forKey: key) }
+            }
+            return
         default:
             break
         }
@@ -927,8 +962,18 @@ final class AppModel {
         if !m.outgoing && m.expiresInSeconds > 0 && looking { m.expirationStartMs = nowMs() }
         guard let (_, recs) = chats.addMessage(key, m, title: title, group: group) else { return false } // duplicate
         persist(recs)
+        if !m.outgoing {
+            // The message ends the sender's typing indicator.
+            if typing[key]?[m.authorKey] != nil {
+                typing[key]!.removeValue(forKey: m.authorKey)
+                if typing[key]!.isEmpty { typing.removeValue(forKey: key) }
+            }
+            if !m.authorKey.isEmpty { unsentReads[key, default: []].append((m.authorKey, m.ts)) }
+        }
         // A message in the selected chat is only read while the user looks at it.
-        if !m.outgoing && !(key == current && userIsLooking()) { chats.convs[key]!.unread += 1 }
+        if !m.outgoing {
+            if key == current && userIsLooking() { sendReadReceipts(key) } else { chats.convs[key]!.unread += 1 }
+        }
         if !m.outgoing && !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         if key == current { updateSearch() }
         listChanged()
@@ -967,7 +1012,78 @@ final class AppModel {
         }
     }
 
+    /// Drops typing indicators that were not refreshed in time (Signal clients refresh every few seconds).
+    private func expireTyping() {
+        let now = nowMs()
+        guard typing.values.contains(where: { $0.values.contains { $0 <= now } }) else { return } // no observed change
+        for key in typing.keys {
+            typing[key] = typing[key]!.filter { $0.value > now }
+            if typing[key]!.isEmpty { typing.removeValue(forKey: key) }
+        }
+    }
+
+    /// Display names of the people typing in `key`, in a stable order.
+    func typingNames(_ key: String) -> [String] {
+        (typing[key] ?? [:]).keys.sorted().map { displayName($0) }
+    }
+
+    /// Read receipts for the incoming messages of `key` that the user has now seen, one call per author.
+    private func sendReadReceipts(_ key: String) {
+        guard let due = unsentReads.removeValue(forKey: key), !due.isEmpty else { return }
+        guard privacy.sendReadReceipts, connected else { return }
+        var byAuthor: [String: [Int64]] = [:]
+        for (author, ts) in due { byAuthor[author, default: []].append(ts) }
+        for (author, tss) in byAuthor where author != account {
+            let p: JSON = ["recipient": author, "targetTimestamp": tss, "type": "read"]
+            Task { _ = try? await cli.call("sendReceipt", p) }
+        }
+    }
+
     // MARK: - Sending
+
+    /// The user changed the composer text (typed, pasted, deleted): drives our own typing indicator.
+    /// Like Signal Desktop: STARTED again every 10 s while typing, STOPPED after a 3 s pause or when emptied.
+    func composerEdited() {
+        guard privacy.sendTypingIndicators, connected, editKey.isEmpty, let key = current, chats.convs[key] != nil else {
+            stopTyping()
+            return
+        }
+        if composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            stopTyping()
+            return
+        }
+        let now = nowMs()
+        if typingKey != key || now - typingSentMs >= 10_000 {
+            if let old = typingKey, old != key { sendTyping(old, stop: true) }
+            typingKey = key
+            typingSentMs = now
+            sendTyping(key, stop: false)
+        }
+        typingStopTask?.cancel()
+        typingStopTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.stopTyping()
+        }
+    }
+
+    /// Ends our typing indicator, if one is showing on the other side.
+    func stopTyping() {
+        typingStopTask?.cancel()
+        typingStopTask = nil
+        guard let key = typingKey else { return }
+        typingKey = nil
+        typingSentMs = 0
+        sendTyping(key, stop: true)
+    }
+
+    private func sendTyping(_ key: String, stop: Bool) {
+        guard connected, let c = chats.convs[key] else { return }
+        var p: JSON = [:]
+        addRecipient(&p, c)
+        if stop { p["stop"] = true }
+        Task { _ = try? await cli.call("sendTyping", p) }
+    }
 
     private func addRecipient(_ params: inout JSON, _ c: Conversation) {
         if c.isGroup { params["groupId"] = String(c.key.dropFirst(2)) } else { params["recipient"] = [c.key] }
@@ -1001,6 +1117,7 @@ final class AppModel {
             return
         }
         let files = pendingFiles, quote = replyQuote, gifAnalytics = pendingGifAnalyticsUrl
+        stopTyping()
 
         var p: JSON = [:]
         if !text.isEmpty { p["message"] = text }
@@ -1108,6 +1225,7 @@ final class AppModel {
             showFlash("This message can no longer be edited (3 hours / 10 edits).", seconds: 6)
             return
         }
+        stopTyping()
         if editKey.isEmpty { editDraft = composerText } // keep an already running edit's draft
         editKey = c.key
         editTs = m.ts
@@ -1636,6 +1754,13 @@ final class AppModel {
         appearance = a
         a.save()
         fetchMissingAvatars()
+    }
+
+    func applyPrivacy(_ p: ChatPrivacy) {
+        privacy = p
+        p.save()
+        if !p.sendTypingIndicators { stopTyping() }
+        if !p.sendReadReceipts { unsentReads.removeAll() } // seen while switched off: never reported later
     }
 
     func applyNotifications(_ n: NotificationSettings) {

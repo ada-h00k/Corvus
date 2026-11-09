@@ -19,6 +19,9 @@ public struct ChatState {
     public var contactNames: [String: String] = [:]   // key -> contact name from signal-cli
     public var pendingSends: [String: PendingSend] = [:]
     public var account = ""
+    /// Receipts for timestamps not (yet) in any chat: the send RPC may still be running. Applied on confirmation.
+    public var earlyReceipts: [Int64: ReceiptStatus] = [:]
+    static let earlyReceiptLimit = 200
 
     public init() {}
 
@@ -145,6 +148,9 @@ public struct ChatState {
         let c = convs[key]!
         if findMessage(c, ts: m.ts, authors: [effectiveAuthor(c, m)]) != nil { return nil }
         var message = m
+        if message.outgoing, let r = earlyReceipts.removeValue(forKey: message.ts), r > message.receipt {
+            message.receipt = r
+        }
         // Always append new arrivals in local receive order. The original Signal timestamp
         // remains untouched because quotes, edits and reactions use it as the message ID.
         let previousOrder = c.msgs.last?.sortTs ?? 0
@@ -175,6 +181,30 @@ public struct ChatState {
         convs[key]!.msgs[i].editTs = newTs
         convs[key]!.msgs[i].editCount += 1
         return Records.edit(key, convs[key]!.msgs[i])
+    }
+
+    /// A delivery/read receipt for our message sent at `ts`. Receipts carry no conversation, so
+    /// `preferredKey` (the sender's 1:1 chat) is searched first, then every chat (group messages).
+    /// The state only ever goes up. Returns the record to persist, nil if nothing changed.
+    public mutating func applyReceipt(ts: Int64, level: ReceiptStatus, preferredKey: String = "") -> JSON? {
+        guard ts > 0, level > .sent else { return nil }
+        var keys = convs.keys.sorted()
+        if let i = keys.firstIndex(of: preferredKey) { keys.swapAt(0, i) }
+        for key in keys {
+            guard let i = findMessage(convs[key]!, ts: ts, authors: [account]) else { continue }
+            let m = convs[key]!.msgs[i]
+            guard m.outgoing, !isPendingPreview(key, ts: m.ts) else { continue }
+            if m.deleted || m.receipt >= level { return nil }
+            convs[key]!.msgs[i].receipt = level
+            return Records.receiptUpdate(key, convs[key]!.msgs[i])
+        }
+        if earlyReceipts[ts].map({ $0 < level }) ?? true {
+            if earlyReceipts.count >= ChatState.earlyReceiptLimit, let oldest = earlyReceipts.keys.min() {
+                earlyReceipts.removeValue(forKey: oldest)
+            }
+            earlyReceipts[ts] = level
+        }
+        return nil
     }
 
     /// Delete for everyone (ours or the author's): the message turns into a placeholder.
@@ -229,6 +259,7 @@ public struct ChatState {
         let ts = ts0 > 0 ? ts0 : nowMs()
         var confirmed = pending.message
         confirmed.ts = ts
+        if let r = earlyReceipts.removeValue(forKey: ts), r > confirmed.receipt { confirmed.receipt = r }
         if let echo, echo.expiresInSeconds > 0 { confirmed.expiresInSeconds = echo.expiresInSeconds }
         if confirmed.expiresInSeconds > 0 { confirmed.expirationStartMs = ts }
         if let echo {

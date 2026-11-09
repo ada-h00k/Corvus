@@ -63,6 +63,12 @@ public struct Quote: Equatable, Hashable {
     public init() {}
 }
 
+/// Delivery state of an outgoing message (the best state any recipient has reached).
+public enum ReceiptStatus: Int, Comparable {
+    case sent = 0, delivered = 1, read = 2
+    public static func < (a: ReceiptStatus, b: ReceiptStatus) -> Bool { a.rawValue < b.rawValue }
+}
+
 public struct Message: Equatable, Identifiable {
     public var ts: Int64 = 0          // ms since epoch: Signal message identity and displayed time
     // Local timeline order is separate from Signal's sender timestamp (`ts`). A sender's
@@ -85,6 +91,7 @@ public struct Message: Equatable, Identifiable {
     public var expiresInSeconds = 0
     public var expirationStartMs: Int64 = 0
     public var deleted = false        // deleted for everyone: only a placeholder is left
+    public var receipt = ReceiptStatus.sent // outgoing only: delivered / read by a recipient
 
     public init() {}
 

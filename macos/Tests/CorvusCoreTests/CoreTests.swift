@@ -82,10 +82,36 @@ final class EnvelopeTests: XCTestCase {
         XCTAssertEqual(syncDelete.destination, "+49333")
         XCTAssertEqual(syncDelete.targetTs, 11)
 
-        XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "receiptMessage": ["isRead": true]]).kind, .none)
+        XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "receiptMessage": ["isRead": true]]).kind, .none) // no timestamps
+        let read = parseEnvelope(["sourceNumber": "+1", "receiptMessage": ["isRead": true, "timestamps": [5, 6]] as JSON])
+        XCTAssertEqual(read.kind, .receipt)
+        XCTAssertEqual(read.receiptLevel, .read)
+        XCTAssertEqual(read.receiptTimestamps, [5, 6])
+        let viewed = parseEnvelope(["sourceNumber": "+1", "receiptMessage": ["isViewed": true, "timestamps": [5]] as JSON])
+        XCTAssertEqual(viewed.receiptLevel, .read)
+        let delivered = parseEnvelope(["sourceNumber": "+1", "receiptMessage": ["isDelivery": true, "timestamps": [5]] as JSON])
+        XCTAssertEqual(delivered.kind, .receipt)
+        XCTAssertEqual(delivered.receiptLevel, .delivered)
         XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "dataMessage": ["timestamp": 1]]).kind, .none)
         XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "dataMessage": ["isExpirationUpdate": true, "expiresInSeconds": 60]]).kind,
                        .expirationUpdate)
+    }
+}
+
+final class TypingEnvelopeTests: XCTestCase {
+    func testTyping() {
+        let started = parseEnvelope(["sourceNumber": "+1", "typingMessage": ["action": "STARTED", "timestamp": 9] as JSON])
+        XCTAssertEqual(started.kind, .typing)
+        XCTAssertTrue(started.typingStarted)
+        XCTAssertEqual(started.src, "+1")
+        XCTAssertEqual(started.groupId, "")
+
+        let stopped = parseEnvelope(["sourceNumber": "+1", "typingMessage": ["action": "STOPPED", "groupId": "G1"] as JSON])
+        XCTAssertEqual(stopped.kind, .typing)
+        XCTAssertFalse(stopped.typingStarted)
+        XCTAssertEqual(stopped.groupId, "G1")
+
+        XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "typingMessage": ["action": "WHATEVER"] as JSON]).kind, .none)
     }
 }
 
@@ -288,6 +314,64 @@ final class ChatStateTests: XCTestCase {
         XCTAssertTrue(s.pendingSends["id1"]!.echoReceived)
         // A second identical echo belongs to an already confirmed message.
         XCTAssertNil(s.pendingSendMatching(echo: echo, key: "+49bob"))
+    }
+
+    private func outgoing(_ ts: Int64, _ text: String = "hi") -> Message {
+        var m = Message()
+        m.ts = ts
+        m.text = text
+        m.outgoing = true
+        m.authorKey = "+49me"
+        return m
+    }
+
+    func testReceiptsOnlyGoUpAndPersist() {
+        var s = makeState()
+        s.addMessage("+49bob", outgoing(100))
+        s.addMessage("g:G1", outgoing(200), group: true)
+
+        let delivered = s.applyReceipt(ts: 100, level: .delivered, preferredKey: "+49bob")
+        XCTAssertEqual(jsonString(delivered?["t"]), "u")
+        XCTAssertEqual(s.convs["+49bob"]!.msgs[0].receipt, .delivered)
+        XCTAssertNotNil(s.applyReceipt(ts: 100, level: .read, preferredKey: "+49bob"))
+        XCTAssertNil(s.applyReceipt(ts: 100, level: .delivered, preferredKey: "+49bob")) // never back down
+        XCTAssertEqual(s.convs["+49bob"]!.msgs[0].receipt, .read)
+
+        // Group messages are found although the receipt names only the member's 1:1 chat.
+        XCTAssertNotNil(s.applyReceipt(ts: 200, level: .delivered, preferredKey: "+49carol"))
+        XCTAssertEqual(s.convs["g:G1"]!.msgs[0].receipt, .delivered)
+
+        // Message record and update record both survive a reload.
+        let rec = Records.message("+49bob", s.convs["+49bob"]!.msgs[0])
+        XCTAssertEqual(Records.messageFromRecord(rec).receipt, .read)
+        var r = makeState()
+        r.loadHistory([Records.message("g:G1", outgoing(200)),
+                       Records.receiptUpdate("g:G1", s.convs["g:G1"]!.msgs[0])])
+        XCTAssertEqual(r.convs["g:G1"]!.msgs[0].receipt, .delivered)
+        // Nothing written for a plain sent message.
+        XCTAssertNil(jsonObject(Records.message("+49bob", outgoing(1))["d"])["rs"])
+    }
+
+    func testEarlyReceiptAppliedOnConfirmation() {
+        var s = makeState()
+        s.ensure("+49bob")
+        let preview = outgoing(100)
+        s.convs["+49bob"]!.insertSorted(preview)
+        var p = PendingSend()
+        p.conversationKey = "+49bob"
+        p.temporaryTimestamp = 100
+        p.message = preview
+        s.pendingSends["id1"] = p
+
+        // The preview's temporary timestamp is not the real one: the receipt waits.
+        XCTAssertNil(s.applyReceipt(ts: 150, level: .delivered, preferredKey: "+49bob"))
+        XCTAssertNil(s.applyReceipt(ts: 100, level: .read, preferredKey: "+49bob"))
+        XCTAssertEqual(s.convs["+49bob"]!.msgs[0].receipt, .sent)
+
+        let recs = s.finalizePendingSend("id1", timestamp: 150)
+        XCTAssertEqual(s.convs["+49bob"]!.msgs[0].receipt, .delivered)
+        XCTAssertEqual(jsonInt(jsonObject(recs.first?["d"])["rs"]), 1)
+        XCTAssertNil(s.earlyReceipts[150])
     }
 }
 

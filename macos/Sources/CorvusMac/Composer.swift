@@ -37,7 +37,7 @@ struct ComposerArea: View {
                             NotificationCenter.default.post(name: MessageInput.insertText, object: e)
                         }
                     }
-                    MessageInput(text: $model.composerText)
+                    MessageInput(text: $model.composerText, onUserEdit: { model.composerEdited() })
                         .frame(minHeight: 30)
                 }
                 .padding(.leading, 6)
@@ -167,6 +167,7 @@ struct MessageInput: NSViewRepresentable {
     @Environment(AppModel.self) private var model
     @AppStorage(MessageInput.spellCheckKey) private var spellCheck = false
     @Binding var text: String
+    var onUserEdit: (() -> Void)? = nil   // the user changed the text (not a programmatic update)
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -255,7 +256,10 @@ struct MessageInput: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let tv = textView else { return }
-            if parent.text != tv.string { parent.text = tv.string }
+            if parent.text != tv.string {
+                parent.text = tv.string
+                parent.onUserEdit?()
+            }
             updateHeight()
         }
 

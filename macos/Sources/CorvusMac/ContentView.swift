@@ -278,10 +278,17 @@ private struct ConversationRow: View {
                     }
                 }
                 HStack(spacing: 4) {
-                    Text(c.msgs.last.map(preview) ?? (c.isGroup ? "Group" : " "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let typing = typingText {
+                        Text(typing)
+                            .font(.caption.italic())
+                            .foregroundStyle(Theme.signalBlue)
+                            .lineLimit(1)
+                    } else {
+                        Text(c.msgs.last.map(preview) ?? (c.isGroup ? "Group" : " "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     Spacer(minLength: 4)
                     if c.unread > 0 {
                         Text(c.unread > 99 ? "99+" : "\(c.unread)")
@@ -295,6 +302,14 @@ private struct ConversationRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// "typing…" (1:1) or "Alice is typing…" (group) while someone types here.
+    private var typingText: String? {
+        let names = model.typingNames(conversation.key)
+        guard let first = names.first else { return nil }
+        if !conversation.isGroup { return "typing…" }
+        return names.count == 1 ? "\(first) is typing…" : "\(names.count) people are typing…"
     }
 
     private func preview(_ m: Message) -> String {

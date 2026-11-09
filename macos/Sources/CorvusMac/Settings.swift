@@ -43,6 +43,27 @@ struct NotificationSettings: Equatable {
     }
 }
 
+/// Settings → General → Privacy: what Corvus tells the people you chat with.
+struct ChatPrivacy: Equatable {
+    var sendReadReceipts = true       // tell senders when their messages were read
+    var sendTypingIndicators = true   // tell the chat partner while you type
+
+    private static let prefix = "privacy."
+
+    static func load(_ d: UserDefaults = .standard) -> ChatPrivacy {
+        var p = ChatPrivacy()
+        func bool(_ k: String, _ def: Bool) -> Bool { d.object(forKey: prefix + k) == nil ? def : d.bool(forKey: prefix + k) }
+        p.sendReadReceipts = bool("readReceipts", p.sendReadReceipts)
+        p.sendTypingIndicators = bool("typingIndicators", p.sendTypingIndicators)
+        return p
+    }
+
+    func save(_ d: UserDefaults = .standard) {
+        d.set(sendReadReceipts, forKey: ChatPrivacy.prefix + "readReceipts")
+        d.set(sendTypingIndicators, forKey: ChatPrivacy.prefix + "typingIndicators")
+    }
+}
+
 /// Colours and shape of the chat bubbles (Settings → Appearance). A colour that the user did not
 /// change is nil and follows the light or dark system appearance.
 struct Appearance: Equatable {

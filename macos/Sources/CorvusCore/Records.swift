@@ -50,6 +50,7 @@ public enum Records {
         var rec: JSON = ["t": "m", "c": conv, "ts": m.ts, "s": m.sender, "x": m.deleted ? "" : m.text,
                          "o": m.outgoing, "au": m.authorKey]
         if m.editCount > 0 && !m.deleted { d["ed"] = editToJson(m) }
+        if m.outgoing && m.receipt > .sent { d["rs"] = m.receipt.rawValue }
         if !d.isEmpty { rec["d"] = d }
         return rec
     }
@@ -67,6 +68,11 @@ public enum Records {
     public static func expirationUpdate(_ conv: String, _ m: Message) -> JSON {
         ["t": "u", "c": conv, "ts": m.ts, "au": m.authorKey,
          "d": ["ex": m.expiresInSeconds, "es": m.expirationStartMs] as JSON]
+    }
+
+    /// Delivery state of an outgoing message ("rs": 1 = delivered, 2 = read).
+    public static func receiptUpdate(_ conv: String, _ m: Message) -> JSON {
+        ["t": "u", "c": conv, "ts": m.ts, "au": m.authorKey, "d": ["rs": m.receipt.rawValue] as JSON]
     }
 
     public static func attachmentsUpdate(_ conv: String, _ m: Message) -> JSON {
@@ -94,6 +100,9 @@ public enum Records {
         }
         if d["at"] != nil {
             m.attachments = jsonArray(d["at"]).map { attachmentFromJson(jsonObject($0)) }
+        }
+        if d["rs"] != nil, let r = ReceiptStatus(rawValue: jsonInt(d["rs"])), r > m.receipt {
+            m.receipt = r
         }
         if jsonBool(d["dl"]) { // last: wins over anything else in the same record
             m.markDeleted()

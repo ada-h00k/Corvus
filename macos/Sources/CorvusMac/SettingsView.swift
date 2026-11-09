@@ -48,6 +48,14 @@ private struct GeneralSettings: View {
             Section("Message field") {
                 Toggle("Check spelling while typing", isOn: $spellCheck)
             }
+            Section("Privacy") {
+                Toggle("Send read receipts", isOn: Binding(
+                    get: { model.privacy.sendReadReceipts },
+                    set: { v in var p = model.privacy; p.sendReadReceipts = v; model.applyPrivacy(p) }))
+                Toggle("Send typing indicators", isOn: Binding(
+                    get: { model.privacy.sendTypingIndicators },
+                    set: { v in var p = model.privacy; p.sendTypingIndicators = v; model.applyPrivacy(p) }))
+            }
             Section("GIPHY") {
                 Button("GIPHY API key …") { Task { await model.configureGiphyApiKey() } }
             }

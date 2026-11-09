@@ -2,7 +2,7 @@ import Foundation
 
 /// A signal-cli "receive" envelope reduced to what the GUI needs.
 public struct ParsedEnvelope {
-    public enum Kind { case none, message, reaction, edit, remoteDelete, expirationUpdate }
+    public enum Kind { case none, message, reaction, edit, remoteDelete, expirationUpdate, receipt, typing }
 
     public var kind: Kind = .none
     public var outgoing = false        // sent by one of our own other devices (sync message)
@@ -22,6 +22,13 @@ public struct ParsedEnvelope {
 
     // @mentions in msg.text (message, edit)
     public var mentions: [Mention] = []
+
+    // Receipt: delivery/read state reached by the sender for our messages with these timestamps
+    public var receiptLevel = ReceiptStatus.sent
+    public var receiptTimestamps: [Int64] = []
+
+    // Typing indicator (groupId is set for groups)
+    public var typingStarted = false
 
     public init() {}
 }
@@ -162,6 +169,27 @@ public func parseEnvelope(_ env: JSON) -> ParsedEnvelope {
     if out.src.isEmpty { out.src = jsonString(env["source"]) }
     out.srcName = jsonString(env["sourceName"])
     let envTs = jsonInt64(env["timestamp"])
+
+    // {"receiptMessage": {"isDelivery": true, "isRead": false, "isViewed": false, "timestamps": [...]}}
+    let rc = jsonObject(env["receiptMessage"])
+    if !rc.isEmpty {
+        out.receiptTimestamps = jsonArray(rc["timestamps"]).map(jsonInt64).filter { $0 > 0 }
+        out.receiptLevel = jsonBool(rc["isRead"]) || jsonBool(rc["isViewed"]) ? .read
+            : jsonBool(rc["isDelivery"]) ? .delivered : .sent
+        if !out.receiptTimestamps.isEmpty && out.receiptLevel > .sent { out.kind = .receipt }
+        return out
+    }
+
+    // {"typingMessage": {"action": "STARTED" | "STOPPED", "timestamp": ..., "groupId": "..."}}
+    let tm = jsonObject(env["typingMessage"])
+    if !tm.isEmpty {
+        let action = jsonString(tm["action"]).uppercased()
+        guard action == "STARTED" || action == "STOPPED" else { return out }
+        out.kind = .typing
+        out.typingStarted = action == "STARTED"
+        out.groupId = jsonString(tm["groupId"])
+        return out
+    }
 
     let dm = jsonObject(env["dataMessage"])
     if !dm.isEmpty {
