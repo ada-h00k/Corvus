@@ -5451,8 +5451,10 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles, con
         qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
         if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
         applyEdit(key, origTs, {m_account}, text, ts, styleRangesFromJson(textStyles), mentions);
-        if (m_editKey == key && m_editTs == origTs) cancelEdit();
     });
+    // The RPC is asynchronous; leave edit mode now so the composer is immediately
+    // available for a new message. The callback only updates the original message.
+    cancelEdit();
 }
 
 void MainWindow::sendReaction(int idx, const QString &emoji)
