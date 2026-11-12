@@ -1931,6 +1931,9 @@ final class AppModel {
         }
         addRecipient(&p, c)
         let key = c.key, origTs = m.ts
+        // Don't keep the composer locked in edit mode while signal-cli responds.
+        // The request below only updates the original message; any new draft stays untouched.
+        cancelEdit(restoreDraft: true)
         Task { [p] in
             do {
                 let res = try await cli.call("send", p)
@@ -1938,9 +1941,7 @@ final class AppModel {
                 var ts = jsonInt64(jsonObject(res)["timestamp"])
                 if ts <= 0 { ts = nowMs() }
                 if let rec = chats.applyEdit(key, targetTs: origTs, authors: [account], text: text, newTs: ts) { persist(rec) }
-                if editKey == key && editTs == origTs { cancelEdit(restoreDraft: true) }
             } catch {
-                // stay in edit mode with the typed text so nothing is lost
                 showFlash("Editing failed: \(error.localizedDescription)")
             }
         }
