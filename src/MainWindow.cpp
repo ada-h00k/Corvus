@@ -5443,7 +5443,7 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles, con
     const qint64 origTs = m.ts();
     m_cli.call(QStringLiteral("send"), p, [this, key, origTs, text, textStyles, mentions](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
-            // stay in edit mode with the typed text so nothing is lost
+            // The composer is already available; keep the failure visible without replacing its draft.
             statusBar()->showMessage(tr("Editing failed: %1").arg(err), 10000);
             return;
         }
