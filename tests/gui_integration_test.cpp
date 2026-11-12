@@ -1151,6 +1151,9 @@ int main(int argc, char **argv)
             emit view->editRequested(idx);
             input->setText("hello world");
             QTest::keyClick(input, Qt::Key_Return);
+            CHECK(!labelWith("Editing message")); // The composer is released before the RPC response.
+            input->setText("draft while edit saves");
+            CHECK(input->text() == "draft while edit saves");
             CHECK(waitFor([&] { return !findCall(logFile, "send", 3).isEmpty(); }));
             const QJsonObject ep = findCall(logFile, "send", 3)["params"].toObject();
             CHECK(ep["message"].toString() == "hello world");
@@ -1161,7 +1164,8 @@ int main(int argc, char **argv)
             CHECK(!html(view).contains("wrold"));
             CHECK(view->messageCount() == 3);        // edited in place, not added
             CHECK(!labelWith("Editing message"));
-            CHECK(input->text().isEmpty());
+            CHECK(input->text() == "draft while edit saves"); // The RPC result must not overwrite a newer draft.
+            input->clear();
 
             // Second edit targets the latest revision (what the recipient knows now)
             emit view->editRequested(idx);
