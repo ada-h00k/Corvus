@@ -1,5 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
-project(corvus VERSION 0.2.0 LANGUAGES CXX)
+
+# Stable local/default version; release builds take their version from the vX.Y.Z Git tag.
+set(CORVUS_VERSION "1.0.0")
+if(DEFINED ENV{GITHUB_REF_TYPE} AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag")
+    set(CORVUS_TAG "$ENV{GITHUB_REF_NAME}")
+    if(NOT CORVUS_TAG MATCHES "^v([0-9]+\\.[0-9]+\\.[0-9]+)$")
+        message(FATAL_ERROR "Release tags must use the vMAJOR.MINOR.PATCH format (for example v1.0.0)")
+    endif()
+    set(CORVUS_VERSION "${CMAKE_MATCH_1}")
+endif()
+
+project(corvus VERSION ${CORVUS_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
