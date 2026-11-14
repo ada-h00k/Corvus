@@ -20,9 +20,8 @@ env:
   BUILD_TYPE: Release
   QT_VERSION: "6.12"
   QT_VERSION_WINDOWS: "6.8"
-  # corvus-cli (https://github.com/ada-h00k/corvus-cli) is the Signal backend bundled in the
-  # Windows build. Pinned by commit (release tag "commit-<sha>") and SHA-256 of the Windows zip.
-  # The Flatpak manifest pins the same build for Linux; keep both in step when bumping.
+  # Windows keeps a separately pinned corvus-cli build and SHA-256. The Flatpak job
+  # resolves the latest published Linux release and calculates its SHA-256 at build time.
   CORVUS_CLI_COMMIT: "4d76022c8ff0d2e4bc42d8392c0762024dfa1db9"
   CORVUS_CLI_WINDOWS_SHA256: "124f6021d57ecbfcd8e2a24381aa189a47c558d6e59b1b21b22f0bc394e85001"
 
@@ -348,6 +347,76 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Resolve the newest published corvus-cli release for Linux. The manifest remains
+      # checksum-pinned for flatpak-builder; this step refreshes its URL and SHA-256 per build.
+      - name: Resolve latest corvus-cli release
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import re
+          import urllib.request
+          from pathlib import Path
+
+          api = "https://api.github.com/repos/ada-h00k/corvus-cli/releases/latest"
+          request = urllib.request.Request(
+              api,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "Corvus-Flatpak-build",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              release = json.load(response)
+
+          asset = next(
+              (item for item in release["assets"]
+               if item["name"] == "corvus-cli-linux-x86_64"),
+              None,
+          )
+          if asset is None:
+              raise SystemExit(
+                  f"No corvus-cli-linux-x86_64 asset in latest release {release['tag_name']}"
+              )
+
+          digest = hashlib.sha256()
+          download = urllib.request.Request(
+              asset["browser_download_url"],
+              headers={"User-Agent": "Corvus-Flatpak-build"},
+          )
+          with urllib.request.urlopen(download, timeout=120) as response:
+              while chunk := response.read(1024 * 1024):
+                  digest.update(chunk)
+          sha256 = digest.hexdigest()
+
+          manifest = Path("packaging/flatpak/io.github.ada_h00k.Corvus.yml")
+          content = manifest.read_text()
+          pattern = re.compile(
+              r'(  - name: corvus-cli\n.*?      - type: file\n'
+              r'        url: )[^\n]+(\n        sha256: )[^\n]+',
+              re.DOTALL,
+          )
+          content, count = pattern.subn(
+              lambda match: (
+                  match.group(1) + asset["browser_download_url"]
+                  + match.group(2) + sha256
+              ),
+              content,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("Could not locate the corvus-cli source in the Flatpak manifest")
+          manifest.write_text(content)
+
+          print(f"Using corvus-cli release: {release['tag_name']}")
+          print(f"Asset: {asset['name']}")
+          print(f"SHA-256: {sha256}")
+          PY
 
       - name: Install Flatpak tooling
         shell: bash
