@@ -1066,6 +1066,7 @@ jobs:
     needs:
       - flatpak
     permissions:
+      actions: read
       contents: read
       pages: write
       id-token: write
