@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - master
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
 
 permissions:
@@ -264,7 +266,11 @@ jobs:
 
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          base="$(sed -n 's/^project(corvus VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            base="${GITHUB_REF_NAME#v}"
+          else
+            base="$(sed -n 's/^project(corvus VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          fi
           count="$(git rev-list --count HEAD)"
           short="$(git rev-parse --short=7 HEAD)"
           pkgver="${base}.r${count}.g${short}"
@@ -974,7 +980,11 @@ jobs:
           }
           if (-not (Test-Path $iscc)) { throw 'ISCC.exe not found' }
 
-          $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(corvus VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          } else {
+            $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(corvus VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
           & $iscc "/DAppVersion=$version" "/DStageDir=$((Resolve-Path stage).Path)" packaging\windows\corvus.iss
@@ -1191,9 +1201,10 @@ jobs:
         uses: actions/deploy-pages@v5
 
   # ------------------------------------------------------
-  # Create a release for every commit (all artifacts together)
+  # Publish a GitHub Release only for version tags (all artifacts together)
   # ------------------------------------------------------
   release:
+    if: github.ref_type == 'tag'
     name: Publish release
     runs-on: ubuntu-24.04
     needs:
@@ -1227,13 +1238,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: build-${{ github.sha }}
-          name: Build ${{ github.sha }}
-          target_commitish: ${{ github.sha }}
+          tag_name: ${{ github.ref_name }}
+          name: Corvus ${{ github.ref_name }}
           body: |
             Automatic Linux x86_64 (including Flatpak), Windows x86_64 and macOS (Apple silicon) builds.
             macOS includes both the native SwiftUI app and the Qt app.
 
+            Version: `${{ github.ref_name }}`
             Commit: `${{ github.sha }}`
 
             Files:
