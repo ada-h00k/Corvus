@@ -983,7 +983,11 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $version = $env:GITHUB_REF_NAME -replace '^v', ''
           } else {
-            $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(corvus VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+            # CMake now passes the version through ${CORVUS_VERSION} to project(),
+            # so read the default version declaration rather than the project() line.
+            $versionMatch = Select-String -Path CMakeLists.txt -Pattern '^\s*set\(CORVUS_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"\s*\)' | Select-Object -First 1
+            if (-not $versionMatch) { throw 'Could not read CORVUS_VERSION from CMakeLists.txt' }
+            $version = $versionMatch.Matches[0].Groups[1].Value
           }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
