@@ -37,11 +37,11 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/main/docs/screenshots/Corvus_BreezeLight.png</image>
+      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/48532fa3cc4ec58757153a2f9fa27aae5c8ad0d1/docs/screenshots/Corvus_BreezeLight.png</image>
       <caption>Corvus with a light theme</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/main/docs/screenshots/Corvus_BreezeDark.png</image>
+      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/48532fa3cc4ec58757153a2f9fa27aae5c8ad0d1/docs/screenshots/Corvus_BreezeDark.png</image>
       <caption>Corvus with a dark theme</caption>
     </screenshot>
   </screenshots>
@@ -55,6 +55,10 @@
   </provides>
 
   <releases>
+    <release version="1.0.3" date="2026-11-14"/>
+    <release version="1.0.2" date="2026-11-14"/>
+    <release version="1.0.1" date="2026-11-14"/>
+    <release version="1.0.0" date="2026-11-14"/>
     <release version="0.2.0" date="2026-10-19"/>
   </releases>
 </component>
