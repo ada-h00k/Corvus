@@ -3,6 +3,10 @@
 # Build (from the repository root):
 #   python3 flatpak-cargo-generator.py history-store/Cargo.lock \
 #       -o packaging/flatpak/cargo-sources.json   # flatpak-builder-tools/cargo
+#   curl -fsSL -o packaging/flatpak/corvus-cli-Cargo.lock \
+#       https://raw.githubusercontent.com/ada-h00k/corvus-cli/<pinned commit>/Cargo.lock
+#   python3 flatpak-cargo-generator.py packaging/flatpak/corvus-cli-Cargo.lock \
+#       -o packaging/flatpak/corvus-cli-cargo-sources.json
 #   flatpak-builder --user --install-deps-from=flathub --force-clean \
 #       flatpak-build packaging/flatpak/io.github.ada_h00k.Corvus.yml
 # The release workflow does exactly that (job "flatpak").
@@ -26,6 +30,9 @@ runtime-version: '6.11'
 sdk: org.kde.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
+  # libclang for bindgen (boring-sys generates Rust bindings for BoringSSL at build time);
+  # llvm21 is the llvm SDK extension matching the fd-sdk base of org.kde.Sdk 6.11
+  - org.freedesktop.Sdk.Extension.llvm21
 command: corvus
 
 finish-args:
@@ -135,26 +142,76 @@ modules:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
 
+  # protoc compiler for corvus-cli's protobuf-based crates (spqr, libsignal-protocol,
+  # libsignal-keytrans, libsignal-svrb): the SDK does not ship protoc, so it is built from
+  # source (the same approach Flare uses on Flathub). The bundled abseil ("module"
+  # provider) comes from protobuf's own submodule, keeping the build independent of the
+  # abseil version the SDK ships. protoc only lives in the build sandbox; the cleanup
+  # section removes compiler artifacts from the final app.
+  - name: protobuf
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -Dprotobuf_BUILD_TESTS=OFF
+      - -Dprotobuf_BUILD_SHARED_LIBS=ON
+      - -Dprotobuf_ABSL_PROVIDER=module
+    cleanup:
+      - /bin/protoc*
+      - /include/google
+      - /include/absl
+      - /lib/libprotobuf*
+      - /lib/libprotoc*
+      - /lib/libabsl*
+      - /lib/cmake/protobuf
+      - /lib/cmake/absl
+      - /lib/pkgconfig/protobuf*.pc
+      - /lib/pkgconfig/absl*.pc
+    sources:
+      - type: git
+        url: https://github.com/protocolbuffers/protobuf.git
+        tag: v36.2
+        commit: 2c74169b34066ceb8ddb6b882fcb3fb32d737a55
+        x-checker-data:
+          type: git
+          tag-pattern: ^v(\d+\.\d+\.\d+)$
+
   # corvus-cli (https://github.com/ada-h00k/corvus-cli): the Rust Signal backend (presage) that
   # replaces signal-cli. A single native executable without Java; it speaks signal-cli's
   # JSON-RPC, so Corvus runs it unchanged. Corvus finds it on PATH (/app/bin).
-  # The binary is the one built by corvus-cli's own release workflow, pinned by commit and
-  # SHA-256 (the release tag is "commit-<sha>"). It only links the runtime's glibc, libstdc++
-  # and libgcc.
+  # Built from source at the commit the release tag "commit-<sha>" points to, as Flathub
+  # requires (everything built from source, no prebuilt binaries). All crates are vendored
+  # in corvus-cli-cargo-sources.json, so the build stays offline; the vendoring covers
+  # corvus-cli's git dependencies (presage, libsignal-service-rs, ...) and its C-based
+  # crates (BoringSSL via boring, SQLite via libsqlite3-sys), compiled by their own build
+  # scripts with the SDK's cmake, perl and cc; protoc comes from the protobuf module above
+  # and libclang from the llvm21 SDK extension. Unlike the previous prebuilt binary this
+  # builds on x86_64 and aarch64 alike, so there is no only-arches line.
   - name: corvus-cli
     buildsystem: simple
-    only-arches: [x86_64]
+    build-options:
+      # llvm21 provides libclang for bindgen (boring-sys generates Rust bindings for
+      # BoringSSL); clang stays on PATH as well
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
+      env:
+        # crates vendored by corvus-cli-cargo-sources.json (the build has no network access)
+        CARGO_HOME: /run/build/corvus-cli/cargo
+        CARGO_NET_OFFLINE: 'true'
+        # bindgen (boring-sys) dlopens libclang from the llvm21 SDK extension
+        LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
     build-commands:
-      - install -Dm755 corvus-cli-linux-x86_64 /app/bin/corvus-cli
+      - cargo build --release --offline --locked
+      - install -Dm755 target/release/corvus-cli /app/bin/corvus-cli
     sources:
-      - type: file
-        url: https://github.com/ada-h00k/corvus-cli/releases/download/commit-4d76022c8ff0d2e4bc42d8392c0762024dfa1db9/corvus-cli-linux-x86_64
-        sha256: 60e8fc21b9c500aeba50a5bc267c67b7ae601770cddcbd8b43569217da28ba68
+      - type: git
+        url: https://github.com/ada-h00k/corvus-cli.git
+        tag: commit-4d76022c8ff0d2e4bc42d8392c0762024dfa1db9
+        commit: 4d76022c8ff0d2e4bc42d8392c0762024dfa1db9
         x-checker-data:
-          type: json
-          url: https://api.github.com/repos/ada-h00k/corvus-cli/releases/latest
-          version-query: .tag_name | sub("^commit-"; "")
-          url-query: .assets[] | select(.name == "corvus-cli-linux-x86_64") | .browser_download_url
+          type: git
+          tag-pattern: ^(commit-[0-9a-f]{40})$
+      # generated from corvus-cli's Cargo.lock by flatpak-cargo-generator.py
+      - corvus-cli-cargo-sources.json
 
   - name: corvus
     buildsystem: cmake-ninja
