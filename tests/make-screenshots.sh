@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Erstellt Screenshots von Corvus mit dem echten Breeze-Stil (Hell + Dunkel)
-# und legt sie direkt in docs/screenshots/ ab.
-# Aufruf von überall:  tests/make-screenshots.sh
-# Voraussetzung: laufende KDE-Plasma-Sitzung mit installiertem Breeze (Standard),
-# Build-Abhängigkeiten laut README (cmake, Qt6 inkl. Multimedia, qtkeychain, cargo).
+# Creates screenshots of Corvus using the real Breeze style (Light + Dark)
+# in 16:9 format (1280x720, as Flathub expects for app screenshots)
+# and saves them directly to docs/screenshots/. The mock backend reports
+# as corvus-cli; all contacts use the default avatars (no photos).
+# Run from anywhere:  tests/make-screenshots.sh
+# Prerequisite: a running KDE Plasma session with Breeze (default) installed,
+# build dependencies as listed in the README (cmake, Qt6 including multimedia, qtkeychain, cargo).
+
 set -euo pipefail
 
-# Dieses Skript liegt in <repo>/tests; alle Pfade beziehen sich auf das Repo-Wurzelverzeichnis.
+# This script is located in <repo>/tests; all paths are relative to the repo root directory.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/docs/screenshots"
 mkdir -p "$OUT"
@@ -22,6 +25,11 @@ trap restore EXIT
 for scheme in BreezeLight BreezeDark; do
   plasma-apply-colorscheme "$scheme" >/dev/null
   sleep 2
-  QT_STYLE_OVERRIDE=breeze "$ROOT/build/shots" native "$OUT/Corvus_${scheme}.png" "$ROOT/tests/mock-signal-cli.py"
+  # MOCK_VERSION: The mock reports corvus-cli as the backend (appears as such in the status bar).
+  # MOCK_NO_AVATARS: getAvatar fails; the GUI displays the default avatars (circle with a letter).
+  # Last argument of `shots`: image size “WIDTH_HEIGHT” (default 1280x720, 16:9 for Flathub).
+  MOCK_VERSION="corvus-cli 1.2.0 compatible with signal-cli 0.14.9" MOCK_NO_AVATARS=1 \
+    QT_STYLE_OVERRIDE=breeze "$ROOT/build/shots" native "$OUT/Corvus_${scheme}.png" \
+    "$ROOT/tests/mock-signal-cli.py" 1280x720
 done
-echo "Fertig: $OUT/"
+echo "Finished: $OUT/"

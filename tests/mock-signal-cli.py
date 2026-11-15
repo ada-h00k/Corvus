@@ -146,7 +146,10 @@ mode = os.environ.get("MOCK_ACCOUNTS", "ok")        # ok | empty | fail | okexit
 
 if "--version" in args:
     time.sleep(nap)
-    print("signal-cli 0.14.9")
+    # MOCK_VERSION overrides the reported backend, e.g. for the screenshots: a
+    # "corvus-cli <version> compatible with signal-cli <version>" line (without a
+    # commit in parentheses) makes the GUI show corvus-cli as the connected backend.
+    print(os.environ.get("MOCK_VERSION", "signal-cli 0.14.9"))
     sys.exit(0)
 
 if "listAccounts" in args:
@@ -375,6 +378,9 @@ for line in sys.stdin:
             res = CONTACTS
     elif m == "getAvatar":
         # contact / group avatars exist, profile avatars do not (exercises the fallback path)
+        if os.environ.get("MOCK_NO_AVATARS"):  # screenshots: everyone keeps the default avatar
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find avatar"}})
+            continue
         if "profile" in p and p["profile"] != self_account:
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find avatar"}})
             continue

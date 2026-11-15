@@ -1,4 +1,6 @@
-// Screenshot harness: real MainWindow + mock signal-cli, Breeze colour scheme.
+// Screenshot harness: real MainWindow + mock backend (mock-signal-cli.py, which presents
+// itself as corvus-cli via MOCK_VERSION and uses default avatars via MOCK_NO_AVATARS),
+// 16:9 output for the Flatpak screenshots, Breeze colour scheme.
 #include "ChatView.h"
 #include "MainWindow.h"
 #include "PassphraseDialog.h"
@@ -13,6 +15,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStyleFactory>
 #include <QTemporaryDir>
@@ -75,6 +78,14 @@ static void autoDialogs() {
 int main(int argc, char **argv) {
     if (argc < 4) return 2;
     const QString scheme = argv[1], out = argv[2], mock = argv[3];
+    // 16:9 is the aspect ratio Flathub expects for app screenshots (default 1280x720).
+    // An optional 4th argument "WIDTHxHEIGHT" overrides it, e.g. 1920x1080.
+    int width = 1280, height = 720;
+    if (argc > 4) {
+        static const QRegularExpression size(QStringLiteral("^([0-9]+)x([0-9]+)$"));
+        const auto m = size.match(argv[4]);
+        if (m.hasMatch()) { width = m.captured(1).toInt(); height = m.captured(2).toInt(); }
+    }
     QApplication app(argc, argv);
     QApplication::setOrganizationName("Corvus");
     QApplication::setApplicationName("Corvus");
@@ -97,7 +108,7 @@ int main(int argc, char **argv) {
     QTimer dt; QObject::connect(&dt, &QTimer::timeout, autoDialogs); dt.start(30);
 
     MainWindow w;
-    w.resize(1000, 640);
+    w.resize(width, height);
     w.show();
     auto *list = w.findChild<QListWidget *>("conversationList");
     auto *view = w.findChild<ChatView *>();
