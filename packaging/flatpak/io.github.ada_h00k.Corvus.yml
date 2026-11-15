@@ -1,73 +1,25 @@
-# Flatpak manifest for Corvus.
-#
-# Build (from the repository root):
-#   python3 flatpak-cargo-generator.py history-store/Cargo.lock \
-#       -o packaging/flatpak/cargo-sources.json   # flatpak-builder-tools/cargo
-#   curl -fsSL -o packaging/flatpak/corvus-cli-Cargo.lock \
-#       https://raw.githubusercontent.com/ada-h00k/corvus-cli/<pinned commit>/Cargo.lock
-#   python3 flatpak-cargo-generator.py packaging/flatpak/corvus-cli-Cargo.lock \
-#       -o packaging/flatpak/corvus-cli-cargo-sources.json
-#   flatpak-builder --user --install-deps-from=flathub --force-clean \
-#       flatpak-build packaging/flatpak/io.github.ada_h00k.Corvus.yml
-# The release workflow does exactly that (job "flatpak").
-# The corvus module below builds the upstream sources pinned by tag + commit
-# rather than the local checkout, so the manifest works unchanged as the
-# top-level manifest of a Flathub submission (flathub/flathub, next to the two
-# generated cargo-sources .json files). To build unreleased local changes,
-# temporarily swap the git source below for "- type: dir" / "path: ../..".
-#
-# Permissions are kept to the minimum the app really needs; every entry in
-# finish-args below has a reason. The KDE runtime adds a few defaults on top
-# (read-only xdg-config/kdeglobals and the KDE settings bus names) so that Qt
-# follows the Plasma colour scheme; nothing else. There is deliberately no
-# --filesystem access to user data: files are chosen through the portal file
-# chooser and the app's data lives in ~/.var/app/io.github.ada_h00k.Corvus.
-# The only --filesystem entry is the read-only PipeWire socket below, which
-# grants no user data either.
 app-id: io.github.ada_h00k.Corvus
-# Flathub currently publishes org.kde.Platform and org.kde.Sdk only through
-# branch 6.11. Keep this on the published branch so CI can resolve both refs.
-# Qt 6.12 adds Wayland XDG Document Portal drag-and-drop support; bump this
-# after Flathub publishes the matching 6.12 runtime and SDK. No broad access
-# to the host filesystem is required for that portal-backed transfer.
 runtime: org.kde.Platform
 runtime-version: '6.11'
 sdk: org.kde.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-  # libclang for bindgen (boring-sys generates Rust bindings for BoringSSL at build time);
-  # llvm21 is the llvm SDK extension matching the fd-sdk base of org.kde.Sdk 6.11
   - org.freedesktop.Sdk.Extension.llvm21
 command: corvus
 
 finish-args:
-  # corvus-cli talks to the Signal servers; GIPHY and the update check use HTTPS too
   - --share=network
-  # X11 shared memory (needed for the fallback X11 session)
   - --share=ipc
-  # Wayland first, X11 only when there is no Wayland session
   - --socket=wayland
   - --socket=fallback-x11
-  # the KDE SDK adds plain x11 by default, which would make fallback-x11 pointless
   - --nosocket=x11
-  # notification sounds (pw-play / paplay) and audio/video attachments
   - --socket=pulseaudio
-  # pw-play is a native PipeWire client and needs the raw PipeWire socket, which
-  # Flatpak cannot expose via a --socket entry; the socket file from the runtime
-  # dir is granted read-only instead. On hosts without PipeWire the mount is
-  # simply skipped (pw-play then cannot connect, as on any PulseAudio-only host).
   - --filesystem=xdg-run/pipewire-0:ro
-  # GPU rendering of the video player (QtMultimedia); drop it to force software rendering
   - --device=dri
-  # desktop notifications (freedesktop.org Notifications; also used for the tray fallback)
   - --talk-name=org.freedesktop.Notifications
-  # tray icon (StatusNotifierItem)
   - --talk-name=org.kde.StatusNotifierWatcher
-  # History key: libsecret uses the Secret portal inside the sandbox; this is only the
-  # fallback for desktops without that portal (KWallet, KeePassXC, ...)
   - --talk-name=org.freedesktop.secrets
 
-# Video/audio codecs for QtMultimedia (attachment playback)
 add-extensions:
   org.freedesktop.Platform.ffmpeg-full:
     directory: lib/ffmpeg
@@ -77,7 +29,6 @@ cleanup-commands:
   - mkdir -p ${FLATPAK_DEST}/lib/ffmpeg
 
 modules:
-  # Secret Service / Secret portal client library used by QtKeychain
   - name: libsecret
     buildsystem: meson
     config-opts:
@@ -122,14 +73,12 @@ modules:
           type: git
           tag-pattern: ^(\d+\.\d+\.\d+)$
 
-  # Only the qrencode command line tool (shows the QR code when linking a device)
   - name: libqrencode
     buildsystem: cmake-ninja
     builddir: true
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
       - -DCMAKE_INSTALL_LIBDIR=lib
-      # libqrencode 4.1.1 still declares cmake_minimum_required < 3.5, which CMake 4 rejects
       - -DCMAKE_POLICY_VERSION_MINIMUM=3.5
       - -DBUILD_SHARED_LIBS=OFF
       - -DWITH_TOOLS=ON
@@ -147,12 +96,6 @@ modules:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
 
-  # protoc compiler for corvus-cli's protobuf-based crates (spqr, libsignal-protocol,
-  # libsignal-keytrans, libsignal-svrb): the SDK does not ship protoc, so it is built from
-  # source (the same approach Flare uses on Flathub). The bundled abseil ("module"
-  # provider) comes from protobuf's own submodule, keeping the build independent of the
-  # abseil version the SDK ships. protoc only lives in the build sandbox; the cleanup
-  # section removes compiler artifacts from the final app.
   - name: protobuf
     buildsystem: cmake-ninja
     builddir: true
@@ -181,29 +124,13 @@ modules:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
 
-  # corvus-cli (https://github.com/ada-h00k/corvus-cli): the Rust Signal backend (presage) that
-  # replaces signal-cli. A single native executable without Java; it speaks signal-cli's
-  # JSON-RPC, so Corvus runs it unchanged. Corvus finds it on PATH (/app/bin).
-  # Built from source at the tag the latest release points to ("v<semver>"; legacy
-  # releases were tagged "commit-<sha>"), as Flathub requires (everything built from
-  # source, no prebuilt binaries). All crates are vendored
-  # in corvus-cli-cargo-sources.json, so the build stays offline; the vendoring covers
-  # corvus-cli's git dependencies (presage, libsignal-service-rs, ...) and its C-based
-  # crates (BoringSSL via boring, SQLite via libsqlite3-sys), compiled by their own build
-  # scripts with the SDK's cmake, perl and cc; protoc comes from the protobuf module above
-  # and libclang from the llvm21 SDK extension. Unlike the previous prebuilt binary this
-  # builds on x86_64 and aarch64 alike, so there is no only-arches line.
   - name: corvus-cli
     buildsystem: simple
     build-options:
-      # llvm21 provides libclang for bindgen (boring-sys generates Rust bindings for
-      # BoringSSL); clang stays on PATH as well
       append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
       env:
-        # crates vendored by corvus-cli-cargo-sources.json (the build has no network access)
         CARGO_HOME: /run/build/corvus-cli/cargo
         CARGO_NET_OFFLINE: 'true'
-        # bindgen (boring-sys) dlopens libclang from the llvm21 SDK extension
         LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
     build-commands:
       - cargo build --release --offline --locked
@@ -211,12 +138,11 @@ modules:
     sources:
       - type: git
         url: https://github.com/ada-h00k/corvus-cli.git
-        tag: v1.1.0
-        commit: 5e8c671e6fd108ef336029f5851130746f5adb85
+        tag: v1.2.2
+        commit: 1759da4ad5107674797a3ec0250b421e38b8c278
         x-checker-data:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
-      # generated from corvus-cli's Cargo.lock by flatpak-cargo-generator.py
       - corvus-cli-cargo-sources.json
 
   - name: corvus
@@ -225,13 +151,11 @@ modules:
     build-options:
       append-path: /usr/lib/sdk/rust-stable/bin
       env:
-        # crates vendored by cargo-sources.json (the build has no network access)
         CARGO_HOME: /run/build/corvus/cargo
         CARGO_NET_OFFLINE: 'true'
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
     post-install:
-      # Flatpak requires the desktop file and the icon to be named after the app ID
       - mv /app/share/applications/corvus.desktop /app/share/applications/io.github.ada_h00k.Corvus.desktop
       - sed -i 's|^Icon=.*|Icon=io.github.ada_h00k.Corvus|' /app/share/applications/io.github.ada_h00k.Corvus.desktop
       - mv /app/share/icons/hicolor/scalable/apps/corvus.svg /app/share/icons/hicolor/scalable/apps/io.github.ada_h00k.Corvus.svg
@@ -241,10 +165,9 @@ modules:
     sources:
       - type: git
         url: https://github.com/ada-h00k/Corvus.git
-        tag: v1.0.3
+        tag: v1.1.0
         commit: 084e63e2e9a9ad9c73af762ebda14f1b5f7d4a7e
         x-checker-data:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
-      # generated from history-store/Cargo.lock by flatpak-cargo-generator.py
       - cargo-sources.json
