@@ -6,7 +6,7 @@
   <name>Corvus</name>
   <summary>Desktop client for Signal with an encrypted local chat history</summary>
 
-  <metadata_license>CC0-1.0</metadata_license>
+  <metadata_license>FSFAP</metadata_license>
   <project_license>AGPL-3.0-only</project_license>
 
   <developer id="io.github.ada_h00k">
@@ -38,18 +38,14 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/48532fa3cc4ec58757153a2f9fa27aae5c8ad0d1/docs/screenshots/Corvus_BreezeLight.png</image>
+      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/84d1651c44d3f5f96513d967411eb21c1bb9a64a/docs/screenshots/Corvus_BreezeLight.png</image>
       <caption>Corvus with a light theme</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/48532fa3cc4ec58757153a2f9fa27aae5c8ad0d1/docs/screenshots/Corvus_BreezeDark.png</image>
+      <image>https://raw.githubusercontent.com/ada-h00k/Corvus/84d1651c44d3f5f96513d967411eb21c1bb9a64a/docs/screenshots/Corvus_BreezeDark.png</image>
       <caption>Corvus with a dark theme</caption>
     </screenshot>
   </screenshots>
-
-  <content_rating type="oars-1.1">
-    <content_attribute id="social-chat">intense</content_attribute>
-  </content_rating>
 
   <provides>
     <binary>corvus</binary>
