@@ -179,8 +179,9 @@ modules:
   # corvus-cli (https://github.com/ada-h00k/corvus-cli): the Rust Signal backend (presage) that
   # replaces signal-cli. A single native executable without Java; it speaks signal-cli's
   # JSON-RPC, so Corvus runs it unchanged. Corvus finds it on PATH (/app/bin).
-  # Built from source at the commit the release tag "commit-<sha>" points to, as Flathub
-  # requires (everything built from source, no prebuilt binaries). All crates are vendored
+  # Built from source at the tag the latest release points to ("v<semver>"; legacy
+  # releases were tagged "commit-<sha>"), as Flathub requires (everything built from
+  # source, no prebuilt binaries). All crates are vendored
   # in corvus-cli-cargo-sources.json, so the build stays offline; the vendoring covers
   # corvus-cli's git dependencies (presage, libsignal-service-rs, ...) and its C-based
   # crates (BoringSSL via boring, SQLite via libsqlite3-sys), compiled by their own build
@@ -205,11 +206,11 @@ modules:
     sources:
       - type: git
         url: https://github.com/ada-h00k/corvus-cli.git
-        tag: commit-4d76022c8ff0d2e4bc42d8392c0762024dfa1db9
-        commit: 4d76022c8ff0d2e4bc42d8392c0762024dfa1db9
+        tag: v1.1.0
+        commit: 5e8c671e6fd108ef336029f5851130746f5adb85
         x-checker-data:
           type: git
-          tag-pattern: ^(commit-[0-9a-f]{40})$
+          tag-pattern: ^v(\d+\.\d+\.\d+)$
       # generated from corvus-cli's Cargo.lock by flatpak-cargo-generator.py
       - corvus-cli-cargo-sources.json
 

@@ -348,9 +348,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Resolve the newest published corvus-cli release. Every corvus-cli release is tagged
-      # "commit-<sha>"; the manifest builds corvus-cli from source at exactly that commit.
-      # This step refreshes the pinned tag and commit in the manifest per build.
+      # Resolve the newest published corvus-cli release and pin it in the manifest: releases
+      # are tagged "v<semver>" (legacy releases used "commit-<sha>"). This step resolves the
+      # tag to the commit it points at and refreshes the pinned tag and commit per build.
       - name: Pin latest corvus-cli commit
         shell: bash
         run: |
@@ -359,6 +359,7 @@ jobs:
           python3 - <<'PY'
           import json
           import re
+          import subprocess
           import urllib.request
           from pathlib import Path
 
@@ -375,17 +376,34 @@ jobs:
               release = json.load(response)
 
           tag = release["tag_name"]
-          match = re.fullmatch(r"commit-([0-9a-f]{40})", tag)
-          if match is None:
+          if not re.fullmatch(r"v\d+\.\d+\.\d+|commit-[0-9a-f]{40}", tag):
               raise SystemExit(
-                  f"Unexpected corvus-cli release tag {tag!r}, expected 'commit-<sha>'"
+                  f"Unexpected corvus-cli release tag {tag!r}, "
+                  "expected 'v<semver>' or 'commit-<sha>'"
               )
-          commit = match.group(1)
+
+          # Resolve the tag to the commit it points at (peeled ref first, so annotated
+          # tags resolve to their commit instead of the tag object).
+          def resolved_commit(ref):
+              out = subprocess.run(
+                  ["git", "ls-remote", "https://github.com/ada-h00k/corvus-cli.git", ref],
+                  capture_output=True,
+                  text=True,
+                  check=True,
+              ).stdout.strip()
+              return out.split()[0] if out else ""
+
+          commit = (
+              resolved_commit(f"refs/tags/{tag}^{{}}")
+              or resolved_commit(f"refs/tags/{tag}")
+          )
+          if not re.fullmatch(r"[0-9a-f]{40}", commit):
+              raise SystemExit(f"Could not resolve the commit for tag {tag!r}")
 
           manifest = Path("packaging/flatpak/io.github.ada_h00k.Corvus.yml")
           content = manifest.read_text()
           content, tag_count = re.subn(
-              r"(  - name: corvus-cli\n.*?        tag: )commit-[0-9a-f]{40}",
+              r"(  - name: corvus-cli\n.*?        tag: )\S+",
               r"\g<1>" + tag,
               content,
               count=1,
@@ -402,7 +420,7 @@ jobs:
               raise SystemExit("Could not locate the corvus-cli source in the Flatpak manifest")
           manifest.write_text(content)
 
-          print(f"Building corvus-cli from source at: {tag}")
+          print(f"Building corvus-cli from source at: {tag} ({commit[:12]})")
           PY
 
       - name: Install Flatpak tooling
