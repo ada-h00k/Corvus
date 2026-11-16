@@ -79,8 +79,8 @@ Collection collect(const QList<Message> &messages)
             item.time = m.time;
             item.outgoing = m.outgoing;
             item.att = a;
-            // Same precedence as the chat: audio wins over video for ambiguous
-            // containers such as .webm without a content type.
+            // Same precedence as the chat: ambiguous containers such as .webm
+            // without an explicit audio content type count as video.
             if (a.isImage()) c.media.append(item);
             else if (a.isAudio()) c.audio.append(item);
             else if (a.isVideo()) c.media.append(item);

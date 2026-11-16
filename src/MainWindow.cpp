@@ -5736,6 +5736,9 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
             }
             QString suffix = QFileInfo(att.filename).suffix();
             if (suffix.isEmpty()) suffix = QMimeDatabase().mimeTypeForName(att.contentType).preferredSuffix();
+            // The decoder needs a real extension; fall back to the container the
+            // attachment was classified as.
+            if (suffix.isEmpty()) suffix = QStringLiteral("webm");
             const QString path = m_tmp.path() + QStringLiteral("/video-") +
                                  QUuid::createUuid().toString(QUuid::WithoutBraces) +
                                  (suffix.isEmpty() ? QString() : QStringLiteral(".") + suffix);
@@ -5854,6 +5857,8 @@ void MainWindow::toggleAudioAttachment(int msgIdx, int attIdx)
 
         QString suffix = QFileInfo(attachment.filename).suffix();
         if (suffix.isEmpty()) suffix = QMimeDatabase().mimeTypeForName(attachment.contentType).preferredSuffix();
+        // The decoder needs a real extension; voice clips are opus in an ogg container.
+        if (suffix.isEmpty()) suffix = QStringLiteral("ogg");
         const QString path = m_tmp.path() + QStringLiteral("/audio-") +
                              QUuid::createUuid().toString(QUuid::WithoutBraces) +
                              (suffix.isEmpty() ? QString() : QStringLiteral(".") + suffix);

@@ -84,9 +84,9 @@ private slots:
     {
         const MediaGallery::Collection c = MediaGallery::collect(sampleConversation());
         // image, video, gif; the deleted message is ignored
-        QCOMPARE(c.media.size(), 3);
-        // .webm without content type counts as audio, like in the chat
-        QCOMPARE(c.audio.size(), 2);
+        QCOMPARE(c.media.size(), 4);
+        // .webm without content type counts as video, like in the chat
+        QCOMPARE(c.audio.size(), 1);
         QCOMPARE(c.files.size(), 1);
         QCOMPARE(c.files[0].att.filename, QStringLiteral("report.pdf"));
         // one link from the first message, two distinct ones from the third

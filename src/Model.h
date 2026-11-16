@@ -37,14 +37,17 @@ struct Attachment {
         const int id = idPart.toInt(&ok);
         return ok && id >= 0 ? id : -1;
     }
+    // .webm and .ogg are containers for both audio and video. A bare .webm/.ogg
+    // file name must not be classified as audio, otherwise WebM videos end up in
+    // the audio playback path and never play. Only an explicit "audio/*" content
+    // type (or the audio-only extensions) counts as audio.
     bool isAudio() const
     {
         if (contentType.startsWith(QLatin1String("audio/"))) return true;
         const QString suffix = filename.section(QLatin1Char('.'), -1).toLower();
         return QStringList{QStringLiteral("aac"), QStringLiteral("flac"), QStringLiteral("m4a"),
-                           QStringLiteral("mp3"), QStringLiteral("oga"), QStringLiteral("ogg"),
-                           QStringLiteral("opus"), QStringLiteral("wav"), QStringLiteral("weba"),
-                           QStringLiteral("webm")}.contains(suffix);
+                           QStringLiteral("mp3"), QStringLiteral("oga"), QStringLiteral("opus"),
+                           QStringLiteral("wav"), QStringLiteral("weba")}.contains(suffix);
     }
     bool isVideo() const
     {
