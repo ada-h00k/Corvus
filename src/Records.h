@@ -23,6 +23,13 @@ QJsonObject linkPreviewUpdate(const QString &conv, const Message &m);
 // Consumes a View Once media item (or expires it) and removes its attachment reference.
 QJsonObject viewOnceUpdate(const QString &conv, const Message &m);
 QJsonObject receiptStatusUpdate(const QString &conv, const Message &m);
+// Ends a poll early (an "update" record with the extra "pt").
+QJsonObject pollTerminate(const QString &conv, const Message &m);
+// One poll vote (a "pv" record, like a reaction): ts/au identify the poll message,
+// by = voter, oi = the chosen option indexes (empty = vote taken back),
+// vc = the per-voter voteCount, vt = timestamp of the vote message.
+QJsonObject pollVote(const QString &conv, qint64 ts, const QString &author, const QString &by,
+                     const QList<int> &optionIndexes, qint64 voteCount, qint64 voteTs);
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji);
 // Pin ("rm" = false) or unpin ("rm" = true) of a message: ts/au identify the pinned message,
 // by = who pinned it, at = local pin time, d = duration in seconds (-1 = forever).

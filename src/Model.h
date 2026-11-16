@@ -111,6 +111,44 @@ struct RecipientReceipt {
     qint64 readAtMs = 0;
 };
 
+// One vote on a poll, like the official clients: every voter has at most one current vote
+// (the one with the highest voteCount wins; an empty optionIndexes list takes the vote back).
+struct PollVote {
+    QList<int> optionIndexes;
+    qint64 voteCount = 0; // per-voter sequence number: every vote counts up from the previous one
+    qint64 voteTs = 0;    // timestamp of the vote message (tie-break for equal voteCounts)
+};
+
+// A Signal poll (Signal Desktop 7.44): question with 2..=10 options, single or multiple
+// choice. Votes arrive as separate pollVote messages that reference the poll message;
+// they never become bubbles of their own. terminated = the author ended the poll early.
+struct PollData {
+    QString question;
+    QStringList options;
+    bool allowMultiple = false;
+    bool terminated = false;
+    QHash<QString, PollVote> votes; // voter key (number/UUID) -> current vote
+
+    // Current vote of one voter (empty list = no vote).
+    QList<int> voteOf(const QString &voter) const { return votes.value(voter).optionIndexes; }
+    // Number of voters per option (only the winning vote of each voter counts).
+    QList<int> optionCounts() const
+    {
+        QList<int> counts(options.size(), 0);
+        for (auto it = votes.cbegin(); it != votes.cend(); ++it)
+            for (int index : it.value().optionIndexes)
+                if (index >= 0 && index < counts.size()) ++counts[index];
+        return counts;
+    }
+    // Highest current vote count (> 0); options with this count lead the poll.
+    int topCount() const
+    {
+        int top = 0;
+        for (int count : optionCounts()) top = qMax(top, count);
+        return top;
+    }
+};
+
 struct Message {
     QDateTime time;
     // Local timeline order is independent from Signal's sender timestamp (`time`). A sender's
@@ -147,6 +185,10 @@ struct Message {
     // "Delete for everyone" (by us or by the author): like the official clients the message stays
     // in the chat as a placeholder. Text, attachments, quote and reactions are gone for good.
     bool deleted = false;
+
+    // Signal poll (no text, no attachments of its own). hasPoll marks the message as a poll.
+    bool hasPoll = false;
+    PollData poll;
 
     qint64 ts() const { return time.toMSecsSinceEpoch(); }
     qint64 sortTs() const { return orderTs > 0 ? orderTs : ts(); }

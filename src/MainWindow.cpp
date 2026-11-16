@@ -21,6 +21,7 @@
 #include "MessageInput.h"
 #include "Notifier.h"
 #include "PassphraseDialog.h"
+#include "PollDialog.h"
 #include "SafetyNumberDialog.h"
 #include "ProfilePage.h"
 #include "SettingsDialog.h"
@@ -648,13 +649,20 @@ MainWindow::MainWindow()
     m_micBtn->setToolTip(tr("Record a voice message"));
     m_micBtn->setAccessibleName(tr("Record a voice message"));
     m_micBtn->setFixedSize(40, 40);
+    m_pollBtn = new QToolButton;
+    m_pollBtn->setText(QStringLiteral("📊"));
+    m_pollBtn->setToolTip(tr("Create a poll"));
+    m_pollBtn->setAccessibleName(tr("Create a poll"));
+    m_pollBtn->setFixedSize(40, 40);
+    m_pollBtn->setEnabled(false);
+    m_pollBtn->hide(); // shown when the backend supports polls (signal-cli 0.13.23+ / corvus-cli)
     m_emojiBtn = new QToolButton;
     m_emojiBtn->setText(QStringLiteral("😊"));
     m_emojiBtn->setToolTip(tr("Emoji, GIFs and stickers"));
     m_emojiBtn->setFixedSize(40, 40);
 #ifdef Q_OS_MACOS
     // Flat, borderless buttons next to the input field, as in Messages.
-    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_micBtn, m_viewOnceBtn})
+    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_micBtn, m_pollBtn, m_viewOnceBtn})
         b->setAutoRaise(true);
 #endif
     m_input = new MessageInput;
@@ -710,6 +718,7 @@ MainWindow::MainWindow()
     // The voice recording button sits to the LEFT of the attach-files button.
     h->addWidget(m_micBtn);
     h->addWidget(m_attachBtn);
+    h->addWidget(m_pollBtn);
     h->addWidget(m_viewOnceBtn);
 
     // Shown instead of the message field while a voice message is being recorded.
@@ -949,6 +958,9 @@ MainWindow::MainWindow()
     connect(m_view, &ChatView::pinRequested, this, &MainWindow::sendPin);
     connect(m_view, &ChatView::unpinRequested, this, &MainWindow::sendUnpin);
     connect(m_view, &ChatView::pinBannerMenuRequested, this, &MainWindow::showPinBannerMenu);
+    connect(m_view, &ChatView::pollOptionClicked, this, &MainWindow::sendPollVote);
+    connect(m_view, &ChatView::pollTerminateRequested, this, &MainWindow::sendPollTerminate);
+    connect(m_view, &ChatView::pollVotesRequested, this, &MainWindow::showPollVotes);
     connect(m_view, &ChatView::moreReactionsRequested, this, [this](int idx, const QPoint &gp) {
         m_pickAction = [this, idx](const QString &e) { sendReaction(idx, e); };
         m_picker->setGifsAvailable(false); // GIFs and stickers cannot be reactions
@@ -985,6 +997,7 @@ MainWindow::MainWindow()
     connect(m_attachBtn, &QToolButton::clicked, this, [this] {
         addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
     });
+    connect(m_pollBtn, &QToolButton::clicked, this, &MainWindow::createPoll);
     connect(m_viewOnceBtn, &QToolButton::toggled, this, [this] { updateAttachBar(); });
     connect(m_input, &QTextEdit::textChanged, this, [this] {
         updateAttachBar();
@@ -1705,6 +1718,9 @@ void MainWindow::setConnected(bool connected)
     m_composerConnected = connected;
     updateAttachBar();
     updateRecordingUi();
+    // The 📊 button appears once the backend can actually send polls.
+    m_pollBtn->setVisible(connected && supportsPolls());
+    m_pollBtn->setEnabled(connected && supportsPolls());
 }
 
 // ----------------------------------------------------- Contacts / groups
@@ -1907,6 +1923,7 @@ void MainWindow::updateRecordingUi()
     m_attachBtn->setEnabled(on);
     m_emojiBtn->setEnabled(on);
     m_micBtn->setEnabled(on);
+    m_pollBtn->setEnabled(on && supportsPolls());
 }
 
 void MainWindow::startVoiceRecording()
@@ -2231,6 +2248,35 @@ void MainWindow::loadHistory(const QJsonArray &records)
                 const QString e = o.value(QStringLiteral("e")).toString();
                 if (e.isEmpty()) m.reactions.remove(by); else m.reactions[by] = e;
             }
+        } else if (t == QLatin1String("pv")) {
+            // A poll vote ("oi" empty = the vote was taken back). The poll message must
+            // already be known; votes are written after their messages, like reactions.
+            auto it = m_convs.find(key);
+            if (it == m_convs.end()) continue;
+            const QString au = o.value(QStringLiteral("au")).toString();
+            const int i = findMessage(it.value(), o.value(QStringLiteral("ts")).toVariant().toLongLong(),
+                                      au.isEmpty() ? QStringList() : QStringList{au});
+            if (i < 0) continue;
+            Message &m = it.value().msgs[i];
+            if (!m.hasPoll) continue;
+            const QString by = o.value(QStringLiteral("by")).toString();
+            if (by.isEmpty()) continue;
+            QList<int> indexes;
+            for (const QJsonValue &v : o.value(QStringLiteral("oi")).toArray()) {
+                const int index = v.toInt(-1);
+                if (index >= 0 && index < m.poll.options.size()) indexes.append(index);
+            }
+            PollVote vote;
+            vote.optionIndexes = indexes;
+            vote.voteCount = o.value(QStringLiteral("vc")).toVariant().toLongLong();
+            vote.voteTs = o.value(QStringLiteral("vt")).toVariant().toLongLong();
+            // Same rule as live: the highest voteCount wins, on a tie the later one.
+            const PollVote existing = m.poll.votes.value(by);
+            if (vote.voteCount > existing.voteCount ||
+                (vote.voteCount == existing.voteCount && vote.voteTs >= existing.voteTs)) {
+                if (indexes.isEmpty()) m.poll.votes.remove(by);
+                else m.poll.votes.insert(by, vote);
+            }
         } else if (t == QLatin1String("k")) {
             conv(key, key, group).muted = o.value(QStringLiteral("v")).toBool();
         } else if (t == QLatin1String("pi")) {
@@ -2305,6 +2351,9 @@ QJsonArray MainWindow::allRecords() const
             out.append(Records::message(c.key, m));
             for (auto it = m.reactions.cbegin(); it != m.reactions.cend(); ++it)
                 out.append(Records::reaction(c.key, m.ts(), effectiveAuthor(c, m), it.key(), it.value()));
+            for (auto it = m.poll.votes.cbegin(); it != m.poll.votes.cend(); ++it)
+                out.append(Records::pollVote(c.key, m.ts(), effectiveAuthor(c, m), it.key(),
+                                             it.value().optionIndexes, it.value().voteCount, it.value().voteTs));
         }
         // Pins come after the messages they reference; order inside the chat is preserved.
         for (const PinInfo &pin : c.pins)
@@ -4384,6 +4433,24 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         return;
     }
 
+    if (pe.kind == ParsedEnvelope::PollVote || pe.kind == ParsedEnvelope::PollTerminate) {
+        // Same shape as a reaction: an empty dataMessage that references the poll message.
+        const QString gid = env.value(QStringLiteral("dataMessage")).toObject().value(QStringLiteral("groupInfo")).toObject()
+                                .value(QStringLiteral("groupId")).toString();
+        const QString pkey = !gid.isEmpty() ? QStringLiteral("g:") + gid : key;
+        if (pe.kind == ParsedEnvelope::PollVote) {
+            const QString voter = pe.outgoing ? m_account : srcKey;
+            const qint64 voteTs = env.value(QStringLiteral("timestamp")).toVariant().toLongLong();
+            applyPollVote(pkey, pe.targetTs, {pe.targetNumber, pe.targetUuid}, voter, pe.pollOptionIndexes,
+                          pe.pollVoteCount, voteTs > 0 ? voteTs : QDateTime::currentMSecsSinceEpoch());
+        } else {
+            // Only the author can end a poll; anything else is dropped.
+            const QString author = pe.outgoing ? m_account : srcKey;
+            applyPollTerminate(pkey, pe.targetTs, {author});
+        }
+        return;
+    }
+
     if (pe.kind == ParsedEnvelope::Delete) {
         // Only the author can delete a message for everyone (the phone or the other side).
         const QString author = pe.outgoing ? m_account : srcKey;
@@ -4464,6 +4531,10 @@ void MainWindow::onEnvelope(const QJsonObject &env)
                 // Match on the protocol flag before comparing attachment counts, or a one-time
                 // photo can accidentally confirm an ordinary image send with the same empty text.
                 if (pending.message.viewOnce != m.viewOnce)
+                    continue;
+                // A poll send and an empty-text image send share the empty comparable text:
+                // match on the poll flag before anything else can consume the echo.
+                if (pending.message.hasPoll != m.hasPoll)
                     continue;
                 if (!pending.message.viewOnce && !pending.message.attachments.isEmpty() &&
                     !m.attachments.isEmpty() && pending.message.attachments.size() != m.attachments.size())
@@ -4823,6 +4894,7 @@ void MainWindow::startReply(int idx)
     m_replyQuote.id = m.latestTs(); // peers know an edited message by its latest timestamp
     m_replyQuote.authorKey = effectiveAuthor(c, m);
     m_replyQuote.text = m.text;
+    if (m.hasPoll) m_replyQuote.text = tr("Poll: %1").arg(m.poll.question);
     if (m.text.isEmpty() && !m.attachments.isEmpty()) m_replyQuote.attachmentNote = m.attachments.first().contentType;
     if (m_viewOnceBtn) m_viewOnceBtn->setChecked(false);
     updateReplyBar();
@@ -5514,6 +5586,262 @@ void MainWindow::sendReaction(int idx, const QString &emoji)
         }
         applyReaction(key, ts, {author}, m_account, remove ? QString() : emoji);
     });
+}
+
+// --------------------------------------------------------------- Polls
+
+// sendPollCreate / sendPollVote / sendPollTerminate exist since signal-cli 0.13.23;
+// corvus-cli reports the signal-cli version it is compatible with, so a backend that
+// predates the poll commands is recognised here (corvus-cli itself since 1.4.0).
+bool MainWindow::supportsPolls() const
+{
+    if (m_backend == QLatin1String("corvus-cli"))
+        return QVersionNumber::fromString(m_backendVersion) >= QVersionNumber(1, 4, 0);
+    return QVersionNumber::fromString(m_version) >= QVersionNumber(0, 13, 23);
+}
+
+// 📊 button: "New poll" dialog, then the same pending-preview flow as a normal send.
+void MainWindow::createPoll()
+{
+    if (!m_convs.contains(m_current) || !supportsPolls()) return;
+    const Conversation c = m_convs[m_current];
+    if (c.blocked) return;
+
+    PollDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString question = dialog.question();
+    const QStringList options = dialog.options();
+    if (question.isEmpty() || options.size() < 2) return;
+
+    QJsonObject p{{QStringLiteral("question"), question},
+                  {QStringLiteral("noMulti"), !dialog.allowMultiple()}};
+    QJsonArray optionParams;
+    for (const QString &option : options) optionParams.append(option);
+    p[QStringLiteral("option")] = optionParams;
+    addRecipient(p, c);
+
+    // Insert a temporary local poll message before waiting for the backend (like a
+    // text send); it is only persisted once the send is confirmed.
+    Message preview;
+    preview.time = QDateTime::currentDateTime();
+    preview.hasPoll = true;
+    preview.poll.question = question;
+    preview.poll.options = options;
+    preview.poll.allowMultiple = dialog.allowMultiple();
+    preview.outgoing = true;
+    preview.authorKey = m_account;
+    preview.expiresInSeconds = c.expirationSeconds;
+    preview.orderTs = std::max(preview.ts(), (c.msgs.isEmpty() ? qint64(0) : c.msgs.last().sortTs()) + 1);
+
+    const QString key = c.key;
+    const QString pendingId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    PendingSend pending;
+    pending.conversationKey = key;
+    pending.temporaryTimestamp = preview.ts();
+    pending.message = preview;
+    m_pendingSends.insert(pendingId, pending);
+
+    Conversation &target = m_convs[key];
+    int at = target.msgs.size();
+    while (at > 0 && target.msgs[at - 1].sortTs() > preview.sortTs()) --at;
+    target.msgs.insert(at, preview);
+    if (key == m_current) showConversation(true);
+    refreshList();
+
+    m_cli.call(QStringLiteral("sendPollCreate"), p, [this, pendingId, key](const QJsonValue &res, const QString &err) {
+        auto pendingIt = m_pendingSends.find(pendingId);
+        if (pendingIt == m_pendingSends.end()) return;
+        if (!err.isEmpty() && !pendingIt->echoReceived) {
+            const PendingSend failed = pendingIt.value();
+            removePendingPreview(failed);
+            m_pendingSends.erase(pendingIt);
+            if (SafetyNumber::isUntrustedIdentityError(err)) checkIdentities(key, true);
+            return;
+        }
+        if (pendingIt->echoReceived) {
+            m_pendingSends.erase(pendingIt);
+            return;
+        }
+        qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
+        if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
+        finalizePendingSend(pendingId, ts);
+        checkSendResults(res);
+    });
+}
+
+// One click on an option row votes, like in the official clients. The vote message
+// always carries the full current selection: single choice replaces the vote (clicking
+// the chosen option again takes it back), multiple choice toggles the option.
+void MainWindow::sendPollVote(int idx, int optionIndex)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Conversation c = m_convs[m_current];
+    const Message m = c.msgs[idx];
+    if (m.deleted || !m.hasPoll || m.poll.terminated) return;
+    if (optionIndex < 0 || optionIndex >= m.poll.options.size()) return;
+
+    QList<int> indexes = m.poll.voteOf(m_account);
+    if (m.poll.allowMultiple) {
+        if (indexes.contains(optionIndex)) indexes.removeAll(optionIndex);
+        else indexes.append(optionIndex);
+        std::sort(indexes.begin(), indexes.end());
+    } else {
+        indexes = indexes == QList<int>{optionIndex} ? QList<int>() : QList<int>{optionIndex};
+    }
+    // Like the official clients: every vote counts up from the voter's previous one.
+    const qint64 voteCount = m.poll.votes.value(m_account).voteCount + 1;
+
+    QJsonObject p{{QStringLiteral("pollAuthor"), effectiveAuthor(c, m)},
+                  {QStringLiteral("pollTimestamp"), QJsonValue(static_cast<qint64>(m.latestTs()))},
+                  {QStringLiteral("voteCount"), QJsonValue(static_cast<qint64>(voteCount))}};
+    QJsonArray optionParams;
+    for (int index : indexes) optionParams.append(index);
+    p[QStringLiteral("option")] = optionParams;
+    addRecipient(p, c);
+
+    const QString key = c.key;
+    const qint64 ts = m.ts();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    m_cli.call(QStringLiteral("sendPollVote"), p,
+               [this, key, ts, indexes, voteCount, now](const QJsonValue &, const QString &err) {
+        if (!err.isEmpty()) {
+            return;
+        }
+        applyPollVote(key, ts, {m_account}, m_account, indexes, static_cast<int>(voteCount), now);
+    });
+}
+
+// "End poll" in the message menu: only the poll's author can do this, like the official clients.
+void MainWindow::sendPollTerminate(int idx)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Conversation c = m_convs[m_current];
+    const Message m = c.msgs[idx];
+    if (m.deleted || !m.hasPoll || m.poll.terminated || !m.outgoing) return;
+
+    QJsonObject p{{QStringLiteral("pollTimestamp"), QJsonValue(static_cast<qint64>(m.latestTs()))}};
+    addRecipient(p, c);
+
+    const QString key = c.key;
+    const qint64 ts = m.ts();
+    m_cli.call(QStringLiteral("sendPollTerminate"), p, [this, key, ts](const QJsonValue &, const QString &err) {
+        if (!err.isEmpty()) {
+            return;
+        }
+        applyPollTerminate(key, ts, {m_account});
+    });
+}
+
+// "View votes…": the poll question and, per option, who voted for it.
+void MainWindow::showPollVotes(int idx)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Conversation &c = m_convs[m_current];
+    const Message &m = c.msgs[idx];
+    if (!m.hasPoll) return;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Poll details"));
+    dialog.setModal(true);
+    dialog.resize(420, 380);
+    auto *lay = new QVBoxLayout(&dialog);
+
+    auto *question = new QLabel(m.poll.question, &dialog);
+    question->setWordWrap(true);
+    QFont bold = question->font();
+    bold.setBold(true);
+    question->setFont(bold);
+    lay->addWidget(question);
+    lay->addSpacing(6);
+
+    const QList<int> counts = m.poll.optionCounts();
+    for (int o = 0; o < m.poll.options.size(); ++o) {
+        QStringList voters;
+        for (auto it = m.poll.votes.cbegin(); it != m.poll.votes.cend(); ++it)
+            if (it.value().optionIndexes.contains(o)) voters << displayName(it.key());
+        voters.removeAll(QString());
+        std::sort(voters.begin(), voters.end(), [](const QString &a, const QString &b) { return a.compare(b, Qt::CaseInsensitive) < 0; });
+        auto *label = new QLabel(&dialog);
+        label->setWordWrap(true);
+        label->setTextFormat(Qt::RichText);
+        label->setText(QStringLiteral("<b>%1</b> — %2<br><span style=\"color: gray;\">%3</span>")
+                           .arg(m.poll.options.at(o).toHtmlEscaped())
+                           .arg(tr("%n vote(s)", "", counts.value(o, 0)))
+                           .arg(voters.isEmpty() ? tr("Nobody") : voters.join(QStringLiteral(", ")).toHtmlEscaped()));
+        lay->addWidget(label);
+    }
+    if (m.poll.votes.isEmpty())
+        lay->addWidget(new QLabel(tr("No votes"), &dialog));
+
+    auto *close = new QPushButton(tr("Close"), &dialog);
+    connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+    lay->addWidget(close, 0, Qt::AlignRight);
+    dialog.exec();
+}
+
+// A vote (own or received) replaces the voter's previous one: the vote with the highest
+// voteCount wins, on a tie the later one. An empty selection takes the vote back.
+bool MainWindow::applyPollVote(const QString &key, qint64 targetTs, const QStringList &authors, const QString &voter,
+                               const QList<int> &optionIndexes, int voteCount, qint64 voteTs)
+{
+    if (voter.isEmpty()) return false;
+    auto it = m_convs.find(key);
+    if (it == m_convs.end()) return false;
+    Conversation &c = it.value();
+    const int i = findMessage(c, targetTs, authors);
+    if (i < 0) return false;
+    Message &m = c.msgs[i];
+    if (m.deleted || !m.hasPoll) return false;
+    const QString author = effectiveAuthor(c, m);
+
+    QList<int> indexes;
+    for (int index : optionIndexes)
+        if (index >= 0 && index < m.poll.options.size()) indexes.append(index);
+
+    PollVote existing = m.poll.votes.value(voter);
+    // The vote with the highest voteCount wins; on a tie the later one. A retraction
+    // that arrives out of order (lower voteCount than the current vote) is ignored.
+    const bool newer = voteCount > existing.voteCount ||
+                       (voteCount == existing.voteCount && voteTs >= existing.voteTs);
+    if (!newer) return false;
+
+    PollVote vote;
+    vote.optionIndexes = indexes;
+    vote.voteCount = voteCount;
+    vote.voteTs = voteTs;
+    if (indexes.isEmpty())
+        m.poll.votes.remove(voter);
+    else
+        m.poll.votes.insert(voter, vote);
+    persist(Records::pollVote(key, m.ts(), author, voter, indexes, voteCount, voteTs));
+
+    // Like the official clients: the poll author is told about new votes on their poll.
+    const bool voted = !indexes.isEmpty();
+    if (voted && author == m_account && voter != m_account && m_notify.notifications) {
+        const auto convIt = m_convs.constFind(key);
+        if (convIt != m_convs.constEnd() && !convIt->muted && !(key == m_current && userIsLooking()))
+            m_notifier->notify(key, convIt->title, tr("%1 voted in the poll \"%2\"").arg(displayName(voter), m.poll.question),
+                               avatarPixmap(*convIt));
+    }
+    if (key == m_current) showConversation(true);
+    return true;
+}
+
+bool MainWindow::applyPollTerminate(const QString &key, qint64 targetTs, const QStringList &authors)
+{
+    auto it = m_convs.find(key);
+    if (it == m_convs.end()) return false;
+    Conversation &c = it.value();
+    const int i = findMessage(c, targetTs, authors);
+    if (i < 0) return false;
+    Message &m = c.msgs[i];
+    if (m.deleted || !m.hasPoll || m.poll.terminated) return false;
+    // findMessage already matched the poll author: a terminate from someone else's
+    // number/UUID never finds the message and is dropped, like the official clients.
+    m.poll.terminated = true;
+    persist(Records::pollTerminate(key, m));
+    if (key == m_current) showConversation(true);
+    return true;
 }
 
 // ------------------------------------------------------ Pinned messages
@@ -6255,9 +6583,10 @@ void MainWindow::alertIncoming(const QString &key, const Message &m)
     // Notification and sound are independent switches.
     if (m_notify.notifications) {
         QString preview = m.viewOnce ? (m.viewOnceExpired ? tr("[View Once expired]") : tr("[View Once photo]"))
-                                     : m.text.simplified();
+                                     : m.hasPoll ? tr("Poll: %1").arg(m.poll.question)
+                                                 : m.text.simplified();
         if (preview.size() > 240) preview = preview.left(240) + QStringLiteral("…");
-        if (!m.viewOnce && preview.isEmpty() && !m.attachments.isEmpty()) {
+        if (!m.viewOnce && !m.hasPoll && preview.isEmpty() && !m.attachments.isEmpty()) {
             const Attachment &a = m.attachments.first();
             preview = a.isImage() ? tr("[Image]") : tr("[File] %1").arg(a.filename);
         }

@@ -509,6 +509,36 @@ for line in sys.stdin:
     elif m == "sendReaction":
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}
+    elif m == "sendPollCreate":
+        # like signal-cli 0.13.23+: question + option list, --no-multi for single choice
+        question = (p.get("question") or "").strip()
+        options = [o.strip() for o in p.get("option", []) if o.strip()]
+        if not question:
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "poll question must not be empty"}})
+            continue
+        if len(options) < 2 or len(options) > 10:
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "poll needs 2..10 options"}})
+            continue
+        sent += 1
+        res = {"timestamp": 1700000100000 + sent, "results": []}
+    elif m == "sendPollVote":
+        # vote on the poll identified by pollAuthor/pollTimestamp; option holds the
+        # selected indexes (empty list = take the vote back), voteCount counts up
+        if not p.get("pollAuthor") or not p.get("pollTimestamp"):
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "missing pollAuthor/pollTimestamp"}})
+            continue
+        for index in p.get("option", []):
+            if not isinstance(index, int) or index < 0:
+                emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "invalid option index"}})
+                continue
+        sent += 1
+        res = {"timestamp": 1700000100000 + sent, "results": []}
+    elif m == "sendPollTerminate":
+        if not p.get("pollTimestamp"):
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "missing pollTimestamp"}})
+            continue
+        sent += 1
+        res = {"timestamp": 1700000100000 + sent, "results": []}
     elif m == "getAttachment":
         if p.get("id") == "missing":
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find attachment"}})

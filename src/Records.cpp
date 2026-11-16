@@ -160,6 +160,25 @@ static QJsonObject editToJson(const Message &m)
     return e;
 }
 
+// Poll definition: q = question, o = options, m = multiple choice allowed.
+static QJsonObject pollToJson(const PollData &poll)
+{
+    QJsonObject p{{"q", poll.question}, {"m", poll.allowMultiple}};
+    QJsonArray opts;
+    for (const QString &option : poll.options) opts.append(option);
+    p["o"] = opts;
+    return p;
+}
+
+static PollData pollFromJson(const QJsonObject &p)
+{
+    PollData poll;
+    poll.question = p.value(QStringLiteral("q")).toString();
+    poll.allowMultiple = p.value(QStringLiteral("m")).toBool();
+    for (const QJsonValue &v : p.value(QStringLiteral("o")).toArray()) poll.options << v.toString();
+    return poll;
+}
+
 QJsonObject message(const QString &conv, const Message &m)
 {
     QJsonObject d;
@@ -183,6 +202,10 @@ QJsonObject message(const QString &conv, const Message &m)
                              {"a", m.quote.authorKey},
                              {"t", m.quote.text},
                              {"n", m.quote.attachmentNote}};
+    }
+    if (m.hasPoll && !m.deleted) {
+        d["pl"] = pollToJson(m.poll);
+        if (m.poll.terminated) d["pt"] = true;
     }
     // Never retain sent or consumed View Once media in local history. For an incoming
     // unopened item only the opaque signal-cli attachment reference is persisted.
@@ -264,6 +287,11 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.expirationStartMs = d["es"].toVariant().toLongLong();
     }
     if (d.contains("lp")) m.linkPreview = linkPreviewFromJson(d["lp"].toObject());
+    if (d.contains("pl")) {
+        m.hasPoll = true;
+        m.poll = pollFromJson(d["pl"].toObject());
+    }
+    if (d.contains("pt")) m.poll.terminated = d["pt"].toBool();
     if (d.contains("vo")) m.viewOnce = d["vo"].toBool();
     if (d.contains("vv")) m.viewOnceViewed = d["vv"].toBool();
     if (d.contains("ve")) m.viewOnceExpired = d["ve"].toBool();
@@ -283,6 +311,8 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.quote = Quote();
         m.linkPreview = LinkPreview();
         m.reactions.clear();
+        m.hasPoll = false;
+        m.poll = PollData();
         m.viewOnce = false;
         m.viewOnceViewed = false;
         m.viewOnceExpired = false;
@@ -339,6 +369,30 @@ QJsonObject receiptStatusUpdate(const QString &conv, const Message &m)
             {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
             {"au", m.authorKey},
             {"d", extras}};
+}
+
+QJsonObject pollTerminate(const QString &conv, const Message &m)
+{
+    return {{"t", "u"},
+            {"c", conv},
+            {"ts", QJsonValue(static_cast<qint64>(m.ts()))},
+            {"au", m.authorKey},
+            {"d", QJsonObject{{"pt", true}}}};
+}
+
+QJsonObject pollVote(const QString &conv, qint64 ts, const QString &author, const QString &by,
+                     const QList<int> &optionIndexes, qint64 voteCount, qint64 voteTs)
+{
+    QJsonArray oi;
+    for (int index : optionIndexes) oi.append(index);
+    return {{"t", "pv"},
+            {"c", conv},
+            {"ts", QJsonValue(static_cast<qint64>(ts))},
+            {"au", author},
+            {"by", by},
+            {"oi", oi},
+            {"vc", QJsonValue(static_cast<qint64>(voteCount))},
+            {"vt", QJsonValue(static_cast<qint64>(voteTs))}};
 }
 
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji)

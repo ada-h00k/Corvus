@@ -90,6 +90,11 @@ signals:
     void unpinRequested(int idx);
     // Right-click or "…" on the pinned-message banner: MainWindow builds the options menu.
     void pinBannerMenuRequested(const QPoint &globalPos);
+    // Polls (like the official clients): click an option to vote, the context menu shows
+    // the details and lets the author end the poll early.
+    void pollOptionClicked(int idx, int optionIndex);
+    void pollVotesRequested(int idx);
+    void pollTerminateRequested(int idx);
     void attachmentActivated(int msgIdx, int attIdx);     // click: view / open
     void attachmentSaveRequested(int msgIdx, int attIdx); // context menu
     void animatedAttachmentRequested(int msgIdx, int attIdx);
@@ -134,9 +139,13 @@ private:
         QRect linkPreviewRect, linkPreviewImageRect, linkPreviewTitleRect, linkPreviewDescriptionRect, linkPreviewHostRect;
         QList<QRect> attRects;
         QList<Pill> pills;
+        // Poll block (question, status line, one hit row per option, vote total).
+        QRect pollRect, pollStatusRect, pollQuestionRect, pollFooterRect;
+        QList<QRect> pollOptionRects;
+        QStringList pollOptionTexts; // the (line-fitted) option texts painted in the rows
     };
     struct Hit {
-        enum Kind { None, Bubble, Text, Link, Quote, Attachment } kind = None;
+        enum Kind { None, Bubble, Text, Link, Quote, Attachment, PollOption } kind = None;
         int msg = -1;
         int index = -1;   // attachment index
         int textPos = -1; // cursor position in the message text

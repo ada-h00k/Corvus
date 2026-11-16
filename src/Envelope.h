@@ -6,7 +6,7 @@
 
 // A signal-cli "receive" envelope reduced to what the GUI needs.
 struct ParsedEnvelope {
-    enum Kind { None, Message_, Reaction, Edit, Delete, Pin, Unpin, ExpirationUpdate, Receipt, Typing } kind = None;
+    enum Kind { None, Message_, Reaction, Edit, Delete, Pin, Unpin, PollVote, PollTerminate, ExpirationUpdate, Receipt, Typing } kind = None;
     bool outgoing = false;   // sent by one of our own other devices (sync message)
     QString src;             // sender number / UUID (incoming)
     QString srcName;         // sender's profile name
@@ -30,9 +30,15 @@ struct ParsedEnvelope {
     // Delete: targetTs = timestamp of the message deleted for everyone
     // Edit: new text in msg.text, timestamp of the edit in msg.time
     // Pin: targetTs = timestamp of the pinned message; Unpin: the unpinned message.
+    // PollVote / PollTerminate: targetTs = timestamp of the poll message,
+    // targetNumber/targetUuid = author of that poll message.
     // pinDurationSeconds as reported by the backend: -1 = forever, 0 = unspecified
     // (treated like forever here), otherwise seconds (24 h / 7 d / 30 d on the official clients).
     qint64 pinDurationSeconds = -1;
+    // PollVote: the chosen option indexes (empty = vote taken back) and the per-voter
+    // sequence number of the vote ("voteCount", counts up with every vote).
+    QList<int> pollOptionIndexes;
+    int pollVoteCount = 0;
 };
 
 ParsedEnvelope parseEnvelope(const QJsonObject &env);

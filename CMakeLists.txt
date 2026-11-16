@@ -117,6 +117,8 @@ set(APP_SOURCES
     src/SafetyNumberDialog.cpp
     src/MessageInput.h
     src/MessageInput.cpp
+    src/PollDialog.h
+    src/PollDialog.cpp
     src/MainWindow.h
     src/MainWindow.cpp
     src/LinkDialog.h
@@ -354,6 +356,14 @@ if(CORVUS_TESTS)
     target_link_libraries(view_once_test PRIVATE app_core Qt6::Test)
     add_test(NAME view_once COMMAND view_once_test)
     set_tests_properties(view_once PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
+    add_executable(polls_test tests/polls_test.cpp)
+    target_link_libraries(polls_test PRIVATE app_core Qt6::Test)
+    add_test(NAME polls COMMAND polls_test)
+    set_tests_properties(polls PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 60
     )

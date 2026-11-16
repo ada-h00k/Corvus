@@ -150,6 +150,15 @@ private:
     bool addMessage(const QString &key, Message m, const QString &title = QString(), bool group = false);
     bool applyReaction(const QString &key, qint64 ts, const QStringList &authors, const QString &reactor,
                        const QString &emoji);
+    // --- Polls (like the official clients): vote by click, the author can end the poll early
+    bool supportsPolls() const; // backend version that knows the sendPoll* JSON-RPC methods
+    void createPoll();          // 📊 button: "New poll" dialog for the open conversation
+    void sendPollVote(int idx, int optionIndex); // click on an option row of the poll
+    void sendPollTerminate(int idx);             // "End poll" (author only)
+    void showPollVotes(int idx);                 // "View votes…": who voted for what
+    bool applyPollVote(const QString &key, qint64 targetTs, const QStringList &authors, const QString &voter,
+                       const QList<int> &optionIndexes, int voteCount, qint64 voteTs);
+    bool applyPollTerminate(const QString &key, qint64 targetTs, const QStringList &authors);
     // --- Pinned messages (banner at the top of the chat, like in the official clients)
     QList<PinInfo> activePins(const Conversation &c) const; // pins that have not expired yet
     void sendPin(int idx, qint64 durationSeconds);          // durationSeconds: -1 = forever
@@ -464,6 +473,7 @@ private:
     QToolButton *m_linkPreviewCloseButton = nullptr;
     QPointer<MessageInput> m_input;
     QToolButton *m_attachBtn;
+    QToolButton *m_pollBtn = nullptr;
     QToolButton *m_viewOnceBtn = nullptr;
     QToolButton *m_emojiBtn;
     QPointer<QToolButton> m_expandInputBtn;

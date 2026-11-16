@@ -33,6 +33,7 @@
 #include <QVideoFrame>
 #include <QVideoSink>
 #include <algorithm>
+#include <numeric>
 
 #include "Attachments.h"
 #include "EmojiPicker.h"
@@ -870,7 +871,15 @@ QString ChatView::plainText() const
             lines << (who + QStringLiteral(": ") + deletedText(m));
             continue;
         }
-        lines << (who + QStringLiteral(": ") + m.text + (m.isEdited() ? tr(" (edited)") : QString()));
+        if (m.hasPoll) {
+            // poll line + one row per option with the current vote count
+            const QList<int> counts = m.poll.optionCounts();
+            lines << (who + QStringLiteral(": ") + QStringLiteral("[Poll] ") + m.poll.question);
+            for (int o = 0; o < m.poll.options.size(); ++o)
+                lines << QStringLiteral("  %1 (%2)").arg(m.poll.options.at(o)).arg(counts.value(o, 0));
+        } else {
+            lines << (who + QStringLiteral(": ") + m.text + (m.isEdited() ? tr(" (edited)") : QString()));
+        }
         if (m.linkPreview.isValid())
             lines << QStringLiteral("[link preview: %1 — %2]").arg(m.linkPreview.title, m.linkPreview.url);
         if (!m.reactions.isEmpty()) {
@@ -1012,6 +1021,9 @@ void ChatView::layoutItem(int i, int y)
     it.textRect = it.timeRect = it.statusRect = it.pillsRect = QRect();
     it.linkPreviewRect = it.linkPreviewImageRect = it.linkPreviewTitleRect =
         it.linkPreviewDescriptionRect = it.linkPreviewHostRect = QRect();
+    it.pollRect = it.pollStatusRect = it.pollQuestionRect = it.pollFooterRect = QRect();
+    it.pollOptionRects.clear();
+    it.pollOptionTexts.clear();
     it.attRects.clear();
     it.pills.clear();
     it.dateLabel.clear();
@@ -1115,6 +1127,30 @@ void ChatView::layoutItem(int i, int y)
         contentW = qMax(contentW, textSz.width());
     }
 
+    // Signal poll (like the official clients): status line, question, one row per option
+    // with a vote bar, and a total at the bottom. Rows are clickable to vote.
+    int pollStatusH = 0, pollQuestionH = 0, pollFooterH = 0;
+    int pollW = 0;
+    if (!m.deleted && m.hasPoll) {
+        pollW = qMin(innerMax, 320);
+        const int textWidth = qMax(1, pollW - 16);
+        pollStatusH = fms.height();
+        const QFont questionFont = scaled(base, 1.05, true);
+        const QFontMetrics fmq(questionFont);
+        pollQuestionH = fmq.boundingRect(QRect(0, 0, textWidth, 10000), Qt::TextWordWrap, m.poll.question).height();
+        const QFont optionFont = scaled(base, 0.95, true);
+        const QFontMetrics fbo(optionFont);
+        for (int o = 0; o < m.poll.options.size(); ++o) {
+            const QString fitted = fitLines(fbo, m.poll.options.at(o), textWidth - 44, 2);
+            const int textH = fbo.boundingRect(QRect(0, 0, textWidth - 44, 10000), Qt::TextWordWrap, fitted).height();
+            // one row: option text lines + the vote bar below
+            it.pollOptionRects << QRect(0, 0, pollW, 6 + textH + 6 + 4 + 6);
+            it.pollOptionTexts << fitted;
+        }
+        pollFooterH = fms.height();
+        contentW = qMax(contentW, pollW);
+    }
+
     int linkPreviewW = 0, linkPreviewH = 0, linkPreviewImageH = 0;
     int linkPreviewTitleH = 0, linkPreviewDescriptionH = 0, linkPreviewHostH = 0;
     if (!m.deleted && !m.viewOnce && m.linkPreview.isValid()) {
@@ -1150,6 +1186,21 @@ void ChatView::layoutItem(int i, int y)
         it.quoteTextRect = QRect(x0 + 10, yb + 6 + fmb.height() + 2, contentW - 16, quoteTextH);
         it.quoteAuthor = quoteAuthShown;
         yb += quoteH + kGap;
+    }
+    if (!m.deleted && m.hasPoll) {
+        int py = yb;
+        it.pollStatusRect = QRect(x0, py, pollW, pollStatusH);
+        py += pollStatusH + 4;
+        it.pollQuestionRect = QRect(x0, py, pollW, pollQuestionH);
+        py += pollQuestionH + 8;
+        for (QRect &row : it.pollOptionRects) {
+            row = QRect(x0, py, pollW, row.height());
+            py += row.height() + 6;
+        }
+        it.pollFooterRect = QRect(x0, py, pollW, pollFooterH);
+        py += pollFooterH;
+        it.pollRect = QRect(x0, yb, pollW, py - yb);
+        yb = py + kGap;
     }
     for (const QSize &sz : attSizes) {
         it.attRects << QRect(x0, yb, sz.width(), sz.height());
@@ -1359,6 +1410,80 @@ void ChatView::paintItem(QPainter &p, int i)
             p.setPen(alpha(fg, 225));
             p.drawText(it.quoteTextRect, Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, it.quoteText);
         }
+    }
+
+    if (!m.deleted && m.hasPoll) {
+        // status line ("Poll · Select one", ...) and the question, like the official clients
+        p.setFont(small);
+        p.setPen(alpha(fg, 170));
+        p.drawText(it.pollStatusRect, Qt::AlignLeft | Qt::AlignVCenter,
+                   m.poll.terminated ? tr("Poll · Final results")
+                                     : m.poll.allowMultiple ? tr("Poll · Select one or more")
+                                                            : tr("Poll · Select one"));
+        p.setFont(scaled(base, 1.05, true));
+        p.setPen(fg);
+        p.drawText(it.pollQuestionRect, Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, m.poll.question);
+
+        const QList<int> counts = m.poll.optionCounts();
+        const int totalVotes = std::accumulate(counts.cbegin(), counts.cend(), 0);
+        const QList<int> ownVote = m.poll.voteOf(m_self);
+        const QFont countFont = scaled(base, 0.85);
+        const QFont optionFontPaint = scaled(base, 0.95, true);
+        const QFont optionMuted = scaled(base, 0.95);
+        const int top = m.poll.topCount();
+        for (int o = 0; o < it.pollOptionRects.size() && o < m.poll.options.size(); ++o) {
+            const QRect row = it.pollOptionRects.at(o);
+            const bool own = ownVote.contains(o);
+            const int count = counts.value(o, 0);
+            const int pct = totalVotes > 0 ? qRound(100.0 * count / totalVotes) : 0;
+            const bool leading = m.poll.terminated && top > 0 && count == top;
+
+            // the row itself
+            QPainterPath rp;
+            rp.addRoundedRect(QRectF(row), 8, 8);
+            p.fillPath(rp, alpha(fg, 26));
+            if (own) {
+                p.setPen(QPen(alpha(fg, 200), 1));
+                p.setBrush(Qt::NoBrush);
+                p.drawPath(rp);
+            }
+            // vote bar along the lower edge of the row
+            const QRect bar(row.left() + 8, row.bottom() - 9, row.width() - 16, 4);
+            p.setPen(Qt::NoPen);
+            p.setBrush(alpha(fg, 40));
+            p.drawRoundedRect(bar, 2, 2);
+            if (count > 0 && totalVotes > 0) {
+                QRect fill = bar;
+                fill.setWidth(qMax(4, qRound(bar.width() * qBound<qreal>(0.0, qreal(count) / totalVotes, 1.0))));
+                p.setBrush(alpha(m.outgoing ? m_ap.outText : m_ap.inText, leading ? 255 : 130));
+                p.drawRoundedRect(fill, 2, 2);
+            }
+            // check mark of our own vote, then the option text, then the percentage
+            if (own) {
+                p.setBrush(alpha(m.outgoing ? m_ap.outText : m_ap.inText, 230));
+                p.setPen(Qt::NoPen);
+                p.drawEllipse(QRect(row.left() + 8, row.top() + 6, 14, 14));
+                p.setFont(scaled(base, 0.75, true));
+                p.setPen(m.outgoing ? m_ap.outBg : m_ap.inBg);
+                p.drawText(QRect(row.left() + 8, row.top() + 6, 14, 14), Qt::AlignCenter, QStringLiteral("✓"));
+            }
+            p.setFont(own ? optionFontPaint : optionMuted);
+            p.setPen(alpha(fg, own ? 255 : 215));
+            const int textLeft = row.left() + (own ? 28 : 8);
+            p.drawText(QRect(textLeft, row.top() + 6, row.width() - (textLeft - row.left()) - 40, row.height() - 22),
+                       Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, it.pollOptionTexts.value(o));
+            p.setFont(countFont);
+            p.setPen(alpha(fg, 190));
+            p.drawText(QRect(row.right() - 40, row.top() + 6, 34, row.height() - 22),
+                       Qt::AlignRight | Qt::AlignTop, QStringLiteral("%1%").arg(pct));
+        }
+
+        // vote total at the bottom ("No votes" like in the official clients)
+        p.setFont(small);
+        p.setPen(alpha(fg, 170));
+        p.drawText(it.pollFooterRect, Qt::AlignLeft | Qt::AlignVCenter,
+                   totalVotes == 0 ? tr("No votes")
+                                   : tr("%n vote(s)", "", totalVotes));
     }
 
     if (m.viewOnce && !it.attRects.isEmpty()) {
@@ -1609,6 +1734,7 @@ QString ChatView::pinSnippet(int idx) const
 {
     const Message &m = m_msgs[idx];
     if (m.deleted) return deletedText(m);
+    if (m.hasPoll) return tr("Poll: %1").arg(m.poll.question);
     if (!m.text.isEmpty()) return m.text.simplified();
     if (!m.attachments.isEmpty()) {
         if (m.attachments.first().isSticker()) return tr("Sticker");
@@ -1702,6 +1828,12 @@ ChatView::Hit ChatView::hitTest(const QPoint &vp) const
         h.href = m_msgs[i].linkPreview.url;
         return h;
     }
+    for (int o = 0; o < it.pollOptionRects.size(); ++o)
+        if (it.pollOptionRects[o].contains(p)) {
+            h.kind = Hit::PollOption;
+            h.index = o;
+            return h;
+        }
     if (it.doc && it.textRect.adjusted(0, 0, 0, 2).contains(p)) {
         const QPointF local = QPointF(p - it.textRect.topLeft());
         h.textPos = it.doc->documentLayout()->hitTest(local, Qt::FuzzyHit);
@@ -1724,7 +1856,8 @@ void ChatView::updateCursorShape(const QPoint &vp)
     const Hit h = hitTest(vp);
     Qt::CursorShape shape = Qt::ArrowCursor;
     if (h.kind == Hit::Text) shape = Qt::IBeamCursor;
-    else if (h.kind == Hit::Link || h.kind == Hit::Quote || h.kind == Hit::Attachment) shape = Qt::PointingHandCursor;
+    else if (h.kind == Hit::Link || h.kind == Hit::Quote || h.kind == Hit::Attachment || h.kind == Hit::PollOption)
+        shape = Qt::PointingHandCursor;
     viewport()->setCursor(shape);
 }
 
@@ -1844,6 +1977,10 @@ void ChatView::mouseReleaseEvent(QMouseEvent *e)
         clearSelection();
         emit linkClicked(h.href);
         break;
+    case Hit::PollOption:
+        // like the official clients: one click on an option votes (or changes the vote)
+        emit pollOptionClicked(h.msg, h.index);
+        break;
     case Hit::Attachment:
         emit attachmentActivated(h.msg, h.index);
         break;
@@ -1941,6 +2078,17 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
         return;
     }
     if (m.viewOnce) {
+        menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });
+        menu.exec(e->globalPos());
+        return;
+    }
+    if (m.hasPoll) {
+        // Polls: the details show who voted for what; the author can end the poll early.
+        menu.addAction(tr("View votes…"), this, [this, idx] { emit pollVotesRequested(idx); });
+        if (m.outgoing && !m.poll.terminated)
+            menu.addAction(tr("End poll"), this, [this, idx] { emit pollTerminateRequested(idx); });
+        menu.addAction(tr("Reply"), this, [this, idx] { emit replyRequested(idx); });
+        menu.addAction(tr("Forward…"), this, [this, idx] { emit forwardRequested(idx); });
         menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });
         menu.exec(e->globalPos());
         return;

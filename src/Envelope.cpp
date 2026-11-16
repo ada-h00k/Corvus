@@ -72,6 +72,19 @@ static Quote parseQuote(const QJsonObject &dm)
     return q;
 }
 
+// signal-cli (and corvus-cli once it supports polls): a dataMessage can carry a poll.
+// {"pollCreate": {"question": ..., "allowMultiple": ..., "options": [...]}} creates one;
+// {"pollVote": {"authorNumber"/"authorUuid", "targetSentTimestamp", "optionIndexes", "voteCount"}}
+// and {"pollTerminate": {"targetSentTimestamp"}} reference an existing poll message.
+static PollData parsePollCreate(const QJsonObject &poll)
+{
+    PollData p;
+    p.question = poll["question"].toString();
+    p.allowMultiple = poll["allowMultiple"].toBool();
+    for (const QJsonValue &v : poll["options"].toArray()) p.options << v.toString();
+    return p;
+}
+
 static QList<MentionRange> parseMentions(const QJsonObject &dm, const QString &text)
 {
     QList<MentionRange> mentions;
@@ -173,6 +186,35 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
         return;
     }
 
+    // Signal polls: a vote / the early end reference an existing poll message and have no
+    // body of their own; a poll message itself also has no body and must survive the
+    // empty-message filter below.
+    const QJsonObject pollVote = dm["pollVote"].toObject();
+    if (!pollVote.isEmpty()) {
+        out.kind = ParsedEnvelope::PollVote;
+        out.targetNumber = pollVote["authorNumber"].toString();
+        if (out.targetNumber.isEmpty()) out.targetNumber = pollVote["author"].toString();
+        out.targetUuid = pollVote["authorUuid"].toString();
+        out.targetTs = pollVote["targetSentTimestamp"].toVariant().toLongLong();
+        for (const QJsonValue &v : pollVote["optionIndexes"].toArray()) {
+            const int index = v.toInt(-1);
+            if (index >= 0) out.pollOptionIndexes.append(index);
+        }
+        out.pollVoteCount = pollVote["voteCount"].toInt();
+        return;
+    }
+    const QJsonObject pollTerminate = dm["pollTerminate"].toObject();
+    if (!pollTerminate.isEmpty()) {
+        out.kind = ParsedEnvelope::PollTerminate;
+        out.targetTs = pollTerminate["targetSentTimestamp"].toVariant().toLongLong();
+        return;
+    }
+    const QJsonObject pollCreate = dm["pollCreate"].toObject();
+    if (!pollCreate.isEmpty()) {
+        out.msg.hasPoll = true;
+        out.msg.poll = parsePollCreate(pollCreate);
+    }
+
     out.msg.viewOnce = dm["viewOnce"].toBool();
     out.msg.text = dm["message"].toString();
     out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());
@@ -200,7 +242,8 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
     }
     out.msg.quote = parseQuote(dm);
     out.msg.expiresInSeconds = out.expirationSeconds;
-    if (out.msg.text.isEmpty() && out.msg.attachments.isEmpty()) return; // receipts, typing, sessions, ...
+    if (out.msg.text.isEmpty() && out.msg.attachments.isEmpty() && !out.msg.hasPoll)
+        return; // receipts, typing, sessions, ...
 
     qint64 ts = dm["timestamp"].toVariant().toLongLong();
     if (ts <= 0) ts = envelopeTs;
