@@ -360,6 +360,7 @@ jobs:
           import json
           import re
           import subprocess
+          import urllib.error
           import urllib.request
           from pathlib import Path
 
@@ -399,6 +400,56 @@ jobs:
           )
           if not re.fullmatch(r"[0-9a-f]{40}", commit):
               raise SystemExit(f"Could not resolve the commit for tag {tag!r}")
+
+          # Guard: the Flatpak build runs `cargo build --offline --locked`, so the
+          # Cargo.lock committed at the release tag must already match Cargo.toml.
+          # A release tagged without a lock sync (e.g. a version bump that forgot
+          # `cargo check`) fails only much later, deep inside the flatpak build with
+          # cargo's "cannot update the lock file because --locked was passed".
+          # Validate the cheap-to-check invariants here and fail with a clear message.
+          def fetch_raw(path):
+              url = f"https://raw.githubusercontent.com/ada-h00k/corvus-cli/{commit}/{path}"
+              request = urllib.request.Request(url, headers={"User-Agent": "Corvus-Flatpak-build"})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return response.read().decode()
+              except urllib.error.HTTPError as error:
+                  raise SystemExit(f"corvus-cli {tag}: could not fetch {path} at {commit[:12]}: {error}")
+
+          manifest_toml = fetch_raw("Cargo.toml")
+          lock_toml = fetch_raw("Cargo.lock")
+
+          def toml_section(text, section):
+              match = re.search(rf"(?ms)^\[{re.escape(section)}\]\s*$(.*?)(?=^\[|\Z)", text)
+              return match.group(1) if match else ""
+
+          own = re.search(r"(?m)^version = \"([^\"]+)\"", toml_section(manifest_toml, "package"))
+          locked = re.search(
+              r'(?m)^\[\[package\]\]\s*\nname = "corvus-cli"\s*\nversion = "([^"]+)"',
+              lock_toml,
+          )
+          if locked is None or own is None or locked.group(1) != own.group(1):
+              raise SystemExit(
+                  f"corvus-cli {tag}: Cargo.lock is stale - Cargo.toml declares version "
+                  f"{own.group(1) if own else '?'} but the lock file pins "
+                  f"{locked.group(1) if locked else 'nothing'}. Run `cargo check` in the "
+                  "corvus-cli repo, commit the regenerated Cargo.lock and re-tag/release."
+              )
+
+          # every direct dependency and every [patch.*] target must exist in the lock
+          declared = set()
+          for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+              declared |= set(re.findall(r"(?m)^([\w-]+)\s*=", toml_section(manifest_toml, section)))
+          for match in re.finditer(r"(?ms)^\[patch[^]]*\]\s*$(.*?)(?=^\[|\Z)", manifest_toml):
+              declared |= set(re.findall(r"(?m)^([\w-]+)\s*=", match.group(1)))
+          locked_names = set(re.findall(r'(?m)^name = "([\w-]+)"', lock_toml))
+          missing = sorted(declared - locked_names)
+          if missing:
+              raise SystemExit(
+                  f"corvus-cli {tag}: Cargo.lock does not contain {', '.join(missing)} - the "
+                  "lock is out of sync with Cargo.toml. Run `cargo check` in the corvus-cli "
+                  "repo, commit the regenerated Cargo.lock and re-tag/release."
+              )
 
           manifest = Path("packaging/flatpak/io.github.ada_h00k.Corvus.yml")
           content = manifest.read_text()
