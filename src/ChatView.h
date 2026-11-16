@@ -45,6 +45,8 @@ public:
 
     void showMessages(const QList<Message> &msgs, bool keepScroll = false); // full rebuild
     void appendMessage(const Message &m);                                   // fast path
+    // Pinned messages shown in the banner above the list (oldest first, at most three).
+    void setPins(const QList<PinInfo> &pins);
     void setAudioPlayback(int messageIndex, int attachmentIndex, bool loading, bool playing,
                           qint64 positionMs, qint64 durationMs);
     void setVideoLoading(int messageIndex, int attachmentIndex, bool loading);
@@ -72,6 +74,8 @@ public:
     QString selectedText() const;
     // All messages as text (sender, quote, attachments, reactions) – for tests.
     QString plainText() const;
+    // Short description of a message for the pinned-message banner / its menu.
+    QString pinSnippet(int idx) const;
 
 signals:
     void replyRequested(int idx);
@@ -81,6 +85,11 @@ signals:
     void deleteRequested(int idx);
     void reactionChosen(int idx, const QString &emoji);
     void moreReactionsRequested(int idx, const QPoint &globalPos);
+    // Pin this message for everyone, with the duration in seconds (-1 = forever).
+    void pinRequested(int idx, qint64 durationSeconds);
+    void unpinRequested(int idx);
+    // Right-click or "…" on the pinned-message banner: MainWindow builds the options menu.
+    void pinBannerMenuRequested(const QPoint &globalPos);
     void attachmentActivated(int msgIdx, int attIdx);     // click: view / open
     void attachmentSaveRequested(int msgIdx, int attIdx); // context menu
     void animatedAttachmentRequested(int msgIdx, int attIdx);
@@ -154,8 +163,18 @@ private:
     void updateVideoGeometry();
     QRect attachmentRectForVideo() const;
 
+    // Pinned-message banner (fixed strip at the top of the viewport).
+    static constexpr int kBannerHeight = 44;
+    QRect pinBannerRect() const;                // whole banner in viewport coordinates
+    QRect pinBannerMenuRect() const;            // the "…" button at the right end
+    int pinMessageIndex(const PinInfo &pin) const;
+    void drawPinBanner(QPainter &p);
+
     QList<Message> m_msgs;
     QList<Item> m_items;
+    QList<PinInfo> m_pins;   // oldest first; empty = no banner, no content offset
+    int m_bannerCycle = 0;   // which pin the banner currently shows
+    int m_bannerOffset = 0;  // extra top offset of the message list (kBannerHeight when pinned)
     // Measured text size per (message text/styles, wrap width, font). Re-laying out a conversation
     // (resize, switching back to a chat) then skips the expensive QTextDocument::setHtml().
     QHash<size_t, QSize> m_textSizeCache;
@@ -200,6 +219,7 @@ private:
     QPoint m_pressPos;
     Hit m_pressHit;
     bool m_wordSelected = false; // word selected by double click; keep it until the next press
+    bool m_dblClick = false;     // armed by mouseDoubleClickEvent, consumed by the next release
     QTimer *m_autoScrollTimer = nullptr;
     QTimer *m_resizeTimer = nullptr;
     ScrollToLatestButton *m_toLatest = nullptr; // round arrow button at the bottom right

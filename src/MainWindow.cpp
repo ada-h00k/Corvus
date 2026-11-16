@@ -956,6 +956,9 @@ MainWindow::MainWindow()
     connect(m_view, &ChatView::editRequested, this, &MainWindow::startEdit);
     connect(m_view, &ChatView::deleteRequested, this, &MainWindow::deleteMessage);
     connect(m_view, &ChatView::reactionChosen, this, &MainWindow::sendReaction);
+    connect(m_view, &ChatView::pinRequested, this, &MainWindow::sendPin);
+    connect(m_view, &ChatView::unpinRequested, this, &MainWindow::sendUnpin);
+    connect(m_view, &ChatView::pinBannerMenuRequested, this, &MainWindow::showPinBannerMenu);
     connect(m_view, &ChatView::moreReactionsRequested, this, [this](int idx, const QPoint &gp) {
         m_pickAction = [this, idx](const QString &e) { sendReaction(idx, e); };
         m_picker->setGifsAvailable(false); // GIFs and stickers cannot be reactions
@@ -1104,6 +1107,11 @@ MainWindow::MainWindow()
     m_expirationTimer.setInterval(1000);
     connect(&m_expirationTimer, &QTimer::timeout, this, &MainWindow::expireMessages);
     m_expirationTimer.start();
+
+    // Pins with a duration (24 h / 7 d / 30 d) expire without an unpin message arriving.
+    m_pinExpiryTimer.setInterval(60 * 1000);
+    connect(&m_pinExpiryTimer, &QTimer::timeout, this, &MainWindow::pruneExpiredPins);
+    m_pinExpiryTimer.start();
 
     // signal-cli typing notifications expire after roughly 15 seconds; send a keepalive
     // while the user is still writing and expire stale incoming indicators promptly.
@@ -2264,6 +2272,37 @@ void MainWindow::loadHistory(const QJsonArray &records)
             }
         } else if (t == QLatin1String("k")) {
             conv(key, key, group).muted = o.value(QStringLiteral("v")).toBool();
+        } else if (t == QLatin1String("pi")) {
+            // Pin of a message ("rm" = the pin was taken back). The message must already be
+            // known; pins are written after their messages.
+            auto it = m_convs.find(key);
+            if (it == m_convs.end()) continue;
+            const qint64 ts = o.value(QStringLiteral("ts")).toVariant().toLongLong();
+            const QString au = o.value(QStringLiteral("au")).toString();
+            if (o.value(QStringLiteral("rm")).toBool()) {
+                it->pins.erase(std::remove_if(it->pins.begin(), it->pins.end(),
+                                              [ts, &au](const PinInfo &p) {
+                                                  return p.ts == ts && (au.isEmpty() || p.authorKey == au);
+                                              }),
+                               it->pins.end());
+                continue;
+            }
+            if (findMessage(it.value(), ts, au.isEmpty() ? QStringList() : QStringList{au}) < 0) continue;
+            PinInfo pin;
+            pin.ts = ts;
+            pin.authorKey = au;
+            pin.by = o.value(QStringLiteral("by")).toString();
+            pin.pinnedAtMs = o.value(QStringLiteral("at")).toVariant().toLongLong();
+            pin.durationSeconds = o.value(QStringLiteral("d")).toVariant().toLongLong();
+            // Re-applying a pin (duplicate record) replaces instead of showing it twice;
+            // like the official clients, a fourth pin replaces the oldest.
+            it->pins.erase(std::remove_if(it->pins.begin(), it->pins.end(),
+                                          [&pin](const PinInfo &p) {
+                                              return p.ts == pin.ts && (p.authorKey == pin.authorKey || pin.authorKey.isEmpty());
+                                          }),
+                           it->pins.end());
+            while (it->pins.size() >= 3) it->pins.removeFirst();
+            it->pins.append(pin);
         } else if (t == QLatin1String("e")) {
             conv(key, key, group).expirationSeconds = o.value(QStringLiteral("v")).toInt();
         } else if (t == QLatin1String("a")) {
@@ -2276,6 +2315,7 @@ void MainWindow::loadHistory(const QJsonArray &records)
             m_declined.insert(key); // declined message request (no conversation is created)
         }
     }
+    pruneExpiredPins(); // a pin whose duration ran out while Corvus was closed is not restored
     refreshList();
 }
 
@@ -2305,6 +2345,9 @@ QJsonArray MainWindow::allRecords() const
             for (auto it = m.reactions.cbegin(); it != m.reactions.cend(); ++it)
                 out.append(Records::reaction(c.key, m.ts(), effectiveAuthor(c, m), it.key(), it.value()));
         }
+        // Pins come after the messages they reference; order inside the chat is preserved.
+        for (const PinInfo &pin : c.pins)
+            out.append(Records::pin(c.key, pin.ts, pin.authorKey, pin.by, pin.pinnedAtMs, pin.durationSeconds, false));
     }
     QStringList declined = m_declined.values(); // keeps outliving a deleted conversation
     std::sort(declined.begin(), declined.end());
@@ -2791,6 +2834,61 @@ bool MainWindow::applyReaction(const QString &key, qint64 ts, const QStringList 
     return true;
 }
 
+bool MainWindow::applyPin(const QString &key, qint64 targetTs, const QStringList &authors, const QString &by,
+                          qint64 durationSeconds, qint64 pinnedAtMs)
+{
+    auto it = m_convs.find(key);
+    if (it == m_convs.end()) return false;
+    Conversation &c = it.value();
+    const int i = findMessage(c, targetTs, authors);
+    if (i < 0) return false; // unknown message: the banner needs the message content
+    const Message &m = c.msgs[i];
+    if (m.deleted) return false;
+    const QString author = effectiveAuthor(c, m);
+    // Re-pinning the same message replaces the old pin instead of showing it twice.
+    c.pins.erase(std::remove_if(c.pins.begin(), c.pins.end(),
+                                [targetTs, &author](const PinInfo &p) {
+                                    return p.ts == targetTs &&
+                                           (p.authorKey.isEmpty() || author.isEmpty() || p.authorKey == author);
+                                }),
+                 c.pins.end());
+    // Like the official clients: at most three pins per chat; a fourth replaces the oldest.
+    while (c.pins.size() >= 3) c.pins.removeFirst();
+    PinInfo pin;
+    pin.ts = targetTs;
+    pin.authorKey = author;
+    pin.by = by;
+    pin.pinnedAtMs = pinnedAtMs;
+    pin.durationSeconds = durationSeconds;
+    c.pins.append(pin);
+    persist(Records::pin(key, targetTs, author, by, pinnedAtMs, durationSeconds, false));
+    if (key == m_current) showConversation(true);
+    return true;
+}
+
+void MainWindow::applyUnpin(const QString &key, qint64 targetTs, const QStringList &authors)
+{
+    auto it = m_convs.find(key);
+    if (it == m_convs.end()) return;
+    Conversation &c = it.value();
+    // The author keys of a remote pin/unpin message are raw numbers/UUIDs; resolve them
+    // through the referenced message the same way reactions do (authorMatches).
+    const int mi = findMessage(c, targetTs, authors);
+    const QString expected = mi >= 0 ? effectiveAuthor(c, c.msgs[mi]) : QString();
+    const bool anyAuthor =
+        std::any_of(authors.cbegin(), authors.cend(), [](const QString &a) { return !a.isEmpty(); });
+    const auto match = [&expected, &authors, anyAuthor, targetTs](const PinInfo &p) {
+        if (p.ts != targetTs) return false;
+        if (!expected.isEmpty()) return p.authorKey.isEmpty() || p.authorKey == expected;
+        if (anyAuthor) return p.authorKey.isEmpty() || authors.contains(p.authorKey);
+        return true;
+    };
+    if (std::none_of(c.pins.cbegin(), c.pins.cend(), match)) return;
+    c.pins.erase(std::remove_if(c.pins.begin(), c.pins.end(), match), c.pins.end());
+    persist(Records::pin(key, targetTs, QString(), QString(), 0, -1, true));
+    if (key == m_current) showConversation(true);
+}
+
 // Delete for everyone (ours or the author's): the message turns into a placeholder.
 // Authors empty => match by timestamp only.
 bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringList &authors)
@@ -2816,8 +2914,20 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     m.viewOnce = false;
     m.viewOnceViewed = false;
     m.viewOnceExpired = false;
+    // Pins may reference the message by its original timestamp or by the timestamp of
+    // the latest revision; capture the identity before the edit state is cleared.
+    const qint64 prevEditTs = m.editTs;
     m.editTs = 0;
     m.editCount = 0;
+
+    // Like the official clients: a deleted (or expired) message cannot stay pinned.
+    if (!c.pins.isEmpty()) {
+        c.pins.erase(std::remove_if(c.pins.begin(), c.pins.end(),
+                                    [targetTs, ts = m.ts(), prevEditTs](const PinInfo &p) {
+                                        return p.ts == targetTs || p.ts == ts || (prevEditTs > 0 && p.ts == prevEditTs);
+                                    }),
+                     c.pins.end());
+    }
 
     // Rewrite instead of append: the old ciphertext of the message must not stay in the file.
     const int rc = m_store.rewrite(allRecords());
@@ -3583,6 +3693,7 @@ void MainWindow::showConversation(bool keepScroll)
     updateSafetyBar();
     updateGroupActions();
     m_view->setGroupMode(c.isGroup);
+    m_view->setPins(activePins(c));
     m_view->showMessages(c.msgs, keepScroll);
     updateMessageSearch();
     updateAudioPlaybackView();
@@ -4321,6 +4432,20 @@ void MainWindow::onEnvelope(const QJsonObject &env)
         const QString rkey = !gid.isEmpty() ? QStringLiteral("g:") + gid : key;
         const QString reactor = pe.outgoing ? m_account : srcKey;
         applyReaction(rkey, pe.targetTs, {pe.targetNumber, pe.targetUuid}, reactor, pe.remove ? QString() : pe.emoji);
+        return;
+    }
+
+    if (pe.kind == ParsedEnvelope::Pin || pe.kind == ParsedEnvelope::Unpin) {
+        // Same shape as a reaction: an empty dataMessage that references another message.
+        const QString gid = env.value(QStringLiteral("dataMessage")).toObject().value(QStringLiteral("groupInfo")).toObject()
+                                .value(QStringLiteral("groupId")).toString();
+        const QString pkey = !gid.isEmpty() ? QStringLiteral("g:") + gid : key;
+        const QString by = pe.outgoing ? m_account : srcKey;
+        if (pe.kind == ParsedEnvelope::Pin)
+            applyPin(pkey, pe.targetTs, {pe.targetNumber, pe.targetUuid}, by, pe.pinDurationSeconds,
+                     QDateTime::currentMSecsSinceEpoch());
+        else
+            applyUnpin(pkey, pe.targetTs, {pe.targetNumber, pe.targetUuid});
         return;
     }
 
@@ -5481,6 +5606,113 @@ void MainWindow::sendReaction(int idx, const QString &emoji)
         }
         applyReaction(key, ts, {author}, m_account, remove ? QString() : emoji);
     });
+}
+
+// ------------------------------------------------------ Pinned messages
+
+// The same JSON-RPC commands signal-cli offers (sendPinMessage / sendUnpinMessage);
+// corvus-cli needs a matching update before the backend accepts them (see docs).
+void MainWindow::sendPin(int idx, qint64 durationSeconds)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Conversation c = m_convs[m_current];
+    const Message m = c.msgs[idx];
+    if (m.deleted || m.viewOnce) return;
+    const QString author = effectiveAuthor(c, m);
+
+    QJsonObject p{{QStringLiteral("targetAuthor"), author},
+                  {QStringLiteral("targetTimestamp"), QJsonValue(static_cast<qint64>(m.latestTs()))},
+                  {QStringLiteral("pinDuration"), QJsonValue(durationSeconds)}};
+    addRecipient(p, c);
+
+    const QString key = c.key;
+    const qint64 ts = m.latestTs();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    m_cli.call(QStringLiteral("sendPinMessage"), p, [this, key, ts, author, durationSeconds, now](const QJsonValue &,
+                                                                                                   const QString &err) {
+        if (!err.isEmpty()) {
+            statusBar()->showMessage(tr("Pinning failed: %1").arg(err), 8000);
+            return;
+        }
+        applyPin(key, ts, {author}, m_account, durationSeconds, now);
+    });
+}
+
+void MainWindow::sendUnpin(int idx)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Conversation c = m_convs[m_current];
+    const Message m = c.msgs[idx];
+    PinInfo pin;
+    pin.ts = m.latestTs();
+    pin.authorKey = effectiveAuthor(c, m);
+    sendUnpinFor(pin);
+}
+
+void MainWindow::sendUnpinFor(const PinInfo &pin)
+{
+    if (!m_convs.contains(m_current)) return;
+    const Conversation c = m_convs[m_current];
+
+    QJsonObject p{{QStringLiteral("targetAuthor"), pin.authorKey},
+                  {QStringLiteral("targetTimestamp"), QJsonValue(static_cast<qint64>(pin.ts))}};
+    addRecipient(p, c);
+
+    const QString key = c.key;
+    m_cli.call(QStringLiteral("sendUnpinMessage"), p, [this, key, pin](const QJsonValue &, const QString &err) {
+        if (!err.isEmpty()) {
+            statusBar()->showMessage(tr("Unpinning failed: %1").arg(err), 8000);
+            return;
+        }
+        applyUnpin(key, pin.ts, {pin.authorKey});
+    });
+}
+
+QList<PinInfo> MainWindow::activePins(const Conversation &c) const
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QList<PinInfo> out;
+    for (const PinInfo &pin : c.pins)
+        if (!pin.isExpired(now)) out.append(pin);
+    return out;
+}
+
+void MainWindow::pruneExpiredPins()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    bool currentChanged = false;
+    for (auto it = m_convs.begin(); it != m_convs.end(); ++it) {
+        const int before = it->pins.size();
+        it->pins.erase(std::remove_if(it->pins.begin(), it->pins.end(),
+                                      [now](const PinInfo &p) { return p.isExpired(now); }),
+                       it->pins.end());
+        if (it.key() == m_current && before != it->pins.size()) currentChanged = true;
+    }
+    // No persist() here: allRecords() is rebuilt from c.pins, so expired pins vanish
+    // with the next rewrite, and a crash only resurrects a pin that expires again.
+    if (currentChanged) showConversation(true);
+}
+
+// Options menu of the banner "…" button / right-click: show or unpin one of the pins.
+void MainWindow::showPinBannerMenu(const QPoint &globalPos)
+{
+    if (!m_convs.contains(m_current)) return;
+    const Conversation c = m_convs[m_current];
+    const QList<PinInfo> pins = activePins(c);
+    if (pins.isEmpty()) return;
+
+    QMenu menu(this);
+    for (const PinInfo &pin : pins) {
+        const int i = findMessage(c, pin.ts, {pin.authorKey});
+        const QString what = i >= 0 ? m_view->pinSnippet(i) : tr("Message not available");
+        const QString who = !pin.by.isEmpty() ? displayName(resolveKey(pin.by)) : QString();
+        const QString label = who.isEmpty() ? what : QStringLiteral("%1 · %2").arg(who, what);
+        QMenu *sub = menu.addMenu(label);
+        if (i >= 0)
+            sub->addAction(tr("Show message"), this, [this, i] { m_view->scrollToMessage(i); });
+        sub->addAction(tr("Unpin"), this, [this, pin] { sendUnpinFor(pin); });
+    }
+    menu.exec(globalPos);
 }
 
 // ----------------------------------------------------------- Attachments

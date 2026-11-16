@@ -149,6 +149,30 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
         return;
     }
 
+    // signal-cli (and corvus-cli once it supports pins):
+    // {"pinMessage": {"targetAuthorNumber"/"targetAuthorUuid", "targetSentTimestamp", "pinDurationSeconds"}}
+    // A pin/unpin message has no body and must not fall through to the empty-message filter below.
+    const QJsonObject pin = dm["pinMessage"].toObject();
+    if (!pin.isEmpty()) {
+        out.kind = ParsedEnvelope::Pin;
+        out.targetNumber = pin["targetAuthorNumber"].toString();
+        if (out.targetNumber.isEmpty()) out.targetNumber = pin["targetAuthor"].toString();
+        out.targetUuid = pin["targetAuthorUuid"].toString();
+        out.targetTs = pin["targetSentTimestamp"].toVariant().toLongLong();
+        out.pinDurationSeconds = pin["pinDurationSeconds"].toInt(-1);
+        if (out.pinDurationSeconds == 0) out.pinDurationSeconds = -1; // unspecified: keep it pinned
+        return;
+    }
+    const QJsonObject unpin = dm["unpinMessage"].toObject();
+    if (!unpin.isEmpty()) {
+        out.kind = ParsedEnvelope::Unpin;
+        out.targetNumber = unpin["targetAuthorNumber"].toString();
+        if (out.targetNumber.isEmpty()) out.targetNumber = unpin["targetAuthor"].toString();
+        out.targetUuid = unpin["targetAuthorUuid"].toString();
+        out.targetTs = unpin["targetSentTimestamp"].toVariant().toLongLong();
+        return;
+    }
+
     out.msg.viewOnce = dm["viewOnce"].toBool();
     out.msg.text = dm["message"].toString();
     out.msg.textStyles = parseTextStyles(dm["textStyle"].toArray());

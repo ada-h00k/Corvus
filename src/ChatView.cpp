@@ -476,6 +476,9 @@ void ChatView::clearView()
     }
     m_msgs.clear();
     m_items.clear();
+    m_pins.clear();
+    m_bannerCycle = 0;
+    m_bannerOffset = 0;
     m_renderFirst = m_renderLast = -1;
     clearSelection();
     m_flash = -1;
@@ -484,6 +487,15 @@ void ChatView::clearView()
     m_missed = 0;
     updateToLatestButton();
     viewport()->update();
+}
+
+void ChatView::setPins(const QList<PinInfo> &pins)
+{
+    if (pins == m_pins) return;
+    m_pins = pins;
+    m_bannerOffset = m_pins.isEmpty() ? 0 : kBannerHeight;
+    m_bannerCycle = m_pins.isEmpty() ? 0 : qBound(0, m_bannerCycle, m_pins.size() - 1);
+    relayoutAll();
 }
 
 void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll)
@@ -513,7 +525,7 @@ void ChatView::appendMessage(const Message &m)
     m_msgs.append(m);
     m_items.append(Item());
     const int i = m_msgs.size() - 1;
-    layoutItem(i, i > 0 ? m_items[i - 1].y + m_items[i - 1].height : 0);
+    layoutItem(i, i > 0 ? m_items[i - 1].y + m_items[i - 1].height : m_bannerOffset);
     if (!bottom && !m.outgoing) ++m_missed; // arrived below the visible part
     updateScrollRange();
     if (bottom || m.outgoing) verticalScrollBar()->setValue(verticalScrollBar()->maximum());
@@ -1212,7 +1224,7 @@ void ChatView::layoutItem(int i, int y)
 void ChatView::relayoutAll()
 {
     m_layoutWidth = viewport()->width();
-    int y = 0;
+    int y = m_bannerOffset; // room for the pinned-message banner above the first bubble
     for (int i = 0; i < m_items.size(); ++i) {
         layoutItem(i, y);
         y += m_items[i].height;
@@ -1267,7 +1279,10 @@ void ChatView::paintEvent(QPaintEvent *)
     QPainter p(viewport());
     p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
     p.fillRect(viewport()->rect(), m_ap.background);
-    if (m_items.isEmpty()) return;
+    if (m_items.isEmpty()) {
+        drawPinBanner(p); // a pinned message can outlive the messages shown (e.g. after a delete)
+        return;
+    }
 
     const int top = verticalScrollBar()->value();
     const int bottom = top + viewport()->height();
@@ -1290,6 +1305,8 @@ void ChatView::paintEvent(QPaintEvent *)
         paintItem(p, i);
         p.restore();
     }
+    // Last, so bubbles scrolling underneath never show through the fixed banner.
+    drawPinBanner(p);
 }
 
 void ChatView::paintItem(QPainter &p, int i)
@@ -1562,6 +1579,92 @@ void ChatView::paintItem(QPainter &p, int i)
     }
 }
 
+// -------------------------------------------------------------- pinned messages
+
+QRect ChatView::pinBannerRect() const
+{
+    return QRect(0, 0, viewport()->width(), kBannerHeight);
+}
+
+QRect ChatView::pinBannerMenuRect() const
+{
+    return QRect(pinBannerRect().right() - 40, 0, 40, kBannerHeight);
+}
+
+// The pin target is the identity of one revision of the message (original ts or an edit ts).
+int ChatView::pinMessageIndex(const PinInfo &pin) const
+{
+    for (int i = 0; i < m_msgs.size(); ++i) {
+        if (m_msgs[i].ts() != pin.ts && !(m_msgs[i].editTs > 0 && m_msgs[i].editTs == pin.ts)) continue;
+        if (!pin.authorKey.isEmpty() && !m_msgs[i].authorKey.isEmpty() && m_msgs[i].authorKey != pin.authorKey)
+            continue;
+        return i;
+    }
+    return -1;
+}
+
+// Short banner description of a message: text if there is one, otherwise the media kind
+// (wording like the official clients).
+QString ChatView::pinSnippet(int idx) const
+{
+    const Message &m = m_msgs[idx];
+    if (m.deleted) return deletedText(m);
+    if (!m.text.isEmpty()) return m.text.simplified();
+    if (!m.attachments.isEmpty()) {
+        if (m.attachments.first().isSticker()) return tr("Sticker");
+        if (m.attachments.first().isGif()) return tr("GIF");
+        if (m.attachments.first().isImage()) return tr("Photo");
+        if (m.attachments.first().isVideo()) return tr("Video");
+        if (m.attachments.first().isAudio()) return tr("Audio");
+        return tr("File");
+    }
+    if (m.quote.valid) return tr("Reply");
+    return tr("Message");
+}
+
+void ChatView::drawPinBanner(QPainter &p)
+{
+    if (m_pins.isEmpty()) return;
+    const QRect r = pinBannerRect();
+    const QColor fg = m_ap.inText;
+    const QColor muted = mutedOn(m_ap.inBg);
+    p.fillRect(r, m_ap.inBg);
+    p.setPen(QPen(mutedOn(m_ap.background), 1));
+    p.drawLine(r.left(), r.bottom(), r.right(), r.bottom());
+
+    const int shown = qBound(0, m_bannerCycle, m_pins.size() - 1);
+    const PinInfo &pin = m_pins[shown];
+    const int mi = pinMessageIndex(pin);
+
+    const QFont base = font();
+    const QFont small = scaled(base, 0.8);
+    const QFont label = scaled(base, 0.9, true);
+    const QFontMetrics fm(label);
+
+    p.setFont(base);
+    p.setPen(fg);
+    p.drawText(QRect(r.left() + 4, 0, 32, kBannerHeight), Qt::AlignCenter, QStringLiteral("📌"));
+
+    p.setFont(small);
+    p.setPen(muted);
+    p.drawText(QRect(r.left() + 40, 4, r.width() - 40 - 92, 16), Qt::AlignLeft | Qt::AlignVCenter,
+               tr("Pinned message %1/%2").arg(shown + 1).arg(m_pins.size()));
+
+    QString text = mi >= 0 ? pinSnippet(mi) : tr("Message not available");
+    const QString author = mi >= 0 && !m_msgs[mi].authorKey.isEmpty() ? nameOf(m_msgs[mi].authorKey) : QString();
+    if (!author.isEmpty()) text = author + QStringLiteral(": ") + text;
+    const int textLeft = r.left() + 40;
+    const int textRight = pinBannerMenuRect().left() - 8;
+    p.setFont(label);
+    p.setPen(fg);
+    p.drawText(QRect(textLeft, 20, textRight - textLeft, 20), Qt::AlignLeft | Qt::AlignVCenter,
+               fm.elidedText(text, Qt::ElideRight, textRight - textLeft));
+
+    p.setFont(base);
+    p.setPen(fg);
+    p.drawText(pinBannerMenuRect(), Qt::AlignCenter, QStringLiteral("⋯"));
+}
+
 // ----------------------------------------------------------- interaction
 
 ChatView::Hit ChatView::hitTest(const QPoint &vp) const
@@ -1614,6 +1717,10 @@ void ChatView::updateCursorShape(const QPoint &vp)
         viewport()->setCursor(Qt::SizeVerCursor);
         return;
     }
+    if (!m_pins.isEmpty() && vp.y() <= kBannerHeight) {
+        viewport()->setCursor(Qt::PointingHandCursor);
+        return;
+    }
     const Hit h = hitTest(vp);
     Qt::CursorShape shape = Qt::ArrowCursor;
     if (h.kind == Hit::Text) shape = Qt::IBeamCursor;
@@ -1641,13 +1748,28 @@ void ChatView::mousePressEvent(QMouseEvent *e)
         QAbstractScrollArea::mousePressEvent(e);
         return;
     }
+    // Left click on the pinned-message banner: the "…" opens the options menu, any other
+    // spot cycles through the pins like in the official clients.
+    if (!m_pins.isEmpty() && e->pos().y() <= kBannerHeight) {
+        e->accept();
+        if (pinBannerMenuRect().contains(e->pos())) {
+            emit pinBannerMenuRequested(e->globalPosition().toPoint());
+        } else {
+            m_bannerCycle = (m_bannerCycle + 1) % m_pins.size();
+            const int i = pinMessageIndex(m_pins[m_bannerCycle]);
+            if (i >= 0) scrollToMessage(i);
+        }
+        viewport()->update();
+        return;
+    }
     setFocus();
     m_pressPos = e->pos();
     m_pressHit = hitTest(e->pos());
     // Qt delivers a double click as press, release, DoubleClick, release. The
     // second press must not wipe the word selection made by the double click;
-    // any other press starts fresh.
-    if (m_wordSelected && e->clickCount() >= 2 && m_pressHit.msg == m_selItem) {
+    // any other press starts fresh. (m_dblClick stands in for clickCount(),
+    // which not every Qt 6 exposes.)
+    if (m_wordSelected && m_dblClick && m_pressHit.msg == m_selItem) {
         m_dragging = false;
         viewport()->update();
         return;
@@ -1697,11 +1819,21 @@ void ChatView::mouseReleaseEvent(QMouseEvent *e)
         QAbstractScrollArea::mouseReleaseEvent(e);
         return;
     }
+    // The banner press handled the click itself; do not let the stale press hit
+    // turn the release into an action on some message.
+    if (!m_pins.isEmpty() && e->pos().y() <= kBannerHeight) {
+        e->accept();
+        return;
+    }
     m_dragging = false;
+    // The double-click flag is consumed by the release that ends the double click,
+    // even when that release leaves the drag threshold (flag must not leak).
+    const bool dbl = m_dblClick;
+    m_dblClick = false;
     const bool click = (e->pos() - m_pressPos).manhattanLength() < 4;
     if (!click) return;
     // keep a word selection made by double clicking until the next real click
-    if (m_wordSelected && e->clickCount() >= 2) {
+    if (m_wordSelected && dbl) {
         viewport()->update();
         return;
     }
@@ -1751,6 +1883,7 @@ void ChatView::mouseDoubleClickEvent(QMouseEvent *e)
     // from other chat apps (works for plain text and the text of links too)
     if ((h.kind == Hit::Text || h.kind == Hit::Link) && h.textPos >= 0) {
         selectWordAt(h.msg, h.textPos);
+        m_dblClick = true; // keeps the word selection through the release that ends the double click
         e->accept();
         return;
     }
@@ -1783,6 +1916,12 @@ int ChatView::messageAt(const QPoint &viewportPos) const
 
 void ChatView::contextMenuEvent(QContextMenuEvent *e)
 {
+    // Right-click on the pinned-message banner opens the same options menu as the "…" button.
+    if (!m_pins.isEmpty() && e->pos().y() <= kBannerHeight) {
+        emit pinBannerMenuRequested(e->globalPos());
+        e->accept();
+        return;
+    }
     const int idx = hitTest(e->pos()).msg;
     QMenu menu(this);
     const QString sel = selectedText();
@@ -1816,6 +1955,23 @@ void ChatView::contextMenuEvent(QContextMenuEvent *e)
     }
     const QPoint gp = e->globalPos();
     react->addAction(tr("More …"), this, [this, idx, gp] { emit moreReactionsRequested(idx, gp); });
+    // Pin / unpin like in the official clients: a pin replaces the oldest of the three pins.
+    bool alreadyPinned = false;
+    for (const PinInfo &pin : m_pins) {
+        if (pin.ts == m.ts() || pin.ts == m.latestTs()) {
+            alreadyPinned = true;
+            break;
+        }
+    }
+    if (alreadyPinned) {
+        menu.addAction(tr("Unpin"), this, [this, idx] { emit unpinRequested(idx); });
+    } else {
+        QMenu *pinMenu = menu.addMenu(tr("Pin…"));
+        pinMenu->addAction(tr("24 hours"), this, [this, idx] { emit pinRequested(idx, 24 * 60 * 60); });
+        pinMenu->addAction(tr("7 days"), this, [this, idx] { emit pinRequested(idx, 7 * 24 * 60 * 60); });
+        pinMenu->addAction(tr("30 days"), this, [this, idx] { emit pinRequested(idx, 30 * 24 * 60 * 60); });
+        pinMenu->addAction(tr("Forever"), this, [this, idx] { emit pinRequested(idx, qint64(-1)); });
+    }
     if (m.canEdit(QDateTime::currentMSecsSinceEpoch()))
         menu.addAction(tr("Edit"), this, [this, idx] { emit editRequested(idx); });
     menu.addAction(tr("Delete message …"), this, [this, idx] { emit deleteRequested(idx); });

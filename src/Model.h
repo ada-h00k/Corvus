@@ -161,11 +161,32 @@ struct Message {
     }
 };
 
+// A pinned message, like in the official clients: at most three per chat, shown in a
+// banner at the top. Pins are displayed in the order they were pinned (oldest first);
+// pinning a fourth message replaces the oldest. A pin with a duration expires locally.
+struct PinInfo {
+    qint64 ts = 0;               // target timestamp of the pinned message (latestTs if edited)
+    QString authorKey;           // author of the pinned message (empty = resolve via conversation)
+    QString by;                  // who pinned it (number/UUID; own account for own pins)
+    qint64 pinnedAtMs = 0;       // when the pin was received/sent (local clock), for expiry
+    qint64 durationSeconds = -1; // -1 = forever, else seconds from pinnedAtMs (24 h / 7 d / 30 d)
+    bool isExpired(qint64 nowMs) const
+    {
+        return durationSeconds >= 0 && pinnedAtMs > 0 && nowMs - pinnedAtMs >= durationSeconds * 1000;
+    }
+    bool operator==(const PinInfo &o) const
+    {
+        return ts == o.ts && authorKey == o.authorKey && by == o.by && pinnedAtMs == o.pinnedAtMs &&
+               durationSeconds == o.durationSeconds;
+    }
+};
+
 struct Conversation {
     QString key; // number/UUID or "g:<groupId>"
     QString title;
     bool isGroup = false;
     QList<Message> msgs;
+    QList<PinInfo> pins; // oldest first, at most three (a fourth pin replaces the oldest)
     int unread = 0;
     QString storedName;       // display name learnt from an incoming message (persisted)
     QString localNickname;    // local-only contact nickname (persisted)

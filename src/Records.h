@@ -24,6 +24,10 @@ QJsonObject linkPreviewUpdate(const QString &conv, const Message &m);
 QJsonObject viewOnceUpdate(const QString &conv, const Message &m);
 QJsonObject receiptStatusUpdate(const QString &conv, const Message &m);
 QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, const QString &by, const QString &emoji);
+// Pin ("rm" = false) or unpin ("rm" = true) of a message: ts/au identify the pinned message,
+// by = who pinned it, at = local pin time, d = duration in seconds (-1 = forever).
+QJsonObject pin(const QString &conv, qint64 ts, const QString &author, const QString &by,
+                qint64 pinnedAtMs, qint64 durationSeconds, bool removed);
 QJsonObject archive(const QString &conv, bool archived, bool sigArchived);
 QJsonObject blocked(const QString &conv, bool blocked);
 // A declined message request (the hidden contact stays hidden and is not offered again).

@@ -150,6 +150,16 @@ private:
     bool addMessage(const QString &key, Message m, const QString &title = QString(), bool group = false);
     bool applyReaction(const QString &key, qint64 ts, const QStringList &authors, const QString &reactor,
                        const QString &emoji);
+    // --- Pinned messages (banner at the top of the chat, like in the official clients)
+    QList<PinInfo> activePins(const Conversation &c) const; // pins that have not expired yet
+    void sendPin(int idx, qint64 durationSeconds);          // durationSeconds: -1 = forever
+    void sendUnpin(int idx);
+    void sendUnpinFor(const PinInfo &pin);                  // unpin from the banner menu
+    void showPinBannerMenu(const QPoint &globalPos);
+    bool applyPin(const QString &key, qint64 targetTs, const QStringList &authors, const QString &by,
+                  qint64 durationSeconds, qint64 pinnedAtMs);
+    void applyUnpin(const QString &key, qint64 targetTs, const QStringList &authors);
+    void pruneExpiredPins();                                // timer: drop pins whose duration ran out
     void setArchived(const QString &key, bool archived);
     void editExpiration(const QString &key);
     // --- Groups
@@ -419,6 +429,7 @@ private:
     QPointer<MediaGalleryDialog> m_gallery;
     QString m_galleryKey;
     QTimer m_expirationTimer;
+    QTimer m_pinExpiryTimer;                    // drops expired pins from every conversation
     QTimer m_localTypingTimer;
     QTimer m_typingIdleTimer;
     QTimer m_typingSweepTimer;

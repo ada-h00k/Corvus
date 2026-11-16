@@ -346,6 +346,20 @@ QJsonObject reaction(const QString &conv, qint64 ts, const QString &author, cons
     return {{"t", "r"}, {"c", conv}, {"ts", QJsonValue(static_cast<qint64>(ts))}, {"au", author}, {"by", by}, {"e", emoji}};
 }
 
+QJsonObject pin(const QString &conv, qint64 ts, const QString &author, const QString &by,
+                qint64 pinnedAtMs, qint64 durationSeconds, bool removed)
+{
+    QJsonObject rec{{"t", "pi"},
+                    {"c", conv},
+                    {"ts", QJsonValue(static_cast<qint64>(ts))},
+                    {"au", author},
+                    {"by", by},
+                    {"at", QJsonValue(static_cast<qint64>(pinnedAtMs))},
+                    {"d", QJsonValue(static_cast<qint64>(durationSeconds))}};
+    if (removed) rec["rm"] = true;
+    return rec;
+}
+
 QJsonObject archive(const QString &conv, bool archived, bool sigArchived)
 {
     return {{"t", "a"}, {"c", conv}, {"v", archived}, {"s", sigArchived}};
