@@ -146,6 +146,7 @@ private:
     void paintItem(QPainter &p, int i);
     QString nameOf(const QString &key) const;
     void clearSelection();
+    void selectWordAt(int msg, int textPos); // double click: select the word under the cursor
     void updateCursorShape(const QPoint &vp);
     void stopAutoScroll();
     bool atBottom() const;
@@ -198,6 +199,7 @@ private:
     bool m_dragging = false;
     QPoint m_pressPos;
     Hit m_pressHit;
+    bool m_wordSelected = false; // word selected by double click; keep it until the next press
     QTimer *m_autoScrollTimer = nullptr;
     QTimer *m_resizeTimer = nullptr;
     ScrollToLatestButton *m_toLatest = nullptr; // round arrow button at the bottom right

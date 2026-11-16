@@ -447,6 +447,22 @@ void ChatView::clearSelection()
     m_selItem = -1;
     m_selCursor = QTextCursor();
     m_dragging = false;
+    m_wordSelected = false;
+}
+
+// Double-click on a message bubble: select the whole word under the cursor,
+// like Signal/WhatsApp do. The selection survives the click/release sequence
+// (see mousePressEvent / mouseReleaseEvent) so it can be copied with Ctrl+C.
+void ChatView::selectWordAt(int msg, int textPos)
+{
+    if (msg < 0 || msg >= m_items.size() || !m_items[msg].doc || textPos < 0) return;
+    m_selItem = msg;
+    m_selCursor = QTextCursor(m_items[msg].doc.get());
+    m_selCursor.setPosition(textPos);
+    m_selCursor.select(QTextCursor::WordUnderCursor);
+    m_dragging = false;
+    m_wordSelected = true;
+    viewport()->update();
 }
 
 void ChatView::clearView()
@@ -1628,6 +1644,14 @@ void ChatView::mousePressEvent(QMouseEvent *e)
     setFocus();
     m_pressPos = e->pos();
     m_pressHit = hitTest(e->pos());
+    // Qt delivers a double click as press, release, DoubleClick, release. The
+    // second press must not wipe the word selection made by the double click;
+    // any other press starts fresh.
+    if (m_wordSelected && e->clickCount() >= 2 && m_pressHit.msg == m_selItem) {
+        m_dragging = false;
+        viewport()->update();
+        return;
+    }
     clearSelection();
     if ((m_pressHit.kind == Hit::Text || m_pressHit.kind == Hit::Link) && m_pressHit.textPos >= 0) {
         m_selItem = m_pressHit.msg;
@@ -1650,7 +1674,13 @@ void ChatView::mouseMoveEvent(QMouseEvent *e)
         const QPointF local(e->pos().x() - it.textRect.left(),
                             e->pos().y() + verticalScrollBar()->value() - it.y - it.textRect.top());
         const int pos = it.doc->documentLayout()->hitTest(local, Qt::FuzzyHit);
-        if (pos >= 0) m_selCursor.setPosition(pos, QTextCursor::KeepAnchor);
+        if (pos >= 0) {
+            // leaving a double-click word selection only when the pointer really
+            // moved away from the click point (extend by drag instead of losing it)
+            if (m_wordSelected && (e->pos() - m_pressPos).manhattanLength() < 4) return;
+            m_wordSelected = false;
+            m_selCursor.setPosition(pos, QTextCursor::KeepAnchor);
+        }
         viewport()->update();
         return;
     }
@@ -1670,6 +1700,11 @@ void ChatView::mouseReleaseEvent(QMouseEvent *e)
     m_dragging = false;
     const bool click = (e->pos() - m_pressPos).manhattanLength() < 4;
     if (!click) return;
+    // keep a word selection made by double clicking until the next real click
+    if (m_wordSelected && e->clickCount() >= 2) {
+        viewport()->update();
+        return;
+    }
     const Hit h = hitTest(e->pos());
     if (h.msg != m_pressHit.msg || h.kind != m_pressHit.kind) return;
     switch (h.kind) {
@@ -1707,14 +1742,16 @@ void ChatView::stopAutoScroll()
 
 void ChatView::mouseDoubleClickEvent(QMouseEvent *e)
 {
+    if (e->button() != Qt::LeftButton) {
+        QAbstractScrollArea::mouseDoubleClickEvent(e);
+        return;
+    }
     const Hit h = hitTest(e->pos());
+    // double click on a word in a message bubble selects that word, as known
+    // from other chat apps (works for plain text and the text of links too)
     if ((h.kind == Hit::Text || h.kind == Hit::Link) && h.textPos >= 0) {
-        m_selItem = h.msg;
-        m_selCursor = QTextCursor(m_items[m_selItem].doc.get());
-        m_selCursor.setPosition(h.textPos);
-        m_selCursor.select(QTextCursor::WordUnderCursor);
-        m_dragging = false;
-        viewport()->update();
+        selectWordAt(h.msg, h.textPos);
+        e->accept();
         return;
     }
     QAbstractScrollArea::mouseDoubleClickEvent(e);
