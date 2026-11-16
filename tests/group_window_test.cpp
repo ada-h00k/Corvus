@@ -16,7 +16,6 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
-#include <QStatusBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QThread>
@@ -165,7 +164,7 @@ int main(int argc, char **argv)
         std::printf("2: leaving the group\n");
         dialog->findChild<QPushButton *>("leaveGroupButton")->click(); // confirmed automatically
         CHECK(waitFor([&] { return logHas(logFile, "quitGroup"); }));
-        CHECK(waitFor([&] { return w.statusBar()->currentMessage().contains("You left"); }));
+        CHECK(waitFor([&] { return !listHas(list, "Team Renamed"); })); // gone from the chat list
     }
 
     std::printf("3: new group with Alice -> listed and opened\n");
@@ -198,8 +197,7 @@ int main(int argc, char **argv)
     CHECK(waitFor([&] { return g_lastBox.contains("Group link is invalid"); }));
 
     g_inputText = "https://signal.group/#abcAPPROVAL"; // needs approval: only requested
-    join->trigger();
-    CHECK(waitFor([&] { return w.statusBar()->currentMessage().contains("Join request sent"); }));
+    join->trigger(); // the only feedback was the removed status bar, so nothing to assert here
 
     std::printf("5: accept one invitation, decline the other\n");
     invites->trigger();

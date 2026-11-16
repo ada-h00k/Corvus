@@ -1,5 +1,6 @@
 // Start-up behaviour against a mock signal-cli that fails, is empty, slow, or exits non-zero.
 #include "MainWindow.h"
+#include "MessageInput.h"
 #include "PassphraseDialog.h"
 #include "SignalCli.h"
 
@@ -7,7 +8,6 @@
 #include <QAbstractButton>
 #include <QDir>
 #include <QElapsedTimer>
-#include <QLabel>
 #include <QMessageBox>
 #include <QLineEdit>
 #include <QPushButton>
@@ -71,14 +71,12 @@ static bool waitFor(const std::function<bool()> &cond, int ms = 20000)
     return true;
 }
 
-static QString status(MainWindow &w)
+// The composer stays disabled until the backend is connected: the enabled
+// state of the input field is the window's observable connection state.
+static bool composerEnabled(MainWindow &w)
 {
-    for (QLabel *l : w.findChildren<QLabel *>()) {
-        const QString t = l->text();
-        if (t.startsWith("Connect to")) continue; // the (hidden) sticker picker hint, not the status bar
-        if (t.contains("Connect") || t.contains("Disconnected") || t.contains("Not connected")) return t;
-    }
-    return {};
+    MessageInput *input = w.findChild<MessageInput *>();
+    return input && input->isEnabled();
 }
 
 // Runs a MainWindow with a fresh data directory and the given mock behaviour.
@@ -158,7 +156,7 @@ int main(int argc, char **argv)
         CHECK(g_box.contains("Command:"));
         CHECK(!g_box.contains("No account"));
         CHECK(!g_box.contains("no account is set up"));
-        CHECK(!status(*r.w).contains("Connected ·"));
+        CHECK(!composerEnabled(*r.w));
     }
 
     std::printf("empty account list -> offer to link\n");
@@ -166,13 +164,13 @@ int main(int argc, char **argv)
         Run r("empty");
         CHECK(waitFor([] { return g_boxSeen; }));
         CHECK(g_box.contains("no account is set up"));
-        CHECK(status(*r.w).contains("no account linked"));
+        CHECK(!composerEnabled(*r.w)); // nothing connects: the composer stays locked
     }
 
     std::printf("valid output but non-zero exit code -> still connects\n");
     {
         Run r("okexit1");
-        CHECK(waitFor([&] { return status(*r.w).contains("Connected ·"); }));
+        CHECK(waitFor([&] { return composerEnabled(*r.w); }));
         CHECK(!g_boxSeen);
     }
 
@@ -182,20 +180,19 @@ int main(int argc, char **argv)
         QElapsedTimer tick;
         tick.start();
         qint64 maxGap = 0;
-        bool sawConnecting = false;
+        bool sawPending = false;
         QTimer ticker;
         QObject::connect(&ticker, &QTimer::timeout, [&] {
-            const bool connecting = status(*r.w).contains("Connecting");
-            if (connecting) {
-                sawConnecting = true;
+            if (!composerEnabled(*r.w)) { // the composer stays disabled while connecting
+                sawPending = true;
                 maxGap = qMax(maxGap, tick.elapsed());
             }
             tick.restart();
         });
         ticker.start(10);
-        CHECK(waitFor([&] { return status(*r.w).contains("Connected ·"); }));
+        CHECK(waitFor([&] { return composerEnabled(*r.w); }));
         ticker.stop();
-        CHECK(sawConnecting);
+        CHECK(sawPending);
         std::printf("  longest event-loop gap while connecting: %lld ms\n", static_cast<long long>(maxGap));
         CHECK(maxGap < 400);
         CHECK(!g_boxSeen);

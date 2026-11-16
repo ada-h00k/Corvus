@@ -98,7 +98,7 @@ private slots:
     void linkDevice();
     void reconnect();
     void chooseExecutable();
-    void checkForUpdates(bool silent);
+    void checkForUpdates();
     void showAbout();
     void changeHistoryProtection();
     void openSettings(int page = 0); // SettingsDialog::Page
@@ -117,7 +117,7 @@ private:
     void showCliProblem(const QString &title, const SignalCli::Result &r);
     void connectAccount();
     void loadContactsAndGroups();
-    void setConnected(bool connected, const QString &info = QString());
+    void setConnected(bool connected);
 
     // --- encrypted history (Rust store)
     QString historyPath() const;
@@ -469,6 +469,4 @@ private:
     QPointer<QToolButton> m_expandInputBtn;
     QPushButton *m_sendBtn;
     EmojiPicker *m_picker;
-    QLabel *m_statusLabel;
-    QLabel *m_updateLabel;
 };

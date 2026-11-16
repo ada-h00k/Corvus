@@ -25,7 +25,7 @@ trap restore EXIT
 for scheme in BreezeLight BreezeDark; do
   plasma-apply-colorscheme "$scheme" >/dev/null
   sleep 2
-  # MOCK_VERSION: The mock reports corvus-cli as the backend (appears as such in the status bar).
+  # MOCK_VERSION: The mock reports corvus-cli as the backend (shown in Settings → Advanced).
   # MOCK_NO_AVATARS: getAvatar fails; the GUI displays the default avatars (circle with a letter).
   # Last argument of `shots`: image size “WIDTH_HEIGHT” (default 1280x720, 16:9 for Flathub).
   MOCK_VERSION="corvus-cli 1.2.0 compatible with signal-cli 0.14.9" MOCK_NO_AVATARS=1 \

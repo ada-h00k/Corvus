@@ -20,7 +20,6 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
-#include <QStatusBar>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
@@ -239,7 +238,6 @@ int main(int argc, char **argv)
     fake->elapsed = 200;
     button("recordStopButton")->click();
     CHECK(waitFor([&] { return !bar->isVisible(); }));
-    CHECK(w.statusBar()->currentMessage().contains("too short"));
     CHECK(!QFileInfo::exists(fake->lastPath));
 
     std::printf("5: stop -> attached, add text, send with the voice note\n");
@@ -264,17 +262,13 @@ int main(int argc, char **argv)
     }
 
     std::printf("6: a recording stays with its chat when another one is opened\n");
-    waitFor([] { return false; }, 700); // let the answer of the previous send arrive (it clears the status line)
+    waitFor([] { return false; }, 700); // let the answer of the previous send arrive
     mic->click();
     fake->elapsed = 5000;
     selectItem(list, "Bob");
     CHECK(waitFor([&] { return !bar->isVisible(); }));
-    bool sawDraftNote = false;
-    CHECK(waitFor([&] {
-        if (w.statusBar()->currentMessage().contains("draft")) sawDraftNote = true;
-        return sawDraftNote;
-    }, 3000));
-    std::printf("   status now: [%s]\n", qPrintable(w.statusBar()->currentMessage()));
+    const QString drafted = fake->lastPath; // the queued recording is kept with the chat, not deleted
+    CHECK(QFileInfo::exists(drafted));
     CHECK(calls(logFile, "send").size() == sendsBefore + 1);
     selectItem(list, "Alice");
     CHECK(waitFor([&] {

@@ -6,6 +6,7 @@
 #include "HistoryKeychain.h"
 #include "ImageViewer.h"
 #include "MainWindow.h"
+#include "MessageInput.h"
 #include "MessageRequestsDialog.h"
 #include "PassphraseDialog.h"
 #include "ProfilePage.h"
@@ -669,15 +670,9 @@ int main(int argc, char **argv)
             CHECK(team && !team->icon().isNull());
         }
         {
-            bool found = false;
-            for (QLabel *l : w.findChildren<QLabel *>()) {
-                if (l->text().contains("Connected")) {
-                    found = true;
-                    CHECK(!l->text().contains("+49"));      // no phone number in the status bar
-                    CHECK(l->text().contains("0.14.9"));   // but the signal-cli version
-                }
-            }
-            CHECK(found);
+            // the composer unlocks as soon as the mock backend reports connection
+            MessageInput *input = w.findChild<MessageInput *>();
+            CHECK(waitFor([&] { return input && input->isEnabled(); }));
         }
         QAction *settingsAct = settingsAction(w);
         CHECK(settingsAct != nullptr);

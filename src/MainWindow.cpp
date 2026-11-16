@@ -80,7 +80,6 @@
 #include <QShowEvent>
 #include <QSplitter>
 #include <QStandardPaths>
-#include <QStatusBar>
 #include <QTextDocument>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -814,15 +813,6 @@ MainWindow::MainWindow()
     m_picker = new EmojiPicker(this);
     m_picker->setSignalCli(&m_cli);
 
-    // Status bar
-    m_statusLabel = new QLabel(tr("Not connected"));
-    m_updateLabel = new QLabel;
-    m_updateLabel->setOpenExternalLinks(true);
-    statusBar()->addWidget(m_statusLabel, 1);
-    statusBar()->addPermanentWidget(m_updateLabel);
-#ifdef Q_OS_MACOS
-    statusBar()->setSizeGripEnabled(false);
-#endif
 
     // Menus
     QMenu *file = menuBar()->addMenu(tr("&File"));
@@ -846,7 +836,7 @@ MainWindow::MainWindow()
     settings->addAction(tr("Configure Corvus …"), QKeySequence::Preferences, this, [this] { openSettings(); });
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
-    help->addAction(tr("Check for backend update"), this, [this] { checkForUpdates(false); });
+    help->addAction(tr("Check for backend update"), this, [this] { checkForUpdates(); });
     help->addAction(tr("About"), this, &MainWindow::showAbout);
 
     for (int index = 0; index < 9; ++index) {
@@ -968,7 +958,6 @@ MainWindow::MainWindow()
     connect(m_view, &ChatView::attachmentActivated, this, &MainWindow::openAttachment);
     connect(m_view, &ChatView::animatedAttachmentRequested, this, &MainWindow::loadAnimatedAttachment);
     connect(m_view, &ChatView::videoPlaybackError, this, [this](const QString &error) {
-        statusBar()->showMessage(tr("Video playback failed: %1").arg(error), 10000);
     });
     connect(m_view, &ChatView::linkClicked, this, [this](const QString &url) {
         const QUrl u(url);
@@ -1021,18 +1010,15 @@ MainWindow::MainWindow()
     });
     connect(m_picker, &EmojiPicker::stickerSelected, this, [this](const QString &packId, int stickerId, const QByteArray &data) {
         if (!m_editKey.isEmpty()) {
-            statusBar()->showMessage(tr("Send a sticker after finishing the current edit."), 5000);
             return;
         }
         if (m_current.isEmpty() || !m_convs.contains(m_current)) {
-            statusBar()->showMessage(tr("Open a conversation before sending a sticker."), 5000);
             return;
         }
         sendSticker(packId, stickerId, data);
     });
     connect(m_picker, &EmojiPicker::gifSelected, this, [this](const QUrl &url, const QUrl &analytics) {
         if (m_current.isEmpty() || !m_convs.contains(m_current)) {
-            statusBar()->showMessage(tr("Open a conversation before sending a GIF."), 5000);
             return;
         }
         downloadAndSendGif(m_current, url, analytics);
@@ -1062,13 +1048,11 @@ MainWindow::MainWindow()
     connect(m_audioPlayer, &QMediaPlayer::errorOccurred, this,
             [this](QMediaPlayer::Error, const QString &error) {
         m_audioLoading = false;
-        statusBar()->showMessage(tr("Audio playback failed: %1").arg(error), 10000);
         updateAudioPlaybackView();
     });
     m_notifier = new Notifier(this);
     // History appends are written by a background thread; failures come back here.
     m_store.setAppendErrorHandler(this, [this](int rc) {
-        statusBar()->showMessage(tr("Could not save message: %1").arg(HistoryStore::errorText(rc)), 10000);
     });
     m_tray = new QSystemTrayIcon(AppIcon::tray(0), this);
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &MainWindow::applyTheme);
@@ -1100,9 +1084,8 @@ MainWindow::MainWindow()
         m_localTypingKey.clear();
         m_typingUntil.clear();
         updateTypingIndicator();
-        setConnected(false, reason);
+        setConnected(false);
     });
-    connect(&m_cli, &SignalCli::logLine, this, [this](const QString &l) { statusBar()->showMessage(l, 5000); });
 
     m_expirationTimer.setInterval(1000);
     connect(&m_expirationTimer, &QTimer::timeout, this, &MainWindow::expireMessages);
@@ -1605,7 +1588,6 @@ void MainWindow::connectAccount()
     const int gen = ++m_connectGen;
     m_cli.stop();
     setConnected(false);
-    m_statusLabel->setText(tr("Connecting …"));
 
     m_cli.queryVersion([this, gen](const SignalCli::Result &r, const QString &version) {
         if (gen != m_connectGen) return;
@@ -1640,7 +1622,7 @@ void MainWindow::connectAccount()
                 return;
             }
             if (accounts.isEmpty()) {
-                setConnected(false, tr("no account linked"));
+                setConnected(false);
                 if (QMessageBox::question(this, tr("No account"),
                                           tr("signal-cli reports that no account is set up yet.\n"
                                              "Link this device with your phone now?"))
@@ -1659,7 +1641,7 @@ void MainWindow::connectAccount()
                     bool ok = false;
                     m_account = QInputDialog::getItem(this, tr("Choose account"), tr("Account:"), accounts, 0, false, &ok);
                     if (!ok) {
-                        setConnected(false, tr("no account chosen"));
+                        setConnected(false);
                         return;
                     }
                 }
@@ -1671,14 +1653,13 @@ void MainWindow::connectAccount()
             m_cli.start(m_account);
             setConnected(true);
             loadContactsAndGroups();
-            checkForUpdates(true); // silent: only a hint in the status bar
         });
     });
 }
 
 void MainWindow::showCliProblem(const QString &title, const SignalCli::Result &r)
 {
-    setConnected(false, title);
+    setConnected(false);
     QMessageBox box(this);
     box.setIcon(QMessageBox::Warning);
     box.setWindowTitle(tr("signal-cli problem"));
@@ -1713,7 +1694,7 @@ void MainWindow::linkDevice()
     }
 }
 
-void MainWindow::setConnected(bool connected, const QString &info)
+void MainWindow::setConnected(bool connected)
 {
     QTimer::singleShot(0, this, [this] { syncSettingsDialog(); });
     m_input->setEnabled(connected);
@@ -1724,11 +1705,6 @@ void MainWindow::setConnected(bool connected, const QString &info)
     m_composerConnected = connected;
     updateAttachBar();
     updateRecordingUi();
-    if (connected) {
-        m_statusLabel->setText(tr("Connected · %1").arg(backendDescription()));
-    } else {
-        m_statusLabel->setText(info.isEmpty() ? tr("Not connected") : tr("Disconnected: %1").arg(info));
-    }
 }
 
 // ----------------------------------------------------- Contacts / groups
@@ -1740,7 +1716,6 @@ void MainWindow::loadContactsAndGroups()
     m_avatarInFlight = 0;
     m_cli.call(QStringLiteral("listContacts"), {}, [this](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
-            statusBar()->showMessage(tr("Could not load contacts: %1").arg(err), 8000);
             return;
         }
         for (const QJsonValue &cv : res.toArray()) {
@@ -1876,8 +1851,6 @@ void MainWindow::updateInvitations(const QList<GroupInfo::Info> &invitations)
         bool known = false;
         for (const GroupInfo::Info &old : std::as_const(m_invitations))
             if (old.id == g.id) known = true;
-        if (!known)
-            statusBar()->showMessage(tr("You were invited to the group “%1”.").arg(g.name.isEmpty() ? tr("Group") : g.name), 10000);
     }
     m_invitations = invitations;
     if (m_invitesAction) m_invitesAction->setEnabled(!m_invitations.isEmpty());
@@ -1887,7 +1860,6 @@ void MainWindow::openGroupInvitations()
 {
     if (m_invitations.isEmpty()) return;
     if (!m_cli.isRunning()) {
-        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
         return;
     }
     auto *dialog = new GroupInvitesDialog(m_cli, m_invitations, this);
@@ -1941,7 +1913,6 @@ void MainWindow::startVoiceRecording()
 {
     if (!m_cli.isRunning() || !m_convs.contains(m_current) || m_recorder->isRecording()) return;
     if (!m_editKey.isEmpty()) {
-        statusBar()->showMessage(tr("Finish editing the message before recording."), 5000);
         return;
     }
     const QString why = m_recorder->unavailableReason();
@@ -1985,7 +1956,6 @@ void MainWindow::onVoiceRecorded(const QString &path, qint64 durationMs)
     }
     if (durationMs < VoiceRecording::kMinDurationMs) { // an accidental click
         QFile::remove(path);
-        statusBar()->showMessage(tr("The recording was too short and was discarded."), 5000);
         return;
     }
     const QString abs = QFileInfo(path).absoluteFilePath();
@@ -1996,7 +1966,6 @@ void MainWindow::onVoiceRecorded(const QString &path, qint64 durationMs)
     } else {
         Draft &d = m_drafts[key];
         if (!d.files.contains(abs)) d.files << abs;
-        statusBar()->showMessage(tr("The voice message was kept in the draft of “%1”.").arg(m_convs.value(key).title), 8000);
     }
 }
 
@@ -2009,7 +1978,6 @@ void MainWindow::updateGroupActions()
 void MainWindow::newGroup()
 {
     if (!m_cli.isRunning()) {
-        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
         return;
     }
     auto *dialog = new GroupDialog(m_cli, m_account, QString(), groupContacts(),
@@ -2033,7 +2001,6 @@ void MainWindow::openGroupSettings(const QString &key)
     const auto it = m_convs.constFind(key);
     if (it == m_convs.constEnd() || !it->isGroup) return;
     if (!m_cli.isRunning()) {
-        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
         return;
     }
     auto *dialog = new GroupDialog(m_cli, m_account, key.mid(2), groupContacts(),
@@ -2042,7 +2009,6 @@ void MainWindow::openGroupSettings(const QString &key)
     connect(dialog, &GroupDialog::groupChanged, this, [this] { refreshGroups(); });
     connect(dialog, &GroupDialog::groupLeft, this, [this, key] {
         const QString title = m_convs.contains(key) ? m_convs.value(key).title : tr("the group");
-        statusBar()->showMessage(tr("You left “%1”.").arg(title), 8000);
         refreshGroups();
     });
     dialog->show();
@@ -2051,7 +2017,6 @@ void MainWindow::openGroupSettings(const QString &key)
 void MainWindow::joinGroupByLink()
 {
     if (!m_cli.isRunning()) {
-        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
         return;
     }
     bool ok = false;
@@ -2067,10 +2032,6 @@ void MainWindow::joinGroupByLink()
             return;
         }
         const QJsonObject o = res.toObject();
-        if (o.value(QStringLiteral("onlyRequested")).toBool())
-            statusBar()->showMessage(tr("Join request sent. An admin has to approve it."), 10000);
-        else
-            statusBar()->showMessage(tr("Joined the group."), 8000);
         const QString id = o.value(QStringLiteral("groupId")).toString();
         refreshGroups([this, id] {
             const QString key = QStringLiteral("g:") + id;
@@ -2357,9 +2318,7 @@ QJsonArray MainWindow::allRecords() const
 
 void MainWindow::persist(const QJsonObject &record)
 {
-    const int rc = m_store.append(record);
-    if (rc != SC_OK)
-        statusBar()->showMessage(tr("Could not save message: %1").arg(HistoryStore::errorText(rc)), 10000);
+    m_store.append(record);
 }
 
 void MainWindow::learnName(const QString &key, const QString &name)
@@ -2539,10 +2498,7 @@ void MainWindow::removeConversation(const QString &key)
         updateAttachBar();
     }
     // Compacts the file (old ciphertext is gone); runs on the history writer thread.
-    m_store.rewriteAsync(allRecords(), this, [this](int rc) {
-        if (rc != SC_OK)
-            statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
-    });
+    m_store.rewriteAsync(allRecords(), this, [this](int) { });
     refreshList();
     showConversation();
 }
@@ -2554,7 +2510,6 @@ void MainWindow::deleteMessage(int idx)
     const Message message = conversation.msgs[idx];
     for (auto it = m_pendingSends.cbegin(); it != m_pendingSends.cend(); ++it) {
         if (it->conversationKey == conversation.key && it->temporaryTimestamp == message.ts()) {
-            statusBar()->showMessage(tr("Wait until the message has finished sending before deleting it."), 6000);
             return;
         }
     }
@@ -2587,12 +2542,10 @@ void MainWindow::deleteMessage(int idx)
     const qint64 timestamp = message.ts();
     m_cli.call(QStringLiteral("remoteDelete"), params, [this, key, timestamp](const QJsonValue &, const QString &err) {
         if (!err.isEmpty()) {
-            statusBar()->showMessage(tr("Could not delete message for everyone: %1").arg(err), 10000);
             return;
         }
         // Like the official clients: a placeholder stays where the message was.
         if (!applyDelete(key, timestamp, {})) return;
-        statusBar()->showMessage(tr("Message deleted for everyone."), 5000);
     });
 }
 
@@ -2610,7 +2563,6 @@ bool MainWindow::removeMessage(const QString &key, qint64 timestamp)
         int at = conversation->msgs.size();
         while (at > 0 && conversation->msgs[at - 1].sortTs() > removed.sortTs()) --at;
         conversation->msgs.insert(at, removed);
-        statusBar()->showMessage(tr("Could not remove message from history: %1").arg(HistoryStore::errorText(rc)), 10000);
         return false;
     }
     if (key == m_current) showConversation(true);
@@ -2932,7 +2884,6 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     // Rewrite instead of append: the old ciphertext of the message must not stay in the file.
     const int rc = m_store.rewrite(allRecords());
     if (rc != SC_OK) {
-        statusBar()->showMessage(tr("Could not remove message from history: %1").arg(HistoryStore::errorText(rc)), 10000);
         persist(Records::deletion(key, m)); // at least keep the placeholder after a restart
     }
     if (key == m_current) showConversation(true);
@@ -2996,7 +2947,6 @@ void MainWindow::showSafetyNumber(const QString &key)
     const auto it = m_convs.constFind(key);
     if (it == m_convs.constEnd() || it->isGroup) return;
     if (!m_cli.isRunning()) {
-        statusBar()->showMessage(tr("Not connected to signal-cli."), 5000);
         return;
     }
     auto *dialog = new SafetyNumberDialog(m_cli, resolveKey(key), displayName(key), this);
@@ -3093,7 +3043,6 @@ void MainWindow::checkSendResults(const QJsonValue &sendResult)
         QString who = address.value(QStringLiteral("number")).toString();
         if (who.isEmpty()) who = address.value(QStringLiteral("uuid")).toString();
         who = resolveKey(who);
-        statusBar()->showMessage(tr("Not delivered to %1: the safety number has changed.").arg(displayName(who)), 10000);
         checkIdentities(who, true);
     }
 }
@@ -3102,12 +3051,9 @@ void MainWindow::flagSafetyChange(const QString &convKey, const SafetyChange &ch
 {
     const auto old = m_safetyChanged.constFind(convKey);
     if (old != m_safetyChanged.constEnd() && old->digits == change.digits && old->blocked == change.blocked) return;
-    const bool isNew = old == m_safetyChanged.constEnd() || old->digits != change.digits;
     m_safetyChanged.insert(convKey, change);
     if (convKey == m_current)
         updateSafetyBar();
-    else if (isNew)
-        statusBar()->showMessage(tr("The safety number with %1 has changed.").arg(displayName(convKey)), 10000);
     refreshList();
 }
 
@@ -3156,28 +3102,24 @@ void MainWindow::setExpiration(const QString &key, int seconds)
                    {{QStringLiteral("groupId"), key.mid(2)}, {QStringLiteral("expiration"), seconds}},
                    [this, key, seconds](const QJsonValue &, const QString &err) {
             if (!err.isEmpty()) {
-                statusBar()->showMessage(tr("Could not change disappearing-message timer: %1").arg(err), 10000);
                 return;
             }
             auto conversation = m_convs.find(key);
             if (conversation == m_convs.end()) return;
             conversation->expirationSeconds = seconds;
             persist(Records::expiration(key, seconds));
-            statusBar()->showMessage(tr("Disappearing-message timer updated."), 5000);
         });
     } else {
         m_cli.call(QStringLiteral("updateContact"),
                    {{QStringLiteral("recipient"), resolveKey(key)}, {QStringLiteral("expiration"), seconds}},
                    [this, key, seconds](const QJsonValue &, const QString &err) {
             if (!err.isEmpty()) {
-                statusBar()->showMessage(tr("Could not change disappearing-message timer: %1").arg(err), 10000);
                 return;
             }
             auto conversation = m_convs.find(key);
             if (conversation == m_convs.end()) return;
             conversation->expirationSeconds = seconds;
             persist(Records::expiration(key, seconds));
-            statusBar()->showMessage(tr("Disappearing-message timer updated."), 5000);
         });
     }
 }
@@ -3223,10 +3165,7 @@ void MainWindow::expireMessages()
     if (!changed) return;
 
     // Serialising and encrypting the whole history happens on the history writer thread.
-    m_store.rewriteAsync(allRecords(), this, [this](int rc) {
-        if (rc != SC_OK)
-            statusBar()->showMessage(tr("Could not remove expired messages: %1").arg(HistoryStore::errorText(rc)), 10000);
-    });
+    m_store.rewriteAsync(allRecords(), this, [this](int) { });
     if (m_convs.contains(m_current)) showConversation(true);
     refreshList();
 }
@@ -4339,9 +4278,6 @@ bool MainWindow::attachFromMimeData(const QMimeData *md)
         addPendingFiles(files);
         return true;
     }
-    if (!portalError.isEmpty())
-        statusBar()->showMessage(tr("Could not receive files through the desktop portal: %1").arg(portalError), 10000);
-
     // Raw image data (e.g. a screenshot copied to the clipboard). If there is
     // real text as well (e.g. copied from a document), the text wins.
     if (md->hasImage() && md->text().trimmed().isEmpty()) {
@@ -4352,7 +4288,6 @@ bool MainWindow::attachFromMimeData(const QMimeData *md)
                                  .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")))
                                  .arg(++counter);
         if (!img.save(path, "PNG")) {
-            statusBar()->showMessage(tr("The image from the clipboard could not be used."), 8000);
             return false;
         }
         addPendingFiles({path});
@@ -4903,7 +4838,6 @@ void MainWindow::forwardMessage(int idx)
     // A consumed or unopened View Once message must never be re-uploaded from the desktop client.
     if (source.deleted || source.viewOnce) return;
     if (source.text.isEmpty() && source.attachments.isEmpty()) {
-        statusBar()->showMessage(tr("This message cannot be forwarded."), 5000);
         return;
     }
 
@@ -4991,14 +4925,12 @@ void MainWindow::forwardMessage(int idx)
     operation->note = note->text().trimmed();
     operation->stageDir = m_tmp.path() + QStringLiteral("/forward-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
     if (!QDir().mkpath(operation->stageDir)) {
-        statusBar()->showMessage(tr("Could not prepare the forwarded message."), 7000);
         return;
     }
 
     if (source.attachments.isEmpty()) {
         sendForwardedMessage(operation);
     } else {
-        statusBar()->showMessage(tr("Preparing message for forwarding …"));
         fetchForwardAttachment(operation, 0);
     }
 }
@@ -5011,7 +4943,6 @@ void MainWindow::fetchForwardAttachment(const std::shared_ptr<ForwardOperation> 
     }
     const Attachment attachment = operation->source.attachments.at(index);
     if (attachment.size > kMaxAttachment) {
-        statusBar()->showMessage(tr("An attachment is too large to forward."), 8000);
         QDir(operation->stageDir).removeRecursively();
         return;
     }
@@ -5029,15 +4960,12 @@ void MainWindow::fetchForwardAttachment(const std::shared_ptr<ForwardOperation> 
                 sendForwardedMessage(operation);
                 return;
             }
-            statusBar()->showMessage(tr("Could not prepare attachment for forwarding: %1")
-                                         .arg(error.isEmpty() ? tr("invalid or oversized file") : error), 9000);
             QDir(operation->stageDir).removeRecursively();
             return;
         }
         qint64 totalBytes = data.size();
         for (const QByteArray &previous : std::as_const(operation->attachmentData)) totalBytes += previous.size();
         if (totalBytes > kMaxAttachment) {
-            statusBar()->showMessage(tr("The attachments are too large to forward together."), 8000);
             QDir(operation->stageDir).removeRecursively();
             return;
         }
@@ -5071,7 +4999,6 @@ void MainWindow::sendForwardedMessage(const std::shared_ptr<ForwardOperation> &o
     operation->stagedPaths.clear();
     for (int i = 0; i < source.attachments.size() && !directSticker; ++i) {
         if (i >= operation->attachmentData.size()) {
-            statusBar()->showMessage(tr("An attachment could not be prepared for forwarding."), 7000);
             QDir(operation->stageDir).removeRecursively();
             return;
         }
@@ -5084,14 +5011,12 @@ void MainWindow::sendForwardedMessage(const std::shared_ptr<ForwardOperation> &o
         if (attachment.isSticker()) filename = QStringLiteral("sticker.webp");
         const QString fileDir = operation->stageDir + QStringLiteral("/named-") + QString::number(i);
         if (!QDir().mkpath(fileDir)) {
-            statusBar()->showMessage(tr("Could not prepare attachment for forwarding."), 7000);
             QDir(operation->stageDir).removeRecursively();
             return;
         }
         const QString path = fileDir + QLatin1Char('/') + filename;
         QFile file(path);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(operation->attachmentData.at(i)) != operation->attachmentData.at(i).size()) {
-            statusBar()->showMessage(tr("Could not write attachment for forwarding."), 7000);
             QDir(operation->stageDir).removeRecursively();
             return;
         }
@@ -5178,7 +5103,6 @@ void MainWindow::sendForwardedMessage(const std::shared_ptr<ForwardOperation> &o
                 const PendingSend pending = it.value();
                 removePendingPreview(pending);
                 m_pendingSends.erase(it);
-                statusBar()->showMessage(tr("Forwarding to %1 failed: %2").arg(displayName(key), error), 10000);
                 if (SafetyNumber::isUntrustedIdentityError(error)) checkIdentities(key, true);
                 return;
             }
@@ -5193,10 +5117,8 @@ void MainWindow::sendForwardedMessage(const std::shared_ptr<ForwardOperation> &o
         });
     }
     if (started == 0) {
-        statusBar()->showMessage(tr("No available destination chat was selected."), 7000);
         QDir(operation->stageDir).removeRecursively();
     } else {
-        statusBar()->showMessage(tr("Forwarding message to %1 chat(s) …").arg(started), 5000);
     }
 }
 
@@ -5222,7 +5144,6 @@ void MainWindow::sendMessage()
     const QList<MentionRange> mentions = prepared.mentions;
     if (text.isEmpty() && m_pendingFiles.isEmpty()) return;
     if (m_convs[m_current].blocked) {
-        statusBar()->showMessage(tr("%1 is blocked. Unblock the contact to send messages.").arg(m_convs[m_current].title), 8000);
         return;
     }
     const QString pendingPreviewUrl = firstHttpsLink(rawText);
@@ -5231,7 +5152,6 @@ void MainWindow::sendMessage()
         m_previewRequestedUrl == pendingPreviewUrl) {
         m_sendAfterLinkPreview = true;
         m_pendingPreviewSendText = rawText;
-        statusBar()->showMessage(tr("Generating link preview …"), 5000);
         return;
     }
 
@@ -5245,11 +5165,9 @@ void MainWindow::sendMessage()
             QFileInfo(files.first()).suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) != 0 &&
             !m_voiceFiles.contains(QFileInfo(files.first()).absoluteFilePath());
         if (!oneStaticImage || !text.isEmpty() || quote.valid) {
-            statusBar()->showMessage(tr("View Once requires exactly one photo without text or a reply."), 7000);
             return;
         }
         if (QVersionNumber::fromString(m_version) < QVersionNumber(0, 13, 18)) {
-            statusBar()->showMessage(tr("View Once requires signal-cli 0.13.18 or newer."), 7000);
             return;
         }
     }
@@ -5370,7 +5288,6 @@ void MainWindow::sendMessage()
     m_replyQuote = Quote();
     updateAttachBar();
     updateReplyBar();
-    if (!files.isEmpty()) statusBar()->showMessage(tr("Sending …"));
     if (key == m_current) showConversation(true);
 
     m_cli.call(QStringLiteral("send"), p,
@@ -5383,7 +5300,6 @@ void MainWindow::sendMessage()
             const PendingSend pending = pendingIt.value();
             removePendingPreview(pending);
             m_pendingSends.erase(pendingIt);
-            statusBar()->showMessage(tr("Sending failed: %1").arg(err), 10000);
             if (SafetyNumber::isUntrustedIdentityError(err)) checkIdentities(key, true);
             if (key != m_current) {
                 // The user has moved on to another chat: put the unsent message back into
@@ -5425,7 +5341,6 @@ void MainWindow::sendMessage()
         // The preview is already confirmed and persisted in that case.
         if (pendingIt->echoReceived) {
             m_pendingSends.erase(pendingIt);
-            statusBar()->clearMessage();
             registerGiphyAnalytics(giphySentAnalyticsUrl);
             if (m_pendingGifAnalyticsUrl == giphySentAnalyticsUrl) m_pendingGifAnalyticsUrl.clear();
             return;
@@ -5433,7 +5348,6 @@ void MainWindow::sendMessage()
 
         qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
         if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
-        statusBar()->clearMessage();
         finalizePendingSend(pendingId, ts);
         registerGiphyAnalytics(giphySentAnalyticsUrl);
         if (m_pendingGifAnalyticsUrl == giphySentAnalyticsUrl) m_pendingGifAnalyticsUrl.clear();
@@ -5447,7 +5361,6 @@ void MainWindow::startEdit(int idx)
     const Conversation &c = m_convs[m_current];
     const Message &m = c.msgs[idx];
     if (!m.canEdit(QDateTime::currentMSecsSinceEpoch())) {
-        statusBar()->showMessage(tr("This message can no longer be edited (3 hours / 10 edits)."), 6000);
         return;
     }
     if (m_editKey.isEmpty()) {
@@ -5538,7 +5451,6 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles, con
     }
     const Message m = c.msgs[i];
     if (text.isEmpty()) {
-        statusBar()->showMessage(tr("A message cannot be empty."), 6000);
         return;
     }
     const QJsonArray mentionParams = mentionCliArguments(mentions);
@@ -5547,7 +5459,6 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles, con
         return;
     }
     if (!m.canEdit(QDateTime::currentMSecsSinceEpoch())) {
-        statusBar()->showMessage(tr("This message can no longer be edited (3 hours / 10 edits)."), 6000);
         cancelEdit();
         return;
     }
@@ -5569,10 +5480,8 @@ void MainWindow::sendEdit(const QString &text, const QJsonArray &textStyles, con
     m_cli.call(QStringLiteral("send"), p, [this, key, origTs, text, textStyles, mentions](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
             // The composer is already available; keep the failure visible without replacing its draft.
-            statusBar()->showMessage(tr("Editing failed: %1").arg(err), 10000);
             return;
         }
-        statusBar()->clearMessage();
         qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
         if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
         applyEdit(key, origTs, {m_account}, text, ts, styleRangesFromJson(textStyles), mentions);
@@ -5601,7 +5510,6 @@ void MainWindow::sendReaction(int idx, const QString &emoji)
     const qint64 ts = m.ts();
     m_cli.call(QStringLiteral("sendReaction"), p, [this, key, ts, author, emoji, remove](const QJsonValue &, const QString &err) {
         if (!err.isEmpty()) {
-            statusBar()->showMessage(tr("Reaction failed: %1").arg(err), 8000);
             return;
         }
         applyReaction(key, ts, {author}, m_account, remove ? QString() : emoji);
@@ -5631,7 +5539,6 @@ void MainWindow::sendPin(int idx, qint64 durationSeconds)
     m_cli.call(QStringLiteral("sendPinMessage"), p, [this, key, ts, author, durationSeconds, now](const QJsonValue &,
                                                                                                    const QString &err) {
         if (!err.isEmpty()) {
-            statusBar()->showMessage(tr("Pinning failed: %1").arg(err), 8000);
             return;
         }
         applyPin(key, ts, {author}, m_account, durationSeconds, now);
@@ -5661,7 +5568,6 @@ void MainWindow::sendUnpinFor(const PinInfo &pin)
     const QString key = c.key;
     m_cli.call(QStringLiteral("sendUnpinMessage"), p, [this, key, pin](const QJsonValue &, const QString &err) {
         if (!err.isEmpty()) {
-            statusBar()->showMessage(tr("Unpinning failed: %1").arg(err), 8000);
             return;
         }
         applyUnpin(key, pin.ts, {pin.authorKey});
@@ -5912,20 +5818,16 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
         const QString token = QStringLiteral("%1|%2|%3").arg(key).arg(timestamp).arg(author);
         if (m_viewOnceOpening.contains(token)) return;
         m_viewOnceOpening.insert(token);
-        statusBar()->showMessage(tr("Opening View Once photo …"));
         fetchAttachmentData(key, att, [this, key, author, timestamp, token, viewerName, att]
                             (const QByteArray &data, const QString &error) {
             m_viewOnceOpening.remove(token);
             if (m_current != key || !m_convs.contains(key)) return;
-            statusBar()->clearMessage();
             if (!error.isEmpty() || data.isEmpty() || QImage::fromData(data).isNull()) {
-                statusBar()->showMessage(error.isEmpty() ? tr("The View Once photo could not be displayed.") : error, 8000);
                 return;
             }
             auto *viewer = new ImageViewer(data, viewerName, this, false);
             if (!viewer->isValid()) {
                 delete viewer;
-                statusBar()->showMessage(tr("The View Once photo could not be displayed."), 8000);
                 return;
             }
             viewer->setAttribute(Qt::WA_DeleteOnClose);
@@ -5959,11 +5861,9 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
             if (index < 0 || attIdx >= m_convs[key].msgs[index].attachments.size()) return;
             m_view->setVideoLoading(index, attIdx, false);
             if (!error.isEmpty() || data.isEmpty()) {
-                statusBar()->showMessage(error.isEmpty() ? tr("The video file is empty.") : error, 10000);
                 return;
             }
             if (!m_tmp.isValid()) {
-                statusBar()->showMessage(tr("No temporary directory available for video playback."), 10000);
                 return;
             }
             QString suffix = QFileInfo(att.filename).suffix();
@@ -5976,11 +5876,9 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
                                  (suffix.isEmpty() ? QString() : QStringLiteral(".") + suffix);
             QFile file(path);
             if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size()) {
-                statusBar()->showMessage(tr("The video file could not be prepared for playback."), 10000);
                 return;
             }
             file.close();
-            statusBar()->clearMessage();
             m_view->playVideoAttachment(index, attIdx, path);
         });
         return;
@@ -5993,9 +5891,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
         return;
     }
 
-    statusBar()->showMessage(tr("Loading attachment …"));
     fetchAttachmentData(key, att, [this, att, viewerName](const QByteArray &data, const QString &err) {
-        statusBar()->clearMessage();
         if (!err.isEmpty()) {
             if (att.isImage() && !att.thumb.isEmpty()) { // fall back to the stored preview
                 auto *viewer = new ImageViewer(att.thumb, viewerName, this);
@@ -6074,7 +5970,6 @@ void MainWindow::toggleAudioAttachment(int msgIdx, int attIdx)
     m_audioDurationMs = 0;
     m_audioLoading = true;
     updateAudioPlaybackView();
-    statusBar()->showMessage(tr("Loading audio …"));
 
     fetchAttachmentData(conversation.key, attachment,
                         [this, key = conversation.key, timestamp = message.ts(), attIdx, attachment]
@@ -6082,7 +5977,6 @@ void MainWindow::toggleAudioAttachment(int msgIdx, int attIdx)
         if (m_audioKey != key || m_audioMessageTs != timestamp || m_audioAttachmentIndex != attIdx) return;
         if (!error.isEmpty() || data.isEmpty()) {
             m_audioLoading = false;
-            statusBar()->showMessage(error.isEmpty() ? tr("The audio file is empty.") : error, 10000);
             updateAudioPlaybackView();
             return;
         }
@@ -6097,7 +5991,6 @@ void MainWindow::toggleAudioAttachment(int msgIdx, int attIdx)
         QFile file(path);
         if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size()) {
             m_audioLoading = false;
-            statusBar()->showMessage(tr("The audio file could not be prepared for playback."), 10000);
             updateAudioPlaybackView();
             return;
         }
@@ -6107,7 +6000,6 @@ void MainWindow::toggleAudioAttachment(int msgIdx, int attIdx)
         m_audioDurationMs = 0;
         m_audioPlayer->setSource(QUrl::fromLocalFile(path));
         m_audioPlayer->play();
-        statusBar()->clearMessage();
         updateAudioPlaybackView();
     });
 }
@@ -6138,9 +6030,7 @@ void MainWindow::saveAttachment(int msgIdx, int attIdx)
     const Attachment att = c.msgs[msgIdx].attachments[attIdx];
     const QString suggestedName = AttachmentUtil::displayFileName(att, c.msgs[msgIdx].time);
 
-    statusBar()->showMessage(tr("Loading attachment …"));
     fetchAttachmentData(m_current, att, [this, att, suggestedName](const QByteArray &data, const QString &err) {
-        statusBar()->clearMessage();
         if (!err.isEmpty()) {
             QMessageBox::warning(this, tr("Attachment"), err);
             return;
@@ -6172,7 +6062,7 @@ QString MainWindow::backendDescription() const
 // signal-cli publishes numbered releases ("v0.14.9"). corvus-cli publishes one release per commit
 // (tag "commit-<sha>"), so it is compared by commit: the installed build reports its commit in
 // --version, and GitHub's compare API says whether the latest build is ahead of it.
-void MainWindow::checkForUpdates(bool silent)
+void MainWindow::checkForUpdates()
 {
     const bool corvus = m_backend == QLatin1String("corvus-cli");
     const QString name = m_backend;
@@ -6188,15 +6078,8 @@ void MainWindow::checkForUpdates(bool silent)
     };
 
     // Shows the result. `unknown`: the installed build cannot tell which build it is.
-    auto show = [this, silent, name, corvus](bool newer, bool unknown, const QString &latest, const QString &url,
-                                             const QString &installed) {
-        if (newer) {
-            m_updateLabel->setText(tr("<a href=\"%1\">%2 %3 available</a>")
-                                       .arg(url.toHtmlEscaped(), name.toHtmlEscaped(), latest.toHtmlEscaped()));
-        } else {
-            m_updateLabel->clear();
-        }
-        if (silent) return;
+    auto show = [this, name, corvus](bool newer, bool unknown, const QString &latest, const QString &url,
+                                     const QString &installed) {
         if (newer) {
             QMessageBox box(this);
             box.setWindowTitle(tr("Update available"));
@@ -6227,8 +6110,8 @@ void MainWindow::checkForUpdates(bool silent)
         }
     };
 
-    auto fail = [this, silent](const QString &why) {
-        if (!silent) QMessageBox::warning(this, tr("Update check"), tr("Could not reach GitHub:\n%1").arg(why));
+    auto fail = [this](const QString &why) {
+        QMessageBox::warning(this, tr("Update check"), tr("Could not reach GitHub:\n%1").arg(why));
     };
 
     QNetworkReply *rep = github(repo + QStringLiteral("/releases/latest"));
@@ -6478,14 +6361,12 @@ void MainWindow::setBlocked(const QString &key, bool blocked)
                [this, key, blocked](const QJsonValue &, const QString &err) {
         auto convIt = m_convs.find(key);
         if (!err.isEmpty()) {
-            statusBar()->showMessage(tr("Could not change the block state: %1").arg(err), 8000);
             return;
         }
         if (convIt == m_convs.end() || convIt->blocked == blocked) return;
         convIt->blocked = blocked;
         persist(Records::blocked(key, blocked));
         refreshList();
-        statusBar()->showMessage(blocked ? tr("Contact blocked.") : tr("Contact unblocked."), 5000);
     });
 }
 
@@ -6520,10 +6401,7 @@ void MainWindow::openMessageRequests()
         m_hiddenContacts.remove(key);
         m_declined.remove(key);
         // drop a stored "declined" record, if any
-        m_store.rewriteAsync(allRecords(), this, [this](int rc) {
-            if (rc != SC_OK)
-                statusBar()->showMessage(tr("Could not update history: %1").arg(HistoryStore::errorText(rc)), 10000);
-        });
+        m_store.rewriteAsync(allRecords(), this, [this](int) { });
         if (m_convs.contains(key)) {
             m_showArchived = false;
             switchConversation(key);
@@ -6629,7 +6507,7 @@ void MainWindow::openSettings(int page)
         chooseExecutable();
         syncSettingsDialog();
     });
-    connect(adv, &AdvancedPage::checkForUpdateRequested, this, [this] { checkForUpdates(false); });
+    connect(adv, &AdvancedPage::checkForUpdateRequested, this, [this] { checkForUpdates(); });
     connect(adv, &AdvancedPage::reconnectRequested, this, [this] {
         reconnect();
         syncSettingsDialog();
@@ -6664,7 +6542,6 @@ void MainWindow::syncSettingsDialog()
 
 void MainWindow::reportProfileStatus(const QString &message, bool error)
 {
-    statusBar()->showMessage(message, 10000);
     if (m_profilePage) m_profilePage->setStatus(message, error);
 }
 
@@ -6871,7 +6748,6 @@ void MainWindow::sendSticker(const QString &packId, int stickerId, const QByteAr
             const PendingSend pending = it.value();
             removePendingPreview(pending);
             m_pendingSends.erase(it);
-            statusBar()->showMessage(tr("Sticker could not be sent: %1").arg(error), 9000);
             if (key == m_current && !m_replyQuote.valid && quote.valid) {
                 m_replyQuote = quote;
                 updateReplyBar();
@@ -6883,13 +6759,11 @@ void MainWindow::sendSticker(const QString &packId, int stickerId, const QByteAr
         }
         if (it->echoReceived) {
             m_pendingSends.erase(it);
-            statusBar()->clearMessage();
             return;
         }
         qint64 timestamp = result.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
         if (timestamp <= 0) timestamp = QDateTime::currentMSecsSinceEpoch();
         finalizePendingSend(pendingId, timestamp);
-        statusBar()->clearMessage();
         checkSendResults(result);
     });
 }
@@ -6897,7 +6771,6 @@ void MainWindow::sendSticker(const QString &packId, int stickerId, const QByteAr
 void MainWindow::downloadAndSendGif(const QString &conversationKey, const QUrl &url, const QUrl &sentAnalyticsUrl)
 {
     if (!m_convs.contains(conversationKey) || url.scheme() != QLatin1String("https") || !m_tmp.isValid()) {
-        statusBar()->showMessage(tr("The selected GIF could not be downloaded."), 8000);
         return;
     }
     QNetworkRequest request(url);
@@ -6913,11 +6786,9 @@ void MainWindow::downloadAndSendGif(const QString &conversationKey, const QUrl &
         const bool ok = reply->error() == QNetworkReply::NoError && !data.isEmpty() && data.size() <= kMaxAttachment;
         reply->deleteLater();
         if (m_current != conversationKey) {
-            statusBar()->showMessage(tr("GIF sending cancelled because the active conversation changed."), 8000);
             return;
         }
         if (!ok) {
-            statusBar()->showMessage(tr("Could not download the selected GIF: %1").arg(error), 10000);
             return;
         }
 
@@ -6927,7 +6798,6 @@ void MainWindow::downloadAndSendGif(const QString &conversationKey, const QUrl &
                              QUuid::createUuid().toString(QUuid::WithoutBraces) + QLatin1Char('.') + suffix;
         QFile file(path);
         if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size()) {
-            statusBar()->showMessage(tr("Could not prepare the selected GIF for sending."), 10000);
             return;
         }
         file.close();
@@ -6935,7 +6805,6 @@ void MainWindow::downloadAndSendGif(const QString &conversationKey, const QUrl &
         addPendingFiles({path});
         sendMessage();
     });
-    statusBar()->showMessage(tr("Downloading GIF …"));
 }
 
 void MainWindow::registerGiphyAnalytics(const QUrl &url)
