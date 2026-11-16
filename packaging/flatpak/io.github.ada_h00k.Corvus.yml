@@ -155,7 +155,6 @@ modules:
       - type: git
         url: https://github.com/ada-h00k/Corvus.git
         tag: v1.2.0
-        commit: 851e34a4f41ab650ffa7398333e3208469d30fb5
         x-checker-data:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
