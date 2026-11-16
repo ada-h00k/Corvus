@@ -348,6 +348,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # The app source is this repository's own release tag. A commit SHA cannot
+      # pin the commit containing the manifest itself, so resolve the release tag directly.
+      - name: Pin Corvus source to release tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          manifest = Path("packaging/flatpak/io.github.ada_h00k.Corvus.yml")
+          lines = manifest.read_text().splitlines()
+
+          start = lines.index("  - name: corvus")
+          end = next(
+              (i for i in range(start + 1, len(lines)) if lines[i].startswith("  - name: ")),
+              len(lines),
+          )
+          module = lines[start:end]
+          source_url = "        url: https://github.com/ada-h00k/Corvus.git"
+          url_index = module.index(source_url)
+          tag_index = next(
+              i for i in range(url_index + 1, len(module))
+              if module[i].startswith("        tag: ")
+          )
+
+          module[tag_index] = f"        tag: {os.environ['GITHUB_REF_NAME']}"
+          if tag_index + 1 < len(module) and module[tag_index + 1].startswith("        commit: "):
+              del module[tag_index + 1]
+
+          lines[start:end] = module
+          manifest.write_text("\n".join(lines) + "\n")
+          PY
+
       # Resolve the newest published corvus-cli release and pin it in the manifest: releases
       # are tagged "v<semver>" (legacy releases used "commit-<sha>"). This step resolves the
       # tag to the commit it points at and refreshes the pinned tag and commit per build.
