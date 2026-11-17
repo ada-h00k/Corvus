@@ -152,7 +152,11 @@ private:
                        const QString &emoji);
     // --- Polls (like the official clients): vote by click, the author can end the poll early
     bool supportsPolls() const; // backend version that knows the sendPoll* JSON-RPC methods
-    void createPoll();          // 📊 button: "New poll" dialog for the open conversation
+    bool supportsContacts() const; // backend that can send contact cards (corvus-cli 1.5.0+; signal-cli cannot)
+    void showAttachMenu();      // ➕ button: the official clients' attach menu (photos, files, contacts, polls)
+    void sendContactCard();     // "Contact": pick a contact and send a contact card message
+    void openContactChat(int idx); // click on a contact card: open the chat with that contact
+    void createPoll();          // "Poll" action of the ➕ menu: "New poll" dialog for the open conversation
     void sendPollVote(int idx, int optionIndex); // click on an option row of the poll
     void sendPollTerminate(int idx);             // "End poll" (author only)
     void showPollVotes(int idx);                 // "View votes…": who voted for what
@@ -268,6 +272,7 @@ private:
     void requestLinkPreviewPage(const QString &url, int redirects, quint64 generation);
     void requestLinkPreviewImage(const QString &url, const QString &previewUrl, int redirects, quint64 generation);
     void fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const QString &author, int attempt = 0);
+    void fetchContactAvatar(const QString &key, qint64 ts, const QString &author, int attempt = 0);
     void finishPendingLinkPreviewSend();
 
     // --- actions on messages
@@ -473,7 +478,6 @@ private:
     QToolButton *m_linkPreviewCloseButton = nullptr;
     QPointer<MessageInput> m_input;
     QToolButton *m_attachBtn;
-    QToolButton *m_pollBtn = nullptr;
     QToolButton *m_viewOnceBtn = nullptr;
     QToolButton *m_emojiBtn;
     QPointer<QToolButton> m_expandInputBtn;

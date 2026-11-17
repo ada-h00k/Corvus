@@ -59,6 +59,7 @@
 #include <QHBoxLayout>
 #include <QHostAddress>
 #include <QInputDialog>
+#include <QBuffer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QKeyEvent>
@@ -631,8 +632,9 @@ MainWindow::MainWindow()
 
     auto *h = new QHBoxLayout;
     m_attachBtn = new QToolButton;
-    m_attachBtn->setText(QStringLiteral("📎"));
-    m_attachBtn->setToolTip(tr("Attach files"));
+    m_attachBtn->setText(QStringLiteral("+"));
+    m_attachBtn->setToolTip(tr("Add photos & videos, files, contacts or polls"));
+    m_attachBtn->setAccessibleName(tr("Add attachments"));
     m_attachBtn->setFixedSize(40, 40);
     m_viewOnceBtn = new QToolButton;
     m_viewOnceBtn->setText(QStringLiteral("1×"));
@@ -649,20 +651,13 @@ MainWindow::MainWindow()
     m_micBtn->setToolTip(tr("Record a voice message"));
     m_micBtn->setAccessibleName(tr("Record a voice message"));
     m_micBtn->setFixedSize(40, 40);
-    m_pollBtn = new QToolButton;
-    m_pollBtn->setText(QStringLiteral("📊"));
-    m_pollBtn->setToolTip(tr("Create a poll"));
-    m_pollBtn->setAccessibleName(tr("Create a poll"));
-    m_pollBtn->setFixedSize(40, 40);
-    m_pollBtn->setEnabled(false);
-    m_pollBtn->hide(); // shown when the backend supports polls (signal-cli 0.13.23+ / corvus-cli)
     m_emojiBtn = new QToolButton;
     m_emojiBtn->setText(QStringLiteral("😊"));
     m_emojiBtn->setToolTip(tr("Emoji, GIFs and stickers"));
     m_emojiBtn->setFixedSize(40, 40);
 #ifdef Q_OS_MACOS
     // Flat, borderless buttons next to the input field, as in Messages.
-    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_micBtn, m_pollBtn, m_viewOnceBtn})
+    for (QToolButton *b : {m_attachBtn, m_emojiBtn, m_micBtn, m_viewOnceBtn})
         b->setAutoRaise(true);
 #endif
     m_input = new MessageInput;
@@ -715,10 +710,9 @@ MainWindow::MainWindow()
     h->addWidget(m_emojiBtn);
     h->addWidget(m_input, 1);
     h->addWidget(m_sendBtn);
-    // The voice recording button sits to the LEFT of the attach-files button.
+    // The voice recording button sits to the LEFT of the add-attachments (+) button.
     h->addWidget(m_micBtn);
     h->addWidget(m_attachBtn);
-    h->addWidget(m_pollBtn);
     h->addWidget(m_viewOnceBtn);
 
     // Shown instead of the message field while a voice message is being recorded.
@@ -976,6 +970,7 @@ MainWindow::MainWindow()
         if (u.scheme() == QLatin1String("http") || u.scheme() == QLatin1String("https")) QDesktopServices::openUrl(u);
     });
     connect(m_view, &ChatView::attachmentSaveRequested, this, &MainWindow::saveAttachment);
+    connect(m_view, &ChatView::contactCardActivated, this, &MainWindow::openContactChat);
 
     // Input actions
     connect(m_input, &MessageInput::returnPressed, this, &MainWindow::sendMessage);
@@ -994,10 +989,7 @@ MainWindow::MainWindow()
         updateEditBar(); // the save hint depends on the mode
     });
     connect(m_input, &MessageInput::upPressed, this, &MainWindow::editLastMessage);
-    connect(m_attachBtn, &QToolButton::clicked, this, [this] {
-        addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
-    });
-    connect(m_pollBtn, &QToolButton::clicked, this, &MainWindow::createPoll);
+    connect(m_attachBtn, &QToolButton::clicked, this, &MainWindow::showAttachMenu);
     connect(m_viewOnceBtn, &QToolButton::toggled, this, [this] { updateAttachBar(); });
     connect(m_input, &QTextEdit::textChanged, this, [this] {
         updateAttachBar();
@@ -1718,9 +1710,6 @@ void MainWindow::setConnected(bool connected)
     m_composerConnected = connected;
     updateAttachBar();
     updateRecordingUi();
-    // The 📊 button appears once the backend can actually send polls.
-    m_pollBtn->setVisible(connected && supportsPolls());
-    m_pollBtn->setEnabled(connected && supportsPolls());
 }
 
 // ----------------------------------------------------- Contacts / groups
@@ -1923,7 +1912,6 @@ void MainWindow::updateRecordingUi()
     m_attachBtn->setEnabled(on);
     m_emojiBtn->setEnabled(on);
     m_micBtn->setEnabled(on);
-    m_pollBtn->setEnabled(on && supportsPolls());
 }
 
 void MainWindow::startVoiceRecording()
@@ -4238,6 +4226,47 @@ void MainWindow::fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const 
     });
 }
 
+// Contact cards: load the small avatar image behind the card (like the attachment
+// thumbnails) whenever its attachment id is known and the bytes are not cached yet.
+void MainWindow::fetchContactAvatar(const QString &key, qint64 ts, const QString &author, int attempt)
+{
+    auto conversationIt = m_convs.find(key);
+    if (conversationIt == m_convs.end()) return;
+    const int mi = findMessage(conversationIt.value(), ts, QStringList{author});
+    if (mi < 0) return;
+    const Message &m = conversationIt.value().msgs[mi];
+    if (!m.hasContact || m.contactAvatarId.isEmpty() || !m.contactAvatar.isEmpty()) return;
+    const QString token = QStringLiteral("cc|%1|%2|%3").arg(key).arg(ts).arg(author);
+    if (m_thumbPending.contains(token)) return;
+    m_thumbPending.insert(token);
+    QJsonObject params{{QStringLiteral("id"), m.contactAvatarId}};
+    addRecipient(params, conversationIt.value());
+    m_cli.call(QStringLiteral("getAttachment"), params,
+               [this, key, ts, author, attempt, token](const QJsonValue &res, const QString &err) {
+        m_thumbPending.remove(token);
+        if (!err.isEmpty()) {
+            if (attempt < 3)
+                QTimer::singleShot(2000 * (attempt + 1), this,
+                                   [this, key, ts, author, attempt] { fetchContactAvatar(key, ts, author, attempt + 1); });
+            return;
+        }
+        const QJsonObject object = res.toObject();
+        QString encoded = object.value(QStringLiteral("data")).toString();
+        if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
+        if (encoded.isEmpty() && res.isString()) encoded = res.toString();
+        const QByteArray data = QByteArray::fromBase64(encoded.toLatin1());
+        const QImage image = AttachmentUtil::imageFromData(data);
+        if (image.isNull()) return;
+        auto it = m_convs.find(key);
+        if (it == m_convs.end()) return;
+        const int i = findMessage(it.value(), ts, QStringList{author});
+        if (i < 0 || !it.value().msgs[i].hasContact) return;
+        Message &m = it.value().msgs[i];
+        m.contactAvatar = QString::fromLatin1(AttachmentUtil::makeThumbnail(image).toBase64());
+        if (key == m_current) showConversation(true);
+    });
+}
+
 void MainWindow::finishPendingLinkPreviewSend()
 {
     if (!m_sendAfterLinkPreview) return;
@@ -5600,7 +5629,200 @@ bool MainWindow::supportsPolls() const
     return QVersionNumber::fromString(m_version) >= QVersionNumber(0, 13, 23);
 }
 
-// 📊 button: "New poll" dialog, then the same pending-preview flow as a normal send.
+// Contact cards ride on DataMessage.contact: corvus-cli can send and report them since
+// 1.5.0; signal-cli has no contact support at all, so the ➕ entry stays disabled there.
+bool MainWindow::supportsContacts() const
+{
+    return m_backend == QLatin1String("corvus-cli")
+        && QVersionNumber::fromString(m_backendVersion) >= QVersionNumber(1, 5, 0);
+}
+
+// ➕ button: the attach menu of the official clients. "Photos & Videos" and "File" open
+// the file dialog with the matching filter, "Poll" opens the poll editor and "Contact"
+// sends a contact card — both only when the connected backend supports them.
+void MainWindow::showAttachMenu()
+{
+    if (!m_composerConnected) return;
+    QMenu menu(this);
+    menu.setToolTipsVisible(true);
+
+    // One list of both photos and videos, like the official clients' "Photos & Videos".
+    QAction *photos = menu.addAction(QStringLiteral("🖼 ") + tr("Photos & Videos"));
+    photos->setToolTip(tr("Attach one or more photos or videos"));
+    connect(photos, &QAction::triggered, this, [this] {
+        addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach photos & videos"), QString(),
+                                                      tr("Photos & Videos (*.png *.jpg *.jpeg *.gif *.webp *.heic *.bmp *.svg "
+                                                         "*.mp4 *.mov *.webm *.mkv *.avi *.m4v *.3gp *.ogv);;"
+                                                         "All files (*)")));
+    });
+
+    QAction *file = menu.addAction(QStringLiteral("📎 ") + tr("File"));
+    file->setToolTip(tr("Attach one or more files"));
+    connect(file, &QAction::triggered, this, [this] {
+        addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach files")));
+    });
+
+    QAction *contact = menu.addAction(QStringLiteral("👤 ") + tr("Contact"));
+    contact->setToolTip(supportsContacts() ? (m_contacts.isEmpty() ? tr("No contacts known yet")
+                                                                  : tr("Send a contact card"))
+                                           : tr("The connected backend does not support contact cards"));
+    contact->setEnabled(supportsContacts() && !m_contacts.isEmpty());
+    connect(contact, &QAction::triggered, this, &MainWindow::sendContactCard);
+
+    QAction *poll = menu.addAction(QStringLiteral("📊 ") + tr("Poll"));
+    poll->setToolTip(supportsPolls() ? tr("Create a poll and send it")
+                                     : tr("The connected backend does not support polls"));
+    poll->setEnabled(supportsPolls());
+    connect(poll, &QAction::triggered, this, &MainWindow::createPoll);
+
+    menu.exec(m_attachBtn->mapToGlobal(QPoint(0, m_attachBtn->height() + 4)));
+}
+
+// "Contact" of the ➕ menu: pick a contact from the address book and send a contact card
+// (DataMessage.contact, like the official clients): name, phone number and, when the
+// profile avatar is cached, the avatar image inline. Like a poll the card appears
+// immediately as a local preview and is persisted once the send is confirmed.
+void MainWindow::sendContactCard()
+{
+    if (!m_convs.contains(m_current) || !supportsContacts()) return;
+    const Conversation c = m_convs[m_current];
+    if (c.blocked) return;
+    if (m_contacts.isEmpty()) return;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Share a contact"));
+    dialog.setModal(true);
+    dialog.resize(360, 440);
+    auto *lay = new QVBoxLayout(&dialog);
+    auto *filter = new QLineEdit(&dialog);
+    filter->setPlaceholderText(tr("Search"));
+    lay->addWidget(filter);
+    auto *list = new QListWidget(&dialog);
+    list->setObjectName(QStringLiteral("contactPickerList"));
+    lay->addWidget(list, 1);
+
+    QList<QString> keys = m_contacts.keys();
+    std::sort(keys.begin(), keys.end(), [this](const QString &a, const QString &b) {
+        return m_contacts.value(a).compare(m_contacts.value(b), Qt::CaseInsensitive) < 0;
+    });
+    for (const QString &key : keys) {
+        const QString name = m_contacts.value(key);
+        auto *item = new QListWidgetItem(name, list);
+        if (key != name) item->setToolTip(key);
+        item->setData(Qt::UserRole, key);
+    }
+    connect(filter, &QLineEdit::textChanged, list, [this, list](const QString &text) {
+        const QString needle = text.simplified();
+        for (int i = 0; i < list->count(); ++i) {
+            QListWidgetItem *item = list->item(i);
+            item->setHidden(!needle.isEmpty() && !m_contacts.value(item->data(Qt::UserRole).toString())
+                                                          .contains(needle, Qt::CaseInsensitive));
+        }
+    });
+    connect(list, &QListWidget::itemDoubleClicked, &dialog, &QDialog::accept);
+
+    auto *buttons = new QHBoxLayout;
+    auto *cancel = new QPushButton(tr("Cancel"), &dialog);
+    auto *share = new QPushButton(tr("Share"), &dialog);
+    share->setEnabled(false);
+    buttons->addStretch(1);
+    buttons->addWidget(cancel);
+    buttons->addWidget(share);
+    lay->addLayout(buttons);
+
+    connect(list, &QListWidget::itemSelectionChanged, share, [list, share] { share->setEnabled(!list->selectedItems().isEmpty()); });
+    connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    connect(share, &QPushButton::clicked, &dialog, &QDialog::accept);
+    if (dialog.exec() != QDialog::Accepted || list->selectedItems().isEmpty()) return;
+
+    const QString contactKey = list->selectedItems().first()->data(Qt::UserRole).toString();
+    const QString name = m_contacts.value(contactKey);
+    if (name.isEmpty()) return;
+    // Only real phone numbers ride on the card; a UUID-only contact is shared by name.
+    const QString number = resolveKey(contactKey);
+    const bool hasNumber = number.startsWith(QLatin1Char('+'));
+
+    // The avatar comes from the 64 px circular cache; JPEG keeps the card small on the wire.
+    QString avatarBase64;
+    const auto avatarIt = m_avatars.constFind(contactKey);
+    if (avatarIt != m_avatars.constEnd()) {
+        const QImage avatarImage = avatarIt->toImage();
+        if (!avatarImage.isNull()) {
+            QBuffer buffer;
+            buffer.open(QIODevice::WriteOnly);
+            avatarImage.save(&buffer, "JPEG", 85);
+            avatarBase64 = QString::fromLatin1(buffer.data().toBase64());
+        }
+    }
+
+    QJsonObject p{{QStringLiteral("name"), name}};
+    if (hasNumber) p[QStringLiteral("number")] = number;
+    if (!avatarBase64.isEmpty()) p[QStringLiteral("avatar")] = avatarBase64;
+    addRecipient(p, c);
+
+    // Insert a temporary local contact card before waiting for the backend (like a poll);
+    // it is only persisted once the send is confirmed.
+    Message preview;
+    preview.time = QDateTime::currentDateTime();
+    preview.hasContact = true;
+    preview.contactName = name;
+    preview.contactNumber = hasNumber ? number : QString();
+    preview.contactAvatar = avatarBase64;
+    preview.outgoing = true;
+    preview.authorKey = m_account;
+    preview.expiresInSeconds = c.expirationSeconds;
+    preview.orderTs = std::max(preview.ts(), (c.msgs.isEmpty() ? qint64(0) : c.msgs.last().sortTs()) + 1);
+
+    const QString key = c.key;
+    const QString pendingId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    PendingSend pending;
+    pending.conversationKey = key;
+    pending.temporaryTimestamp = preview.ts();
+    pending.message = preview;
+    m_pendingSends.insert(pendingId, pending);
+
+    Conversation &target = m_convs[key];
+    int at = target.msgs.size();
+    while (at > 0 && target.msgs[at - 1].sortTs() > preview.sortTs()) --at;
+    target.msgs.insert(at, preview);
+    if (key == m_current) showConversation(true);
+    refreshList();
+
+    m_cli.call(QStringLiteral("sendContact"), p, [this, pendingId, key](const QJsonValue &res, const QString &err) {
+        auto pendingIt = m_pendingSends.find(pendingId);
+        if (pendingIt == m_pendingSends.end()) return;
+        if (!err.isEmpty() && !pendingIt->echoReceived) {
+            const PendingSend failed = pendingIt.value();
+            removePendingPreview(failed);
+            m_pendingSends.erase(pendingIt);
+            if (SafetyNumber::isUntrustedIdentityError(err)) checkIdentities(key, true);
+            return;
+        }
+        if (pendingIt->echoReceived) {
+            m_pendingSends.erase(pendingIt);
+            return;
+        }
+        qint64 ts = res.toObject().value(QStringLiteral("timestamp")).toVariant().toLongLong();
+        if (ts <= 0) ts = QDateTime::currentMSecsSinceEpoch();
+        finalizePendingSend(pendingId, ts);
+        checkSendResults(res);
+    });
+}
+
+// Click on a contact card: open (or create) the 1:1 chat with that contact, like the
+// official clients. Cards without a phone number cannot be opened.
+void MainWindow::openContactChat(int idx)
+{
+    if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
+    const Message m = m_convs[m_current].msgs[idx];
+    if (m.deleted || !m.hasContact) return;
+    const QString number = resolveKey(m.contactNumber);
+    if (!number.startsWith(QLatin1Char('+'))) return; // UUID-only card: no chat to open
+    conv(number, m.contactName, false);
+    openConversation(number); // switches the chat, resets unread + flushes read receipts
+}
+
+// "Poll" action of the ➕ menu: "New poll" dialog, then the same pending-preview flow as a normal send.
 void MainWindow::createPoll()
 {
     if (!m_convs.contains(m_current) || !supportsPolls()) return;
@@ -5961,6 +6183,7 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
     const Message &m = c.msgs[mi];
     if (m.viewOnce) return; // fetching a thumbnail would consume/cache one-time media prematurely
     fetchLinkPreviewThumbnail(key, ts, author, attempt);
+    fetchContactAvatar(key, ts, author, attempt);
 
     for (int a = 0; a < m.attachments.size(); ++a) {
         const Attachment &att = m.attachments[a];

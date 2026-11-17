@@ -214,6 +214,17 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
         out.msg.hasPoll = true;
         out.msg.poll = parsePollCreate(pollCreate);
     }
+    // Contact cards (corvus-cli): the first card of the message is shown, like the
+    // official clients do for a single shared contact. The avatar rides as an
+    // attachment pointer and is fetched later, like any thumbnail.
+    const QJsonArray contacts = dm["contacts"].toArray();
+    if (!contacts.isEmpty()) {
+        const QJsonObject card = contacts.first().toObject();
+        out.msg.hasContact = true;
+        out.msg.contactName = card["name"].toString();
+        out.msg.contactNumber = card["number"].toString();
+        out.msg.contactAvatarId = card["avatar"].toObject()["avatar"].toObject()["id"].toString();
+    }
 
     out.msg.viewOnce = dm["viewOnce"].toBool();
     out.msg.text = dm["message"].toString();
@@ -242,7 +253,7 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
     }
     out.msg.quote = parseQuote(dm);
     out.msg.expiresInSeconds = out.expirationSeconds;
-    if (out.msg.text.isEmpty() && out.msg.attachments.isEmpty() && !out.msg.hasPoll)
+    if (out.msg.text.isEmpty() && out.msg.attachments.isEmpty() && !out.msg.hasPoll && !out.msg.hasContact)
         return; // receipts, typing, sessions, ...
 
     qint64 ts = dm["timestamp"].toVariant().toLongLong();

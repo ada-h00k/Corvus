@@ -207,6 +207,12 @@ QJsonObject message(const QString &conv, const Message &m)
         d["pl"] = pollToJson(m.poll);
         if (m.poll.terminated) d["pt"] = true;
     }
+    if (m.hasContact && !m.deleted) {
+        QJsonObject cc{{"n", m.contactName}, {"num", m.contactNumber}};
+        if (!m.contactAvatarId.isEmpty()) cc["av"] = m.contactAvatarId;
+        if (!m.contactAvatar.isEmpty()) cc["avb"] = m.contactAvatar;
+        d["cc"] = cc;
+    }
     // Never retain sent or consumed View Once media in local history. For an incoming
     // unopened item only the opaque signal-cli attachment reference is persisted.
     const bool keepViewOnceRef = !m.viewOnce || (!m.outgoing && !m.viewOnceViewed && !m.viewOnceExpired);
@@ -292,6 +298,14 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.poll = pollFromJson(d["pl"].toObject());
     }
     if (d.contains("pt")) m.poll.terminated = d["pt"].toBool();
+    if (d.contains("cc")) {
+        const QJsonObject cc = d["cc"].toObject();
+        m.hasContact = true;
+        m.contactName = cc["n"].toString();
+        m.contactNumber = cc["num"].toString();
+        m.contactAvatarId = cc["av"].toString();
+        m.contactAvatar = cc["avb"].toString();
+    }
     if (d.contains("vo")) m.viewOnce = d["vo"].toBool();
     if (d.contains("vv")) m.viewOnceViewed = d["vv"].toBool();
     if (d.contains("ve")) m.viewOnceExpired = d["ve"].toBool();
@@ -313,6 +327,11 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.reactions.clear();
         m.hasPoll = false;
         m.poll = PollData();
+        m.hasContact = false;
+        m.contactName.clear();
+        m.contactNumber.clear();
+        m.contactAvatarId.clear();
+        m.contactAvatar.clear();
         m.viewOnce = false;
         m.viewOnceViewed = false;
         m.viewOnceExpired = false;

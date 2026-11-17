@@ -190,6 +190,15 @@ struct Message {
     bool hasPoll = false;
     PollData poll;
 
+    // Signal contact card (like the official clients): a shared contact with a name,
+    // an optional phone number and an optional avatar (attachment id on the wire, bytes
+    // once fetched). Clicking the card in the chat opens a conversation with that contact.
+    bool hasContact = false;
+    QString contactName;
+    QString contactNumber;
+    QString contactAvatarId; // attachment id of the card's avatar image (persisted)
+    QString contactAvatar;   // avatar bytes (base64): runtime cache or own-card preview
+
     qint64 ts() const { return time.toMSecsSinceEpoch(); }
     qint64 sortTs() const { return orderTs > 0 ? orderTs : ts(); }
     qint64 latestTs() const { return editTs > 0 ? editTs : ts(); }

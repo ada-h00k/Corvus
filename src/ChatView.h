@@ -95,6 +95,8 @@ signals:
     void pollOptionClicked(int idx, int optionIndex);
     void pollVotesRequested(int idx);
     void pollTerminateRequested(int idx);
+    // Contact cards: clicking the card opens (or creates) the chat with that contact.
+    void contactCardActivated(int idx);
     void attachmentActivated(int msgIdx, int attIdx);     // click: view / open
     void attachmentSaveRequested(int msgIdx, int attIdx); // context menu
     void animatedAttachmentRequested(int msgIdx, int attIdx);
@@ -143,9 +145,12 @@ private:
         QRect pollRect, pollStatusRect, pollQuestionRect, pollFooterRect;
         QList<QRect> pollOptionRects;
         QStringList pollOptionTexts; // the (line-fitted) option texts painted in the rows
+        // Contact card block (avatar left, name + phone number right, clickable).
+        QRect contactRect;
+        QPixmap contactAvatarPixmap;
     };
     struct Hit {
-        enum Kind { None, Bubble, Text, Link, Quote, Attachment, PollOption } kind = None;
+        enum Kind { None, Bubble, Text, Link, Quote, Attachment, PollOption, ContactCard } kind = None;
         int msg = -1;
         int index = -1;   // attachment index
         int textPos = -1; // cursor position in the message text

@@ -90,7 +90,7 @@ private slots:
         CHECK(parsed.kind == ParsedEnvelope::PollVote);
         CHECK(parsed.targetNumber == QStringLiteral("+49111"));
         CHECK(parsed.targetTs == 1'790'000'000'000LL);
-        CHECK(parsed.pollOptionIndexes == QList<int>{0, 2});
+        CHECK((parsed.pollOptionIndexes == QList<int>{0, 2}));
         CHECK(parsed.pollVoteCount == 2);
         CHECK(parsed.msg.text.isEmpty());
     }
@@ -216,7 +216,7 @@ private slots:
         CHECK(restored.poll.question == QStringLiteral("Where to eat?"));
         CHECK(restored.poll.options.size() == 3);
         CHECK(restored.poll.allowMultiple);
-        CHECK(restored.poll.optionCounts() == QList<int>{1, 1, 1});
+        CHECK((restored.poll.optionCounts() == QList<int>{1, 1, 1}));
         CHECK(restored.poll.topCount() == 1);
 
         // The vote records are restored exactly like the live ones (they were written
@@ -317,7 +317,7 @@ private slots:
             pump();
             if (clicked.count() > before) hitOptions.insert(clicked.last().at(1).toInt());
         }
-        CHECK(hitOptions == QSet<int>{0, 1, 2});
+        CHECK((hitOptions == QSet<int>{0, 1, 2}));
         CHECK(clicked.last().at(1).toInt() == 2); // the lowest probe was in the last row
 
         // The pinned-message snippet quotes the poll question.

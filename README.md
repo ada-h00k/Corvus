@@ -23,9 +23,10 @@ Corvus is a desktop client for Signal with an encrypted local chat history. It r
 - Desktop notifications, notification sounds and a tray/menu-bar icon.
 - Encrypted local chat history, protected by the system keychain or a passphrase.
 - View a contact's safety number and mark the contact as verified (Qt version; right-click a chat → *View safety number …*).
-- Record and send voice messages (Qt version; 🎤 button next to the attach button; needs signal-cli 0.14.2 or newer, or corvus-cli, to arrive as a voice note).
+- Record and send voice messages (Qt version; 🎤 button next to the ➕ button; needs signal-cli 0.14.2 or newer, or corvus-cli, to arrive as a voice note).
 - Send and receive Signal View Once photos (Qt version; select exactly one image and press **1×**; requires signal-cli 0.13.18 or newer, or corvus-cli).
-- Create Signal polls and vote in them, like in the official clients (Qt version; 📊 button next to the attach button, click an option to vote, the author can end the poll early; requires signal-cli 0.13.23 or newer, or corvus-cli 1.4.0 or newer).
+- Share a contact card from the ➕ menu like in the official clients (Qt version; name, phone number and avatar as a native Signal contact message, clicking the card opens a chat with that contact; requires corvus-cli 1.5.0 or newer — signal-cli cannot send contacts).
+- Create Signal polls and vote in them, like in the official clients (Qt version; ➕ menu → **Poll**, click an option to vote, the author can end the poll early; requires signal-cli 0.13.23 or newer, or corvus-cli 1.4.0 or newer).
 - Forward text messages, attachments and stickers to up to five chats at once (Qt version; right-click a message → **Forward…**).
 - Customisable chat colours and appearance.
 

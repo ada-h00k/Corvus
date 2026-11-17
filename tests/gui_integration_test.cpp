@@ -642,7 +642,7 @@ int main(int argc, char **argv)
         QToolButton *attachBtn = nullptr;
         QToolButton *emojiBtn = nullptr;
         for (QToolButton *button : w.findChildren<QToolButton *>()) {
-            if (button->toolTip() == QStringLiteral("Attach files")) attachBtn = button;
+            if (button->toolTip() == QStringLiteral("Add photos & videos, files, contacts or polls")) attachBtn = button;
             else if (button->toolTip() == QStringLiteral("Emoji, GIFs and stickers")) emojiBtn = button;
         }
         CHECK(attachBtn && emojiBtn);

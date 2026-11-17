@@ -363,7 +363,11 @@ if(CORVUS_TESTS)
     add_executable(polls_test tests/polls_test.cpp)
     target_link_libraries(polls_test PRIVATE app_core Qt6::Test)
     add_test(NAME polls COMMAND polls_test)
-    set_tests_properties(polls PROPERTIES
+
+    add_executable(contact_test tests/contact_test.cpp)
+    target_link_libraries(contact_test PRIVATE app_core Qt6::Test)
+    add_test(NAME contact COMMAND contact_test)
+    set_tests_properties(polls contact PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 60
     )

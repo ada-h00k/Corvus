@@ -539,6 +539,20 @@ for line in sys.stdin:
             continue
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}
+    elif m == "sendContact":
+        # corvus-cli 1.5.0+: a contact card (name, optional number, optional inline avatar)
+        name = (p.get("name") or "").strip()
+        if not name:
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "contact name must not be empty"}})
+            continue
+        if p.get("avatar"):
+            try:
+                base64.b64decode(p["avatar"], validate=True)
+            except Exception:
+                emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "invalid avatar base64"}})
+                continue
+        sent += 1
+        res = {"timestamp": 1700000100000 + sent, "results": []}
     elif m == "getAttachment":
         if p.get("id") == "missing":
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find attachment"}})

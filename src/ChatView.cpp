@@ -877,6 +877,8 @@ QString ChatView::plainText() const
             lines << (who + QStringLiteral(": ") + QStringLiteral("[Poll] ") + m.poll.question);
             for (int o = 0; o < m.poll.options.size(); ++o)
                 lines << QStringLiteral("  %1 (%2)").arg(m.poll.options.at(o)).arg(counts.value(o, 0));
+        } else if (m.hasContact) {
+            lines << (who + QStringLiteral(": ") + QStringLiteral("[Contact] ") + m.contactName);
         } else {
             lines << (who + QStringLiteral(": ") + m.text + (m.isEdited() ? tr(" (edited)") : QString()));
         }
@@ -967,6 +969,18 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
         it.linkPreviewPixmap = m.linkPreview.imageThumb.isEmpty()
                                    ? QPixmap()
                                    : QPixmap::fromImage(QImage::fromData(m.linkPreview.imageThumb));
+        if (!m.contactAvatar.isEmpty()) {
+            const QImage avatar = QImage::fromData(QByteArray::fromBase64(m.contactAvatar.toLatin1()));
+            if (!avatar.isNull()) {
+                // center-cropped square, like the official clients' contact tile
+                QImage square = avatar.scaled(96, 96, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+                if (square.width() > square.height())
+                    square = square.copy((square.width() - 96) / 2, 0, 96, 96);
+                else if (square.height() > square.width())
+                    square = square.copy(0, (square.height() - 96) / 2, 96, 96);
+                it.contactAvatarPixmap = QPixmap::fromImage(square);
+            }
+        }
     }
     it.renderResourcesBuilt = true;
 }
@@ -1024,6 +1038,8 @@ void ChatView::layoutItem(int i, int y)
     it.pollRect = it.pollStatusRect = it.pollQuestionRect = it.pollFooterRect = QRect();
     it.pollOptionRects.clear();
     it.pollOptionTexts.clear();
+    it.contactRect = QRect();
+    it.contactAvatarPixmap = QPixmap();
     it.attRects.clear();
     it.pills.clear();
     it.dateLabel.clear();
@@ -1151,6 +1167,18 @@ void ChatView::layoutItem(int i, int y)
         contentW = qMax(contentW, pollW);
     }
 
+    // Contact card (like the official clients): avatar left, name and phone number right.
+    int contactH = 0, contactW = 0;
+    if (!m.deleted && m.hasContact) {
+        contactW = qMin(innerMax, 280);
+        const QFont contactNameFont = scaled(base, 1.0, true);
+        const QFontMetrics fmn(contactNameFont);
+        const int nameH = fmn.boundingRect(QRect(0, 0, contactW - 72, 10000), Qt::TextWordWrap, m.contactName).height();
+        const int textH = nameH + (m.contactNumber.isEmpty() ? 0 : fms.height() + 2);
+        contactH = 12 + qMax(48, textH) + 12;
+        contentW = qMax(contentW, contactW);
+    }
+
     int linkPreviewW = 0, linkPreviewH = 0, linkPreviewImageH = 0;
     int linkPreviewTitleH = 0, linkPreviewDescriptionH = 0, linkPreviewHostH = 0;
     if (!m.deleted && !m.viewOnce && m.linkPreview.isValid()) {
@@ -1201,6 +1229,10 @@ void ChatView::layoutItem(int i, int y)
         py += pollFooterH;
         it.pollRect = QRect(x0, yb, pollW, py - yb);
         yb = py + kGap;
+    }
+    if (!m.deleted && m.hasContact) {
+        it.contactRect = QRect(x0, yb, contactW, contactH);
+        yb += contactH + kGap;
     }
     for (const QSize &sz : attSizes) {
         it.attRects << QRect(x0, yb, sz.width(), sz.height());
@@ -1486,6 +1518,52 @@ void ChatView::paintItem(QPainter &p, int i)
                                    : tr("%n vote(s)", "", totalVotes));
     }
 
+    if (!m.deleted && m.hasContact) {
+        // the card itself: rounded tile, avatar left, name + phone number right
+        QPainterPath cardPath;
+        cardPath.addRoundedRect(QRectF(it.contactRect), 10, 10);
+        p.fillPath(cardPath, alpha(fg, 26));
+
+        const QRect avatarRect(it.contactRect.left() + 12, it.contactRect.top() + 12, 48, 48);
+        if (!it.contactAvatarPixmap.isNull()) {
+            QPainterPath avatarClip;
+            avatarClip.addEllipse(QRectF(avatarRect));
+            p.save();
+            p.setClipPath(avatarClip);
+            p.drawPixmap(avatarRect, it.contactAvatarPixmap);
+            p.restore();
+        } else {
+            // placeholder: initial letter on a tinted circle
+            p.setPen(Qt::NoPen);
+            p.setBrush(alpha(m.outgoing ? m_ap.outText : m_ap.inText, 60));
+            p.drawEllipse(avatarRect);
+            p.setFont(scaled(base, 1.1, true));
+            p.setPen(fg);
+            p.drawText(avatarRect, Qt::AlignCenter, m.contactName.left(1).toUpper());
+        }
+
+        const QRect textRect(it.contactRect.left() + 72, it.contactRect.top() + 12,
+                             it.contactRect.width() - 84, it.contactRect.height() - 24);
+        const QFont nameFont = scaled(base, 1.0, true);
+        const QFontMetrics fmn(nameFont);
+        const QString nameFitted = fmn.elidedText(m.contactName, Qt::ElideRight, textRect.width());
+        const int nameH = fmn.boundingRect(QRect(0, 0, textRect.width(), 10000),
+                                           Qt::TextWordWrap, nameFitted).height();
+        const QFontMetrics fnum(small);
+        const int numH = m.contactNumber.isEmpty() ? 0 : fnum.height();
+        const int blockTop = textRect.top() + qMax(0, (textRect.height() - nameH - (numH > 0 ? 2 + numH : 0)) / 2);
+        p.setFont(nameFont);
+        p.setPen(fg);
+        p.drawText(QRect(textRect.left(), blockTop, textRect.width(), nameH),
+                   Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, nameFitted);
+        if (numH > 0) {
+            p.setFont(small);
+            p.setPen(alpha(fg, 170));
+            p.drawText(QRect(textRect.left(), blockTop + nameH + 2, textRect.width(), numH),
+                       Qt::AlignLeft | Qt::AlignVCenter, m.contactNumber);
+        }
+    }
+
     if (m.viewOnce && !it.attRects.isEmpty()) {
         const QRect rc = it.attRects.first();
         QPainterPath oncePath;
@@ -1735,6 +1813,7 @@ QString ChatView::pinSnippet(int idx) const
     const Message &m = m_msgs[idx];
     if (m.deleted) return deletedText(m);
     if (m.hasPoll) return tr("Poll: %1").arg(m.poll.question);
+    if (m.hasContact) return tr("Contact: %1").arg(m.contactName);
     if (!m.text.isEmpty()) return m.text.simplified();
     if (!m.attachments.isEmpty()) {
         if (m.attachments.first().isSticker()) return tr("Sticker");
@@ -1834,6 +1913,10 @@ ChatView::Hit ChatView::hitTest(const QPoint &vp) const
             h.index = o;
             return h;
         }
+    if (!it.contactRect.isEmpty() && it.contactRect.contains(p)) {
+        h.kind = Hit::ContactCard;
+        return h;
+    }
     if (it.doc && it.textRect.adjusted(0, 0, 0, 2).contains(p)) {
         const QPointF local = QPointF(p - it.textRect.topLeft());
         h.textPos = it.doc->documentLayout()->hitTest(local, Qt::FuzzyHit);
@@ -1856,7 +1939,8 @@ void ChatView::updateCursorShape(const QPoint &vp)
     const Hit h = hitTest(vp);
     Qt::CursorShape shape = Qt::ArrowCursor;
     if (h.kind == Hit::Text) shape = Qt::IBeamCursor;
-    else if (h.kind == Hit::Link || h.kind == Hit::Quote || h.kind == Hit::Attachment || h.kind == Hit::PollOption)
+    else if (h.kind == Hit::Link || h.kind == Hit::Quote || h.kind == Hit::Attachment || h.kind == Hit::PollOption
+             || h.kind == Hit::ContactCard)
         shape = Qt::PointingHandCursor;
     viewport()->setCursor(shape);
 }
@@ -1980,6 +2064,10 @@ void ChatView::mouseReleaseEvent(QMouseEvent *e)
     case Hit::PollOption:
         // like the official clients: one click on an option votes (or changes the vote)
         emit pollOptionClicked(h.msg, h.index);
+        break;
+    case Hit::ContactCard:
+        // like the official clients: clicking a contact card opens the chat with that contact
+        emit contactCardActivated(h.msg);
         break;
     case Hit::Attachment:
         emit attachmentActivated(h.msg, h.index);
