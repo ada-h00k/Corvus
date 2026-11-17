@@ -1038,7 +1038,7 @@ void ChatView::layoutItem(int i, int y)
     it.pollRect = it.pollStatusRect = it.pollQuestionRect = it.pollFooterRect = QRect();
     it.pollOptionRects.clear();
     it.pollOptionTexts.clear();
-    it.contactRect = QRect();
+    it.contactRect = it.contactButtonRect = QRect();
     it.contactAvatarPixmap = QPixmap();
     it.attRects.clear();
     it.pills.clear();
@@ -1167,7 +1167,8 @@ void ChatView::layoutItem(int i, int y)
         contentW = qMax(contentW, pollW);
     }
 
-    // Contact card (like the official clients): avatar left, name and phone number right.
+    // Contact card (like the official clients): avatar left, name and phone number right,
+    // and the "Message" button below that opens the chat with that contact.
     int contactH = 0, contactW = 0;
     if (!m.deleted && m.hasContact) {
         contactW = qMin(innerMax, 280);
@@ -1175,7 +1176,11 @@ void ChatView::layoutItem(int i, int y)
         const QFontMetrics fmn(contactNameFont);
         const int nameH = fmn.boundingRect(QRect(0, 0, contactW - 72, 10000), Qt::TextWordWrap, m.contactName).height();
         const int textH = nameH + (m.contactNumber.isEmpty() ? 0 : fms.height() + 2);
-        contactH = 12 + qMax(48, textH) + 12;
+        // Like the official clients the "Message" button is only shown when the contact
+        // can actually be messaged: the card carries a phone number or a known serviceId.
+        const bool contactHasButton = !m.contactNumber.isEmpty() || !m.contactUuid.isEmpty();
+        const int contactButtonH = contactHasButton ? fms.height() + 12 : 0;
+        contactH = 12 + qMax(48, textH) + (contactHasButton ? 10 + contactButtonH : 0) + 12;
         contentW = qMax(contentW, contactW);
     }
 
@@ -1232,6 +1237,12 @@ void ChatView::layoutItem(int i, int y)
     }
     if (!m.deleted && m.hasContact) {
         it.contactRect = QRect(x0, yb, contactW, contactH);
+        if (!m.contactNumber.isEmpty() || !m.contactUuid.isEmpty()) {
+            const int contactButtonH = fms.height() + 12;
+            // the full-width "Message" pill below the card content, like the official clients
+            it.contactButtonRect = QRect(x0 + 12, yb + contactH - 12 - contactButtonH,
+                                         contactW - 24, contactButtonH);
+        }
         yb += contactH + kGap;
     }
     for (const QSize &sz : attSizes) {
@@ -1542,14 +1553,17 @@ void ChatView::paintItem(QPainter &p, int i)
             p.drawText(avatarRect, Qt::AlignCenter, m.contactName.left(1).toUpper());
         }
 
+        const QFontMetrics fnum(small);
+        const bool contactHasButton = !it.contactButtonRect.isEmpty();
+        const int contactButtonH = contactHasButton ? fnum.height() + 12 : 0;
         const QRect textRect(it.contactRect.left() + 72, it.contactRect.top() + 12,
-                             it.contactRect.width() - 84, it.contactRect.height() - 24);
+                             it.contactRect.width() - 84,
+                             it.contactRect.height() - 24 - (contactHasButton ? 10 + contactButtonH : 0));
         const QFont nameFont = scaled(base, 1.0, true);
         const QFontMetrics fmn(nameFont);
         const QString nameFitted = fmn.elidedText(m.contactName, Qt::ElideRight, textRect.width());
         const int nameH = fmn.boundingRect(QRect(0, 0, textRect.width(), 10000),
                                            Qt::TextWordWrap, nameFitted).height();
-        const QFontMetrics fnum(small);
         const int numH = m.contactNumber.isEmpty() ? 0 : fnum.height();
         const int blockTop = textRect.top() + qMax(0, (textRect.height() - nameH - (numH > 0 ? 2 + numH : 0)) / 2);
         p.setFont(nameFont);
@@ -1561,6 +1575,19 @@ void ChatView::paintItem(QPainter &p, int i)
             p.setPen(alpha(fg, 170));
             p.drawText(QRect(textRect.left(), blockTop + nameH + 2, textRect.width(), numH),
                        Qt::AlignLeft | Qt::AlignVCenter, m.contactNumber);
+        }
+
+        if (contactHasButton) {
+            // the "Message" pill below the card content, like the official clients
+            QPainterPath buttonPath;
+            const qreal buttonRadius = it.contactButtonRect.height() / 2.0;
+            buttonPath.addRoundedRect(QRectF(it.contactButtonRect), buttonRadius, buttonRadius);
+            p.setPen(Qt::NoPen);
+            p.setBrush(m_ap.inText);
+            p.drawPath(buttonPath);
+            p.setFont(small);
+            p.setPen(m_ap.inBg);
+            p.drawText(it.contactButtonRect, Qt::AlignCenter, tr("Message"));
         }
     }
 

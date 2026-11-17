@@ -5646,12 +5646,12 @@ void MainWindow::showAttachMenu()
     QMenu menu(this);
     menu.setToolTipsVisible(true);
 
-    // One list of both photos and videos, like the official clients' "Photos & Videos".
-    QAction *photos = menu.addAction(QStringLiteral("🖼 ") + tr("Photos & Videos"));
+    // One list of both photos and videos, like the official clients' "Photos & videos".
+    QAction *photos = menu.addAction(QStringLiteral("🖼 ") + tr("Photos && videos"));
     photos->setToolTip(tr("Attach one or more photos or videos"));
     connect(photos, &QAction::triggered, this, [this] {
-        addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach photos & videos"), QString(),
-                                                      tr("Photos & Videos (*.png *.jpg *.jpeg *.gif *.webp *.heic *.bmp *.svg "
+        addPendingFiles(QFileDialog::getOpenFileNames(this, tr("Attach photos && videos"), QString(),
+                                                      tr("Photos & videos (*.png *.jpg *.jpeg *.gif *.webp *.heic *.bmp *.svg "
                                                          "*.mp4 *.mov *.webm *.mkv *.avi *.m4v *.3gp *.ogv);;"
                                                          "All files (*)")));
     });
@@ -5741,6 +5741,11 @@ void MainWindow::sendContactCard()
     // Only real phone numbers ride on the card; a UUID-only contact is shared by name.
     const QString number = resolveKey(contactKey);
     const bool hasNumber = number.startsWith(QLatin1Char('+'));
+    // The serviceId lets the recipient open the chat even when we cannot share the number.
+    QString uuid;
+    if (contactKey.contains(QLatin1Char('-'))) uuid = contactKey; // UUID keys contain dashes
+    else for (auto it = m_alias.cbegin(); it != m_alias.cend(); ++it)
+        if (it.value() == contactKey) { uuid = it.key(); break; }
 
     // The avatar comes from the 64 px circular cache; JPEG keeps the card small on the wire.
     QString avatarBase64;
@@ -5757,6 +5762,7 @@ void MainWindow::sendContactCard()
 
     QJsonObject p{{QStringLiteral("name"), name}};
     if (hasNumber) p[QStringLiteral("number")] = number;
+    if (!uuid.isEmpty()) p[QStringLiteral("uuid")] = uuid;
     if (!avatarBase64.isEmpty()) p[QStringLiteral("avatar")] = avatarBase64;
     addRecipient(p, c);
 
@@ -5816,10 +5822,23 @@ void MainWindow::openContactChat(int idx)
     if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
     const Message m = m_convs[m_current].msgs[idx];
     if (m.deleted || !m.hasContact) return;
+    // Like the official clients: open (or create) the 1:1 chat with the contact on the
+    // card. The card may carry only a phone number, only a UUID (Signal hides phone
+    // numbers these days) or both — use whichever we have. If a chat already exists
+    // under the other identifier (the alias map may have been loaded after that chat
+    // was created), open that one instead of creating a duplicate.
     const QString number = resolveKey(m.contactNumber);
-    if (!number.startsWith(QLatin1Char('+'))) return; // UUID-only card: no chat to open
-    conv(number, m.contactName, false);
-    openConversation(number); // switches the chat, resets unread + flushes read receipts
+    const QString uuid = m.contactUuid;
+    QString key;
+    if (number.startsWith(QLatin1Char('+'))) key = number;
+    else if (!uuid.isEmpty()) key = resolveKey(uuid);
+    if (key.isEmpty()) return; // card without any usable identifier: nothing to open
+    if (!m_convs.contains(key)) {
+        const QString other = key == number ? uuid : number;
+        if (!other.isEmpty() && m_convs.contains(other)) key = other;
+    }
+    conv(key, m.contactName, false);
+    openConversation(key);
 }
 
 // "Poll" action of the ➕ menu: "New poll" dialog, then the same pending-preview flow as a normal send.

@@ -223,6 +223,7 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
         out.msg.hasContact = true;
         out.msg.contactName = card["name"].toString();
         out.msg.contactNumber = card["number"].toString();
+        out.msg.contactUuid = card["uuid"].toString();
         out.msg.contactAvatarId = card["avatar"].toObject()["avatar"].toObject()["id"].toString();
     }
 

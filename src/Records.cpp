@@ -209,6 +209,7 @@ QJsonObject message(const QString &conv, const Message &m)
     }
     if (m.hasContact && !m.deleted) {
         QJsonObject cc{{"n", m.contactName}, {"num", m.contactNumber}};
+        if (!m.contactUuid.isEmpty()) cc["u"] = m.contactUuid;
         if (!m.contactAvatarId.isEmpty()) cc["av"] = m.contactAvatarId;
         if (!m.contactAvatar.isEmpty()) cc["avb"] = m.contactAvatar;
         d["cc"] = cc;
@@ -303,6 +304,7 @@ void applyExtras(Message &m, const QJsonObject &d)
         m.hasContact = true;
         m.contactName = cc["n"].toString();
         m.contactNumber = cc["num"].toString();
+        m.contactUuid = cc["u"].toString();
         m.contactAvatarId = cc["av"].toString();
         m.contactAvatar = cc["avb"].toString();
     }

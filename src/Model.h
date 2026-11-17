@@ -196,6 +196,7 @@ struct Message {
     bool hasContact = false;
     QString contactName;
     QString contactNumber;
+    QString contactUuid;     // serviceId of the card's contact, if the sender reported one
     QString contactAvatarId; // attachment id of the card's avatar image (persisted)
     QString contactAvatar;   // avatar bytes (base64): runtime cache or own-card preview
 

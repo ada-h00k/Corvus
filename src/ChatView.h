@@ -145,8 +145,8 @@ private:
         QRect pollRect, pollStatusRect, pollQuestionRect, pollFooterRect;
         QList<QRect> pollOptionRects;
         QStringList pollOptionTexts; // the (line-fitted) option texts painted in the rows
-        // Contact card block (avatar left, name + phone number right, clickable).
-        QRect contactRect;
+        // Contact card block (avatar left, name + phone number right, Message button below).
+        QRect contactRect, contactButtonRect;
         QPixmap contactAvatarPixmap;
     };
     struct Hit {
