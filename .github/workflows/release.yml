@@ -676,6 +676,88 @@ jobs:
           test -s dist/corvus-linux-x86_64.flatpak
           ls -lh dist
 
+      # --------------------------------------------------
+      # Self-contained archive for FlatPark (https://flatpark.org)
+      #
+      # FlatPark does not build apps and does not accept .flatpak bundles: it downloads
+      # one official release file at install time and unpacks it into /app/extra. This
+      # archive is the /app tree of the build above (corvus, corvus-cli, qrencode, the
+      # libraries from libsecret/qtkeychain, desktop file, icon, metainfo, license), so
+      # it contains everything that is not in the KDE runtime. The file name is the same
+      # for every release.
+      # --------------------------------------------------
+      - name: Create FlatPark release archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          stage="$RUNNER_TEMP/flatpark-stage"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          cp -a flatpak-build/files/. "$stage/"
+          rm -f "$stage/manifest.json"
+
+          runtime_version="$(sed -n "s/^runtime-version: '\\(.*\\)'/\\1/p" "$FLATPAK_MANIFEST")"
+          cat > "$stage/BUILD-INFO" <<EOF
+          app-id=$FLATPAK_APP_ID
+          version=$GITHUB_REF_NAME
+          commit=$GITHUB_SHA
+          runtime=org.kde.Platform//$runtime_version
+          EOF
+
+          for path in \
+            bin/corvus \
+            bin/corvus-cli \
+            bin/qrencode \
+            "share/applications/$FLATPAK_APP_ID.desktop" \
+            "share/metainfo/$FLATPAK_APP_ID.metainfo.xml" \
+            "share/icons/hicolor/scalable/apps/$FLATPAK_APP_ID.svg" \
+            "share/licenses/$FLATPAK_APP_ID/LICENSE"
+          do
+            test -e "$stage/$path" || { echo "::error::$path is missing in the FlatPark archive"; exit 1; }
+          done
+
+          mkdir -p dist
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$(git log -1 --format=%ct)" \
+            -czf dist/corvus-linux-x86_64-flatpark.tar.gz -C "$stage" .
+
+          tar -tzf dist/corvus-linux-x86_64-flatpark.tar.gz
+          ls -lh dist
+
+      # The archive is unpacked to /app/extra at install time, not to /app. Check in a bare
+      # KDE SDK sandbox (nothing in /app) that the binaries find their libraries from the
+      # archive alone when LD_LIBRARY_PATH points at its lib/ directory.
+      - name: Smoke test FlatPark archive outside /app
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          extra="$RUNNER_TEMP/corvus-extra"
+          rm -rf "$extra"
+          mkdir -p "$extra"
+          tar -xzf dist/corvus-linux-x86_64-flatpark.tar.gz -C "$extra"
+
+          runtime_version="$(sed -n "s/^runtime-version: '\\(.*\\)'/\\1/p" "$FLATPAK_MANIFEST")"
+          flatpak build-init "$RUNNER_TEMP/flatpark-test" io.github.ada_h00k.FlatparkTest \
+            org.kde.Sdk org.kde.Platform "$runtime_version"
+
+          flatpak build --filesystem="$extra:ro" "$RUNNER_TEMP/flatpark-test" \
+            sh -c '
+              set -eu
+              export LD_LIBRARY_PATH="$1/lib"
+              export PATH="$1/bin:$PATH"
+              for exe in corvus corvus-cli qrencode; do
+                missing="$(ldd "$1/bin/$exe" | grep "not found" || true)"
+                if [ -n "$missing" ]; then
+                  echo "$exe: $missing"
+                  exit 1
+                fi
+              done
+              corvus-cli --version
+              qrencode -V
+            ' sh "$extra"
+
       # Install the bundle like a user would and check that everything it ships actually runs
       - name: Smoke test installed Flatpak
         shell: bash
@@ -735,7 +817,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: corvus-flatpak-${{ github.sha }}
-          path: dist/*.flatpak
+          path: |
+            dist/*.flatpak
+            dist/corvus-linux-x86_64-flatpark.tar.gz
           if-no-files-found: warn
           retention-days: 14
 
@@ -1453,6 +1537,7 @@ jobs:
             - `corvus-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
             - `corvus-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
             - `corvus-linux-x86_64.flatpak` — sandboxed Flatpak bundle incl. corvus-cli (`flatpak install --user ./corvus-linux-x86_64.flatpak`)
+            - `corvus-linux-x86_64-flatpark.tar.gz` — self-contained app tree (Flatpak build output incl. corvus-cli, qrencode and libraries) used by the FlatPark package; not meant for manual installation
             - `corvus-macos-arm64.zip` — native SwiftUI app for Apple silicon, macOS 14 or newer
             - `corvus-qt-macos-arm64.zip` — Qt app for Apple silicon, including deployed Qt dependencies
             - `corvus-windows-x64-setup.exe` — Windows setup (English), includes corvus-cli
@@ -1469,6 +1554,7 @@ jobs:
             dist/corvus-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
             dist/corvus-linux-x86_64.flatpak
+            dist/corvus-linux-x86_64-flatpark.tar.gz
             dist/corvus-macos-arm64.zip
             dist/corvus-qt-macos-arm64.zip
             dist/corvus-windows-x64-setup.exe
