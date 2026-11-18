@@ -10,6 +10,7 @@ Environment:
   MOCK_INJECT  file: JSON lines appended here are emitted as `receive` envelopes
   MOCK_IDENTITY_FILE  file: JSON list replacing the identities of listIdentities (key changes)
   MOCK_EXTRA_GROUPS   set: also lists a group where we are no admin (permissions only for admins)
+  MOCK_ATTACHMENT_FILE file: served by getAttachment for plain image attachments instead of the generated gradient
 """
 import base64, io, json, os, struct, sys, threading, time, wave, zlib
 
@@ -563,6 +564,9 @@ for line in sys.stdin:
             payload = base64.b64decode(
                 "R0lGODlhEAAQAPAAAP8AAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAEAAQAAACDoSP"
                 "qcvtD6OctNqLsz4FACH5BAAKAAAALAAAAAAQABAAgAAA/wAAAAIOhI+py+0Po5y02ouzPgUAOw==")
+        elif os.environ.get("MOCK_ATTACHMENT_FILE"):  # screenshots: a real picture instead of the gradient
+            with open(os.environ["MOCK_ATTACHMENT_FILE"], "rb") as f:
+                payload = f.read()
         else:
             payload = png()
         res = {"data": base64.b64encode(payload).decode()}

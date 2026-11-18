@@ -128,7 +128,11 @@ int main(int argc, char **argv) {
     };
     msg(0, "Hey! Have you tried the new version of Corvus yet?");
     mine(60000, "Yes, it works great. The history is even encrypted 🔒");
-    msg(120000, "Cool! Check out my screenshot 📷", {{"attachments", QJsonArray{QJsonObject{{"contentType", "image/png"}, {"filename", "screenshot.png"}, {"id", "att1"}, {"size", 6321}}}}});
+    // SHOTS_NO_ATTACHMENT: Alice's message carries no picture. make-screenshots.sh uses such a
+    // pass as the screenshot Alice sends, so the picture inside it doesn't contain another picture.
+    const bool noAttachment = qEnvironmentVariableIsSet("SHOTS_NO_ATTACHMENT");
+    msg(120000, "Cool! Check out my screenshot 📷", noAttachment ? QJsonObject{}
+        : QJsonObject{{"attachments", QJsonArray{QJsonObject{{"contentType", "image/png"}, {"filename", "screenshot.png"}, {"id", "att1"}, {"size", 6321}}}}});
     mine(180000, "Looks good!", {{"quote", QJsonObject{{"id", base + 120000}, {"authorNumber", "+49111"}, {"text", "Cool! Check out my screenshot 📷"}}}});
     msg(240000, "Shall we meet later? More info: https://github.com/ada-h00k/Corvus");
     inject(injectFile, QJsonObject{{"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"timestamp", base + 250000},
@@ -139,7 +143,7 @@ int main(int argc, char **argv) {
     waitFor([&] { return has("Bob"); });
     for (int i = 0; i < list->count(); ++i) if (list->item(i)->text().contains("Alice")) { list->setCurrentRow(i); break; }
     waitFor([&] { return view->messageCount() >= 5; });
-    waitFor([&] { return view->plainText().contains("[image: screenshot.png]"); });
+    if (!noAttachment) waitFor([&] { return view->plainText().contains("[image: screenshot.png]"); });
     pump(1500);
     for (int i = 0; i < list->count(); ++i) if (list->item(i)->text().contains("Alice")) { list->setCurrentRow(i); break; }
     pump(800);

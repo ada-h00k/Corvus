@@ -19,7 +19,8 @@ cmake --build "$ROOT/build" -j"$(nproc)" --target shots
 chmod +x "$ROOT/tests/mock-signal-cli.py"
 
 old=$(kreadconfig6 --file kdeglobals --group General --key ColorScheme || echo BreezeLight)
-restore() { plasma-apply-colorscheme "$old" >/dev/null 2>&1 || true; }
+TMP=$(mktemp -d)
+restore() { plasma-apply-colorscheme "$old" >/dev/null 2>&1 || true; rm -rf "$TMP"; }
 trap restore EXIT
 
 for scheme in BreezeLight BreezeDark; do
@@ -28,8 +29,13 @@ for scheme in BreezeLight BreezeDark; do
   # MOCK_VERSION: The mock reports corvus-cli as the backend (shown in Settings → Advanced).
   # MOCK_NO_AVATARS: getAvatar fails; the GUI displays the default avatars (circle with a letter).
   # Last argument of `shots`: image size “WIDTH_HEIGHT” (default 1280x720, 16:9 for Flathub).
-  MOCK_VERSION="corvus-cli 1.2.0 compatible with signal-cli 0.14.9" MOCK_NO_AVATARS=1 \
-    QT_STYLE_OVERRIDE=breeze "$ROOT/build/shots" native "$OUT/Corvus_${scheme}.png" \
+  export MOCK_VERSION="corvus-cli 1.2.0 compatible with signal-cli 0.14.9" MOCK_NO_AVATARS=1 QT_STYLE_OVERRIDE=breeze
+  # Pass 1: the screenshot Alice sends - Corvus itself, with her message as plain text (no picture
+  # inside the picture). Wide 1280x540 so the image stays short and the whole chat fits in pass 2.
+  SHOTS_NO_ATTACHMENT=1 "$ROOT/build/shots" native "$TMP/alice_${scheme}.png" \
+    "$ROOT/tests/mock-signal-cli.py" 1280x540
+  # Pass 2: the real screenshot; MOCK_ATTACHMENT_FILE makes the mock serve pass 1 as Alice's picture.
+  MOCK_ATTACHMENT_FILE="$TMP/alice_${scheme}.png" "$ROOT/build/shots" native "$OUT/Corvus_${scheme}.png" \
     "$ROOT/tests/mock-signal-cli.py" 1280x720
 done
 echo "Finished: $OUT/"
