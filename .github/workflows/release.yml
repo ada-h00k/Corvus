@@ -18,7 +18,7 @@ concurrency:
 
 env:
   BUILD_TYPE: Release
-  QT_VERSION: "6.12"
+  QT_VERSION: "6.12.0"
   QT_VERSION_WINDOWS: "6.8"
   # Windows keeps a separately pinned corvus-cli build and SHA-256. The Flatpak job
   # resolves the latest published Linux release and calculates its SHA-256 at build time.
