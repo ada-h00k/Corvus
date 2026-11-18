@@ -58,6 +58,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHostAddress>
+#include <QIconEngine>
 #include <QInputDialog>
 #include <QBuffer>
 #include <QJsonArray>
@@ -434,6 +435,40 @@ protected:
         style()->drawComplexControl(QStyle::CC_ToolButton, &opt, &p, this);
     }
 };
+
+// Bold "+" for the attach button, drawn as two round-capped strokes like in Signal Desktop
+// (the "+" glyph of the UI font is too thin). Painted with the current application palette
+// each time it is drawn, so it follows theme changes and the disabled state.
+class PlusIconEngine : public QIconEngine
+{
+public:
+    QIconEngine *clone() const override { return new PlusIconEngine; }
+
+    void paint(QPainter *p, const QRect &rect, QIcon::Mode mode, QIcon::State) override
+    {
+        const QColor color = QGuiApplication::palette().color(
+            mode == QIcon::Disabled ? QPalette::Disabled : QPalette::Active, QPalette::ButtonText);
+        const qreal side = qMin(rect.width(), rect.height());
+        const qreal arm = side * 0.30; // half the length of each stroke
+        const QPointF c = QRectF(rect).center();
+
+        p->save();
+        p->setRenderHint(QPainter::Antialiasing, true);
+        p->setPen(QPen(color, side * 0.09, Qt::SolidLine, Qt::RoundCap));
+        p->drawLine(QPointF(c.x() - arm, c.y()), QPointF(c.x() + arm, c.y()));
+        p->drawLine(QPointF(c.x(), c.y() - arm), QPointF(c.x(), c.y() + arm));
+        p->restore();
+    }
+
+    QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+    {
+        QPixmap pm(size);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        paint(&p, QRect(QPoint(0, 0), size), mode, state);
+        return pm;
+    }
+};
 } // namespace
 
 MainWindow::MainWindow()
@@ -632,7 +667,8 @@ MainWindow::MainWindow()
 
     auto *h = new QHBoxLayout;
     m_attachBtn = new QToolButton;
-    m_attachBtn->setText(QStringLiteral("+"));
+    m_attachBtn->setIcon(QIcon(new PlusIconEngine));
+    m_attachBtn->setIconSize(QSize(24, 24));
     m_attachBtn->setToolTip(tr("Add photos & videos, files, contacts or polls"));
     m_attachBtn->setAccessibleName(tr("Add attachments"));
     m_attachBtn->setFixedSize(40, 40);
