@@ -1,6 +1,6 @@
 # Corvus
 
-Corvus is a desktop client for Signal with an encrypted local chat history. It runs on [corvus-cli](https://github.com/ada-h00k/corvus-cli) (recommended) or, optionally, on [signal-cli](https://github.com/AsamK/signal-cli). The Qt app runs on Linux, Windows and macOS; macOS also has a native SwiftUI app.
+Corvus is a desktop client for Signal with an encrypted local chat history. It uses [corvus-cli](https://github.com/ada-h00k/corvus-cli) as its backend. The Qt app runs on Linux, Windows and macOS; macOS also has a native SwiftUI app.
 
 ### Linux and Windows (Qt)
 
@@ -16,7 +16,7 @@ Corvus is a desktop client for Signal with an encrypted local chat history. It r
 
 ## Features
 
-- Link Corvus to your Signal account with `corvus-cli` (recommended) or `signal-cli`.
+- Link Corvus to your Signal account with `corvus-cli`.
 - Read and send messages, including group chats, replies and reactions.
 - Send and receive files, images, video and audio.
 - Edit or delete messages, manage archived chats and disappearing messages.
@@ -24,19 +24,16 @@ Corvus is a desktop client for Signal with an encrypted local chat history. It r
 - Spell checking in the message field (Linux, with Hunspell dictionaries).
 - Encrypted local chat history, protected by the system keychain or a passphrase.
 - View a contact's safety number and mark the contact as verified (Qt version; right-click a chat → *View safety number …*).
-- Record and send voice messages (Qt version; 🎤 button next to the ➕ button; needs signal-cli 0.14.2 or newer, or corvus-cli, to arrive as a voice note).
-- Send and receive Signal View Once photos (Qt version; select exactly one image and press **1×**; requires signal-cli 0.13.18 or newer, or corvus-cli).
-- Share a contact card from the ➕ menu like in the official clients (Qt version; name, phone number and avatar as a native Signal contact message — the full-width Message button below the card opens, or creates, the chat with that contact; like the official clients the button is only shown when the contact is messageable, i. e. the card carries a phone number or the 16-byte serviceId (aciBinary) that corvus-cli 1.6.0 sends and reads; requires corvus-cli 1.6.0 or newer — signal-cli cannot send contacts).
-- Create Signal polls and vote in them, like in the official clients (Qt version; ➕ menu → **Poll**, click an option to vote, the author can end the poll early; requires signal-cli 0.13.23 or newer, or corvus-cli 1.4.0 or newer).
+- Record and send voice messages (Qt version; 🎤 button next to the ➕ button; requires `corvus-cli` to arrive as a voice note).
+- Send and receive Signal View Once photos (Qt version; select exactly one image and press **1×**; requires `corvus-cli`).
+- Share a contact card from the ➕ menu like in the official clients (Qt version; name, phone number and avatar as a native Signal contact message — the full-width Message button below the card opens, or creates, the chat with that contact; like the official clients the button is only shown when the contact is messageable, i. e. the card carries a phone number or the 16-byte serviceId (`aciBinary`) that `corvus-cli` 1.6.0 sends and reads; requires `corvus-cli` 1.6.0 or newer).
+- Create Signal polls and vote in them, like in the official clients (Qt version; ➕ menu → **Poll**, click an option to vote, the author can end the poll early; requires `corvus-cli` 1.4.0 or newer).
 - Forward text messages, attachments and stickers to up to five chats at once (Qt version; right-click a message → **Forward…**).
 - Customisable chat colours and appearance.
 
-Corvus is a graphical client; the connection to Signal is made by a separate backend program linked to your Signal account.
+Corvus is a graphical client; the connection to Signal is handled by `corvus-cli`, a separate backend program linked to your Signal account. It is a single native executable written in Rust (built on [presage](https://github.com/whisperfish/presage)) and does not need Java. The Flatpak and Windows setup include it, so there is nothing else to install there.
 
-- **[corvus-cli](https://github.com/ada-h00k/corvus-cli) (recommended)** is a single native executable written in Rust (built on [presage](https://github.com/whisperfish/presage)). It needs no Java. The Flatpak and the Windows setup include it, so there is nothing else to install there.
-- **[signal-cli](https://github.com/AsamK/signal-cli) (optional alternative)** is the Java original. Corvus works with it as well; install it yourself and select it under **Settings → Advanced → Choose …** if you prefer it or already use it.
-
-Both speak the same JSON-RPC interface, but each has its own device link and its own account data: switching the backend means linking the computer with your phone again (the chat history in Corvus is kept).
+`corvus-cli` uses JSON-RPC to communicate with Corvus and keeps its own device link and account data. Link the computer with your phone as a new device when setting it up; Corvus keeps its local chat history.
 
 ## Install
 
@@ -44,17 +41,31 @@ Download the appropriate package from the [latest GitHub release](https://github
 
 ### Linux (Qt, x86_64)
 
-1. Download `corvus-linux-x86_64-installer.tar.gz` from the release.
-2. Extract it and run the installer:
+**Recommended: Flatpak**
 
-   ```sh
-   tar -xzf corvus-linux-x86_64-installer.tar.gz
-   ./install.sh
-   ```
+[![Get it on FlatPark](https://flatpark.org/badges/get-it-on-flatpark.svg)](https://flatpark.org/apps/io.github.ada_h00k.Corvus)
+
+Add the FlatPark repository and install Corvus:
+
+```sh
+flatpak remote-add --if-not-exists --user flatpark https://dl.flatpark.org/flatpark.flatpakrepo
+flatpak install --user flatpark io.github.ada_h00k.Corvus
+```
+
+The Flatpak includes [`corvus-cli`](https://github.com/ada-h00k/corvus-cli) and `qrencode`, so nothing else has to be installed.
+
+**Other installation methods**
+
+The standalone installer is also available from the [latest GitHub release](https://github.com/ada-h00k/Corvus/releases/latest). Download `corvus-linux-x86_64-installer.tar.gz`, extract it and run:
+
+```sh
+tar -xzf corvus-linux-x86_64-installer.tar.gz
+./install.sh
+```
 
 The installer is per-user, does not need `sudo`, and adds Corvus to your application menu. Run it again to update; run `./install.sh --uninstall` to remove it.
 
-The prebuilt executable is dynamically linked and does not include Qt libraries. You need a compatible Qt 6 runtime (the release is built with Qt 6.12), QtKeychain 0.14 or newer, Hunspell 1.7 (`libhunspell`) and a desktop keyring such as GNOME Keyring or KWallet. Install a backend separately and make sure it is available on your `PATH`: download `corvus-cli-linux-x86_64` from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest), rename it to `corvus-cli` and make it executable (`chmod +x`); or use `signal-cli` as the alternative.
+The prebuilt executable is dynamically linked and does not include Qt libraries. You need a compatible Qt 6 runtime (the release is built with Qt 6.12), QtKeychain 0.14 or newer, Hunspell 1.7 (`libhunspell`) and a desktop keyring such as GNOME Keyring or KWallet. Install `corvus-cli` separately and make sure it is available on your `PATH`: download `corvus-cli-linux-x86_64` from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest), rename it to `corvus-cli` and make it executable (`chmod +x`).
 
 **Arch Linux:** download the `corvus-*.pkg.tar.zst` package from the release and install it with:
 
@@ -62,29 +73,13 @@ The prebuilt executable is dynamically linked and does not include Qt libraries.
 sudo pacman -U ./corvus-*.pkg.tar.zst
 ```
 
-Install a backend separately: `corvus-cli` from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest) (see above), or `signal-cli` as the alternative, for example from the AUR.
-
-**Flatpak (x86_64):** download `corvus-linux-x86_64.flatpak` from the release and install it with:
-
-```sh
-flatpak install --user ./corvus-linux-x86_64.flatpak
-flatpak run io.github.ada_h00k.Corvus
-```
-
-To get updates automatically, add the signed Flatpak repository instead (it is published to GitHub Pages together with every build) and update with `flatpak update`:
-
-```sh
-flatpak remote-add --user --if-not-exists corvus https://ada-h00k.github.io/Corvus/corvus.flatpakrepo
-flatpak install --user corvus io.github.ada_h00k.Corvus
-```
-
-The Flatpak includes [`corvus-cli`](https://github.com/ada-h00k/corvus-cli) (the Signal backend that replaces `signal-cli`, no Java needed) and `qrencode`, so nothing else has to be installed. It runs in a sandbox with these permissions only: network, Wayland/X11, audio, GPU (video player), notifications, tray icon and the Secret Service (history key). It has **no** file system access; attachments are chosen and saved through the file chooser portal. Because of the sandbox, the Flatpak keeps its own data in `~/.var/app/io.github.ada_h00k.Corvus/` and does not see an existing `signal-cli` installation or chat history. `corvus-cli` has its own device link as well: link it to your Signal account as a new device on first start.
+Install `corvus-cli` separately from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest).
 
 ### Windows (Qt, x86_64)
 
 1. Download and run `corvus-windows-x64-setup.exe` from the release.
-2. Follow the setup wizard. It installs the Qt runtime, `qrencode` (used to show the QR code when linking a device) and [`corvus-cli`](https://github.com/ada-h00k/corvus-cli) with Corvus. `corvus-cli` is the Signal backend that replaces `signal-cli`; there is no Java and nothing to download.
-3. On first start, Corvus finds `corvus-cli` by itself and offers to link the computer with your phone as a new device. If you want to keep using an existing `signal-cli`, select it under **Settings → Advanced → Choose …**.
+2. Follow the setup wizard. It installs the Qt runtime, `qrencode` (used to show the QR code when linking a device) and [`corvus-cli`](https://github.com/ada-h00k/corvus-cli) with Corvus. There is no Java or separate backend download needed.
+3. On first start, Corvus finds `corvus-cli` by itself and offers to link the computer with your phone as a new device.
 
 The installer is for Windows 10 or newer. It does not require administrator rights for a per-user installation. The setup is not code-signed, so Windows SmartScreen may show a warning.
 
@@ -97,7 +92,7 @@ Corvus has two macOS versions. Install the one you prefer:
 - **Swift / SwiftUI** — native macOS interface; requires macOS 14 or newer.
 - **Qt** — the same cross-platform interface used on Linux and Windows.
 
-First add the Corvus tap and install **corvus-cli**, the recommended Signal backend. The Homebrew cask downloads the latest Apple-silicon binary and makes it available as `corvus-cli` on your `PATH`. You do not need Java or a separate manual download.
+First add the Corvus tap and install **corvus-cli**, the Signal backend. The Homebrew cask downloads the latest Apple-silicon binary and makes it available as `corvus-cli` on your `PATH`. You do not need Java or a separate manual download.
 
 ```sh
 brew tap ada-h00k/corvus
@@ -124,17 +119,11 @@ The Swift and Qt versions use the same local history. Do not run both versions a
 
 ## First launch
 
-Corvus starts `corvus-cli` or `signal-cli` as a separate program. On a first start it looks for the bundled `corvus-cli` (Windows), then for `corvus-cli` and then `signal-cli` on your `PATH`; an executable you chose is always kept. If it cannot find one, open **Settings → Advanced → Choose …** and select the executable. Follow Corvus's account-linking prompt if you have not linked this installation to Signal yet.
+Corvus starts `corvus-cli` as a separate program. On a first start it uses the bundled `corvus-cli` where available (Windows and Flatpak), otherwise it looks for `corvus-cli` on your `PATH`. An executable you chose manually is always kept. If Corvus cannot find `corvus-cli`, open **Settings → Advanced → Choose …** and select the executable. Follow Corvus's account-linking prompt if you have not linked this installation to Signal yet.
 
-The Windows builds and the Flatpak include `corvus-cli`. On Linux, get it from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest); for the `signal-cli` alternative use your distribution's package instructions or the [official signal-cli releases](https://github.com/AsamK/signal-cli/releases). On macOS, install the recommended `corvus-cli` backend with `brew install --cask corvus-cli` as shown above. You can still use `signal-cli` as an alternative: install it separately and select it under **Settings → Advanced → Choose …**.
+The Windows builds and the Flatpak include `corvus-cli`. On Linux installations without the Flatpak, get it from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest). On macOS, install the `corvus-cli` backend with `brew install --cask corvus-cli` as shown above.
 
-**Updates of the backend:** **Help → Check for backend update** (also in Settings → Advanced) checks the backend you use: `signal-cli` is compared by version number, `corvus-cli` by build (it reports its commit in `--version`, and the latest [corvus-cli release](https://github.com/ada-h00k/corvus-cli/releases/latest) is compared with it). The Flatpak and the Windows setup bring a new `corvus-cli` with the next Corvus update.
-
-## Spell checking
-
-On Linux, Corvus underlines misspelled words in the message field. Right-click a word for suggestions, **Add to the dictionary** or **Ignore**; the **Spelling** submenu there (and **Settings → General → Message field**) switches the check on or off and selects the language. By default the dictionary that matches the system language is used.
-
-Corvus uses [Hunspell](https://hunspell.github.io/) dictionaries. Install the ones you need with your distribution (for example `hunspell-de`, `hunspell-en-us`; on Arch `hunspell-de`, `hunspell-en_us`), or put the `<language>.dic` and `<language>.aff` files into the `dictionaries` folder of Corvus' data directory (`~/.local/share/corvus/corvus/dictionaries/`; Flatpak: `~/.var/app/io.github.ada_h00k.Corvus/data/corvus/corvus/dictionaries/`). The `DICPATH` environment variable is honoured as well. The Flatpak ships German, English (US/GB), French, Spanish and Italian. Words you add are kept in `spellcheck-personal.txt` in the same data directory. Mentions, monospace text, links, e-mail addresses, abbreviations in capitals and words with digits are not checked. Without Hunspell (`-DCORVUS_SPELLCHECK=OFF`, or a build that does not find it), the message field is simply not checked. The Windows and macOS builds do not include Hunspell yet.
+**Updates of the backend:** **Help → Check for backend update** (also in Settings → Advanced) checks `corvus-cli` by build. It reports its commit in `--version`, and the latest [corvus-cli release](https://github.com/ada-h00k/corvus-cli/releases/latest) is compared with it. The Flatpak and the Windows setup bring a new `corvus-cli` with the next Corvus update.
 
 ## Local data and encryption
 
@@ -145,10 +134,6 @@ Corvus stores its chat history in an encrypted `history.corvus` file. By default
 - Windows: `%APPDATA%\corvus`
 
 `corvus-cli` keeps its own account data in `~/.local/share/corvus-cli/` (Windows: `%USERPROFILE%\.local\share\corvus-cli`; in the Flatpak below `~/.var/app/io.github.ada_h00k.Corvus/data/corvus-cli/`).
-
-**Upgrading from Wren:** Corvus was called Wren before (and signal-cli Qt before that). On first start it moves the existing chat history, settings and keychain entries (history key, GIPHY API key) over automatically; nothing is deleted. If the old version is still running, close it first. The Linux installer and the Arch package replace an existing Wren installation; on macOS you can delete the old `Wren.app`, and macOS may ask once for permission to read the old keychain entries.
-
-**Important:** Corvus's encryption protects its local chat history. It does not encrypt the account data of `signal-cli` or `corvus-cli`, sessions, contacts or attachments. Protect your home directory or disk with your operating system's disk-encryption feature. A forgotten history passphrase cannot be recovered.
 
 ## Build from source
 
@@ -177,4 +162,4 @@ The Swift app requires macOS 14 or newer. See [`macos/README.md`](macos/README.m
 
 ## License
 
-Corvus is licensed under the [GNU Affero General Public License v3.0](LICENSE). `corvus-cli` and `signal-cli` are separate projects and are distributed under their own licenses (`corvus-cli`: AGPL-3.0, `signal-cli`: GPL-3.0).
+Corvus is licensed under the [GNU Affero General Public License v3.0](LICENSE). `corvus-cli` is a separate project and is distributed under the AGPL-3.0.
