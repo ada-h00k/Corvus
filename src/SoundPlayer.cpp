@@ -22,6 +22,20 @@ static void initSoundsResource()
 namespace {
     constexpr int kRate = 44100;
 
+    // Inside the Flatpak sandbox the command line players (pw-play in particular)
+    // need the PipeWire socket, which the sandbox deliberately does not expose.
+    // Qt Multimedia talks to the PulseAudio socket instead (granted via
+    // --socket=pulseaudio), so the sound is played in-process there.
+    bool runsInFlatpak()
+    {
+#ifdef Q_OS_LINUX
+        return !qEnvironmentVariableIsEmpty("FLATPAK_ID")
+            || QFileInfo::exists(QStringLiteral("/.flatpak-info"));
+#else
+        return false;
+#endif
+    }
+
     QByteArray wavFile(const QVector<float> &samples)
     {
         QByteArray pcm;
@@ -301,6 +315,9 @@ bool SoundPlayer::findCommand(const QString &file, Command *out) const
 
 QString SoundPlayer::playerName() const
 {
+    if (runsInFlatpak())
+        return QStringLiteral("Qt Multimedia");
+
     Command c;
     return findCommand(QString(), &c) ? c.program : QString();
 }
@@ -318,6 +335,10 @@ bool SoundPlayer::play(const QString &file)
     if (!powerShellCanPlay(file))
         return playInProcess(file);
 #endif
+
+    // Flatpak: no pw-play / paplay without extra sandbox permissions.
+    if (runsInFlatpak())
+        return playInProcess(file);
 
     Command cmd;
     if (!findCommand(file, &cmd)) {

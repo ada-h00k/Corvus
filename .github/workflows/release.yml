@@ -637,17 +637,17 @@ jobs:
           # "xdg-config/kdeglobals:ro" file system entry into the metadata, next to the
           # sockets and entries requested by the manifest.
           #
-          # Accepted beyond the finish-args: those runtime-inherited entries and the
-          # read-only PipeWire socket "xdg-run/pipewire-0:ro" (native PipeWire clients like
-          # pw-play for notification sounds). Everything else — a real x11 socket without
+          # Accepted beyond the finish-args: those runtime-inherited entries.
+          # (Notification sounds are played in-process via the PulseAudio socket, so no
+          # PipeWire socket is needed.) Everything else — a real x11 socket without
           # the fallback marker, broad devices, extra sockets, bus access or file system
           # access — fails the build. (If one is ever needed on purpose, adjust the patterns.)
           forbidden='^filesystems=|^devices=.*all|^sockets=(.*;)?x11;|^sockets=.*(ssh-auth|pcsc|cups|gpg-agent|system-bus)|^org\.freedesktop\.Flatpak=|=own$|^\[System Bus Policy\]'
-          # Strip the two accepted file system entries (flatpak merges everything into one
+          # Strip the accepted file system entry (flatpak merges everything into one
           # "filesystems=" line) and, on sockets lines that carry the "fallback-x11" marker,
           # the runtime-inherited bare "x11" token (a real x11 grant never has that marker).
           checked="$(
-            sed -e '/^filesystems=/{s|xdg-run/pipewire-0:ro;||g; s|xdg-config/kdeglobals:ro;||g; /^filesystems=;*$/d;}' \
+            sed -e '/^filesystems=/{s|xdg-config/kdeglobals:ro;||g; /^filesystems=;*$/d;}' \
                 -e '/^sockets=.*fallback-x11;/{s|fallback-x11|FALLBACK_X11_TMP|g; s|x11;||g; s|FALLBACK_X11_TMP|fallback-x11|g;}' \
                 flatpak-build/metadata
           )"

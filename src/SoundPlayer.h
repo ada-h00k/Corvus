@@ -12,6 +12,10 @@
 // aplay, sox/play; afplay on macOS) so that it plays whatever the system player
 // understands (wav, ogg, flac, …) without bundling codecs.
 //
+// Inside the Flatpak sandbox these players are not used (pw-play would need access to
+// the PipeWire socket); the sound is played in-process with Qt Multimedia instead,
+// which only needs the PulseAudio socket.
+//
 // Windows has no such player: PowerShell's Media.SoundPlayer only understands WAV.
 // So the built-in "Pop" is shipped as WAV there, and other formats (a custom .ogg,
 // .flac, .mp3) are played in-process with Qt Multimedia.
@@ -41,7 +45,7 @@ public:
     // Starts playback without blocking. Returns false if no player could be started.
     bool play(const QString &file);
     // Plays `file` inside the application with Qt Multimedia (used on Windows for
-    // everything except WAV). Failures are reported through failed().
+    // everything except WAV, and inside the Flatpak sandbox). Failures are reported through failed().
     bool playInProcess(const QString &file);
     bool play(const NotificationSettings &s) { return play(resolveFile(s)); }
 
