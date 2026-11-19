@@ -1569,3 +1569,14 @@ jobs:
             dist/corvus-windows-x64-setup.exe
             dist/corvus-windows-x64-portable.zip
             dist/SHA256SUMS
+
+      # The release above is created with GITHUB_TOKEN, so GitHub does not
+      # emit a release:published event for a separate workflow. Notify FlatPark
+      # here, after the release exists, and never fail the GitHub release if
+      # the FlatPark webhook is temporarily unavailable.
+      - name: Publish to FlatPark
+        uses: flatpark/publish-action@v1
+        continue-on-error: true
+        with:
+          app-id: io.github.ada_h00k.Corvus
+          tag: ${{ github.ref_name }}
