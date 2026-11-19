@@ -3,10 +3,14 @@
 #include "SpellChecker.h"
 
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QClipboard>
 #include <QContextMenuEvent>
 #include <QKeyEvent>
-#include <QActionGroup>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QVBoxLayout>
+#include <QWidgetAction>
 #include <QMenu>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -665,20 +669,66 @@ void MessageInput::addSpellingActions(QMenu *menu, QAction *before, const QPoint
     connect(toggle, &QAction::triggered, this, [this](bool on) { emit spellCheckEnableRequested(on); });
 
     sub->addSeparator();
-    auto *group = new QActionGroup(sub);
-    group->setExclusive(true);
+    auto *languagesMenu = sub->addMenu(tr("Languages"));
+    languagesMenu->setEnabled(m_highlighter->isActive());
+
+    // Keep the search field and language list together inside the submenu.
+    // The list is capped at ten rows and always reserves a visible scrollbar
+    // on the right, even when the filtered result set is short.
+    auto *panel = new QWidget(languagesMenu);
+    auto *panelLayout = new QVBoxLayout(panel);
+    panelLayout->setContentsMargins(4, 4, 4, 4);
+    panelLayout->setSpacing(4);
+
+    auto *search = new QLineEdit(panel);
+    search->setPlaceholderText(tr("Search languages…"));
+    search->setClearButtonEnabled(true);
+    panelLayout->addWidget(search);
+
+    auto *list = new QListWidget(panel);
+    list->setSelectionMode(QAbstractItemView::SingleSelection);
+    list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list->setUniformItemSizes(true);
+    panelLayout->addWidget(list);
+
     const QString requested = m_spell->requestedLanguage();
     auto addLanguage = [&](const QString &title, const QString &code) {
-        QAction *a = sub->addAction(title);
-        a->setCheckable(true);
-        a->setActionGroup(group);
-        a->setChecked(code == requested);
-        a->setEnabled(m_highlighter->isActive());
-        connect(a, &QAction::triggered, this, [this, code] { emit spellLanguageRequested(code); });
+        auto *item = new QListWidgetItem(title, list);
+        item->setData(Qt::UserRole, code);
+        item->setData(Qt::UserRole + 1, title);
+        if (code == requested) {
+            item->setSelected(true);
+            list->setCurrentItem(item);
+        }
     };
     addLanguage(tr("Automatic (system language)"), QString());
     for (const QString &code : languages)
         addLanguage(SpellChecker::languageTitle(code), code);
+
+    const int rowHeight = qMax(1, list->sizeHintForRow(0));
+    list->setMaximumHeight(10 * rowHeight + 2 * list->frameWidth());
+    list->setMinimumWidth(240);
+
+    connect(search, &QLineEdit::textChanged, list, [list](const QString &text) {
+        const QString needle = text.trimmed();
+        for (int i = 0; i < list->count(); ++i) {
+            QListWidgetItem *item = list->item(i);
+            const QString title = item->data(Qt::UserRole + 1).toString();
+            const QString code = item->data(Qt::UserRole).toString();
+            item->setHidden(!needle.isEmpty()
+                && !title.contains(needle, Qt::CaseInsensitive)
+                && !code.contains(needle, Qt::CaseInsensitive));
+        }
+    });
+    connect(list, &QListWidget::itemClicked, this, [this, languagesMenu](QListWidgetItem *item) {
+        emit spellLanguageRequested(item->data(Qt::UserRole).toString());
+        languagesMenu->close();
+    });
+
+    auto *panelAction = new QWidgetAction(languagesMenu);
+    panelAction->setDefaultWidget(panel);
+    languagesMenu->addAction(panelAction);
 }
 
 void MessageInput::contextMenuEvent(QContextMenuEvent *e)
