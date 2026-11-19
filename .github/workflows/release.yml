@@ -697,6 +697,13 @@ jobs:
           cp -a flatpak-build/files/. "$stage/"
           rm -f "$stage/manifest.json"
 
+          # Remove build-time files that are not needed at runtime.
+          rm -rf \
+            "$stage/lib/debug" \
+            "$stage/include" \
+            "$stage/lib64" \
+            "$stage/mkspecs"
+
           runtime_version="$(sed -n "s/^runtime-version: '\\(.*\\)'/\\1/p" "$FLATPAK_MANIFEST")"
           cat > "$stage/BUILD-INFO" <<EOF
           app-id=$FLATPAK_APP_ID
