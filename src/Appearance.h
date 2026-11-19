@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QPalette>
+#include <QString>
 
 // Colours and shape of the chat bubbles, the avatar switch and the app icon (Settings → Appearance …).
 struct Appearance {
@@ -15,6 +16,8 @@ struct Appearance {
     bool sortAlphabetically = false; // contact list ordered by name instead of by latest message
     bool alwaysShowSend = false; // Send button next to the message field even when it is not expanded
     bool generateLinkPreviews = true; // generate previews for HTTPS links when sending messages
+    bool spellCheck = true;    // underline misspelled words in the message field
+    QString spellLanguage;     // dictionary code ("de_DE"); empty = follow the system language
     enum IconChoice { IconFollowTheme = 0, IconLight = 1, IconDark = 2 };
     int appIcon = IconFollowTheme; // window / tray icon variant
 

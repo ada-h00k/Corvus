@@ -1,9 +1,12 @@
 #include "MessageInput.h"
 
+#include "SpellChecker.h"
+
 #include <QApplication>
 #include <QClipboard>
 #include <QContextMenuEvent>
 #include <QKeyEvent>
+#include <QActionGroup>
 #include <QMenu>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -25,6 +28,13 @@ namespace {
 constexpr int kCompactHeight = 40;
 constexpr int kExpandedHeight = 140;
 constexpr int kMentionUuidProperty = QTextFormat::UserProperty + 2;
+
+// Mentions (names) and monospace (code) are not prose: no spell checking there.
+bool skipSpellCheck(const QTextCharFormat &f)
+{
+    return f.hasProperty(kMentionUuidProperty)
+        || (f.hasProperty(QTextFormat::FontFixedPitch) && f.fontFixedPitch());
+}
 }
 
 MessageInput::MessageInput(QWidget *parent)
@@ -50,6 +60,8 @@ MessageInput::MessageInput(QWidget *parent)
         // the replacement text.
         if (!m_handlingKeyPress && !textCursor().hasSelection())
             setCurrentCharFormat(QTextCharFormat());
+        // The word at the caret is still being typed: do not mark it as misspelled yet.
+        if (m_highlighter) m_highlighter->setCursorPosition(textCursor().position());
         emit formattingChanged();
     });
 
@@ -84,6 +96,31 @@ MessageInput::MessageInput(QWidget *parent)
     updateFormattingBarTheme();
     m_formatBar->hide();
     connect(this, &QObject::destroyed, m_formatBar, &QObject::deleteLater);
+}
+
+void MessageInput::setSpellChecker(SpellChecker *checker)
+{
+    if (m_spell == checker) return;
+    const bool wasEnabled = spellCheckEnabled();
+    delete m_highlighter;
+    m_highlighter = nullptr;
+    m_spell = checker;
+    if (!m_spell) return;
+
+    m_highlighter = new SpellHighlighter(document(), m_spell);
+    m_highlighter->setSkipFormat(skipSpellCheck);
+    m_highlighter->setCursorPosition(textCursor().position());
+    m_highlighter->setActive(wasEnabled);
+}
+
+void MessageInput::setSpellCheckEnabled(bool enabled)
+{
+    if (m_highlighter) m_highlighter->setActive(enabled);
+}
+
+bool MessageInput::spellCheckEnabled() const
+{
+    return m_highlighter && m_highlighter->isActive();
 }
 
 void MessageInput::setExpanded(bool expanded)
@@ -564,12 +601,97 @@ void MessageInput::mousePressEvent(QMouseEvent *e)
         setCurrentCharFormat(QTextCharFormat());
 }
 
+void MessageInput::addSpellingActions(QMenu *menu, QAction *before, const QPoint &viewportPos)
+{
+    if (!m_spell || !m_highlighter || !SpellChecker::available()) return;
+
+    // Suggestions for the misspelled word under the mouse.
+    if (m_highlighter->isActive() && m_spell->isReady()) {
+        const QTextCursor at = cursorForPosition(viewportPos);
+        const QTextBlock block = at.block();
+        int start = 0, length = 0;
+        if (SpellChecker::wordAt(block.text(), at.position() - block.position(), &start, &length)) {
+            const int absStart = block.position() + start;
+            QTextCursor probe(document());
+            probe.setPosition(absStart);
+            probe.setPosition(absStart + length, QTextCursor::KeepAnchor);
+            const QString word = probe.selectedText();
+
+            if (!skipSpellCheck(probe.charFormat()) && !m_spell->isCorrect(word)) {
+                const QStringList suggestions = m_spell->suggestions(word);
+                auto add = [&](QAction *a) { menu->insertAction(before, a); };
+
+                if (suggestions.isEmpty()) {
+                    QAction *none = new QAction(tr("No suggestions"), menu);
+                    none->setEnabled(false);
+                    add(none);
+                }
+                for (const QString &suggestion : suggestions) {
+                    QAction *a = new QAction(suggestion, menu);
+                    QFont f = a->font();
+                    f.setBold(true);
+                    a->setFont(f);
+                    connect(a, &QAction::triggered, this, [this, absStart, length, suggestion] {
+                        QTextCursor sel(document());
+                        sel.setPosition(absStart);
+                        sel.setPosition(absStart + length, QTextCursor::KeepAnchor);
+                        sel.insertText(suggestion);
+                        setTextCursor(sel);
+                    });
+                    add(a);
+                }
+                menu->insertSeparator(before);
+
+                QAction *addWord = new QAction(tr("Add \"%1\" to the dictionary").arg(word), menu);
+                connect(addWord, &QAction::triggered, this, [this, word] { m_spell->addToDictionary(word); });
+                add(addWord);
+                QAction *ignore = new QAction(tr("Ignore"), menu);
+                connect(ignore, &QAction::triggered, this, [this, word] { m_spell->ignoreWord(word); });
+                add(ignore);
+                menu->insertSeparator(before);
+            }
+        }
+    }
+
+    // On/off and the dictionary.
+    const QStringList languages = SpellChecker::availableLanguages();
+    if (languages.isEmpty()) return;
+
+    menu->addSeparator();
+    QMenu *sub = menu->addMenu(tr("Spelling"));
+    QAction *toggle = sub->addAction(tr("Check spelling"));
+    toggle->setCheckable(true);
+    toggle->setChecked(m_highlighter->isActive());
+    connect(toggle, &QAction::triggered, this, [this](bool on) { emit spellCheckEnableRequested(on); });
+
+    sub->addSeparator();
+    auto *group = new QActionGroup(sub);
+    group->setExclusive(true);
+    const QString requested = m_spell->requestedLanguage();
+    auto addLanguage = [&](const QString &title, const QString &code) {
+        QAction *a = sub->addAction(title);
+        a->setCheckable(true);
+        a->setActionGroup(group);
+        a->setChecked(code == requested);
+        a->setEnabled(m_highlighter->isActive());
+        connect(a, &QAction::triggered, this, [this, code] { emit spellLanguageRequested(code); });
+    };
+    addLanguage(tr("Automatic (system language)"), QString());
+    for (const QString &code : languages)
+        addLanguage(SpellChecker::languageTitle(code), code);
+}
+
 void MessageInput::contextMenuEvent(QContextMenuEvent *e)
 {
     QMenu *menu = createStandardContextMenu();
+    QAction *first = menu->actions().isEmpty() ? nullptr : menu->actions().first();
+
+    // Spelling suggestions come first, then the clipboard entry. The position of a context menu
+    // event that QAbstractScrollArea forwards from its viewport is in viewport coordinates.
+    addSpellingActions(menu, first, e->pos());
+
     const QMimeData *md = QApplication::clipboard()->mimeData();
     if (m_hook && md && (md->hasImage() || md->hasUrls())) {
-        QAction *first = menu->actions().isEmpty() ? nullptr : menu->actions().first();
         QAction *attach = new QAction(tr("Attach from clipboard"), menu);
         connect(attach, &QAction::triggered, this, [this] {
             m_hook(QApplication::clipboard()->mimeData());

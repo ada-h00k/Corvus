@@ -21,6 +21,7 @@ Corvus is a desktop client for Signal with an encrypted local chat history. It r
 - Send and receive files, images, video and audio.
 - Edit or delete messages, manage archived chats and disappearing messages.
 - Desktop notifications, notification sounds and a tray/menu-bar icon.
+- Spell checking in the message field (Linux, with Hunspell dictionaries).
 - Encrypted local chat history, protected by the system keychain or a passphrase.
 - View a contact's safety number and mark the contact as verified (Qt version; right-click a chat → *View safety number …*).
 - Record and send voice messages (Qt version; 🎤 button next to the ➕ button; needs signal-cli 0.14.2 or newer, or corvus-cli, to arrive as a voice note).
@@ -53,7 +54,7 @@ Download the appropriate package from the [latest GitHub release](https://github
 
 The installer is per-user, does not need `sudo`, and adds Corvus to your application menu. Run it again to update; run `./install.sh --uninstall` to remove it.
 
-The prebuilt executable is dynamically linked and does not include Qt libraries. You need a compatible Qt 6 runtime (the release is built with Qt 6.12), QtKeychain 0.14 or newer, and a desktop keyring such as GNOME Keyring or KWallet. Install a backend separately and make sure it is available on your `PATH`: download `corvus-cli-linux-x86_64` from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest), rename it to `corvus-cli` and make it executable (`chmod +x`); or use `signal-cli` as the alternative.
+The prebuilt executable is dynamically linked and does not include Qt libraries. You need a compatible Qt 6 runtime (the release is built with Qt 6.12), QtKeychain 0.14 or newer, Hunspell 1.7 (`libhunspell`) and a desktop keyring such as GNOME Keyring or KWallet. Install a backend separately and make sure it is available on your `PATH`: download `corvus-cli-linux-x86_64` from the [corvus-cli releases](https://github.com/ada-h00k/corvus-cli/releases/latest), rename it to `corvus-cli` and make it executable (`chmod +x`); or use `signal-cli` as the alternative.
 
 **Arch Linux:** download the `corvus-*.pkg.tar.zst` package from the release and install it with:
 
@@ -129,6 +130,12 @@ The Windows builds and the Flatpak include `corvus-cli`. On Linux, get it from t
 
 **Updates of the backend:** **Help → Check for backend update** (also in Settings → Advanced) checks the backend you use: `signal-cli` is compared by version number, `corvus-cli` by build (it reports its commit in `--version`, and the latest [corvus-cli release](https://github.com/ada-h00k/corvus-cli/releases/latest) is compared with it). The Flatpak and the Windows setup bring a new `corvus-cli` with the next Corvus update.
 
+## Spell checking
+
+On Linux, Corvus underlines misspelled words in the message field. Right-click a word for suggestions, **Add to the dictionary** or **Ignore**; the **Spelling** submenu there (and **Settings → General → Message field**) switches the check on or off and selects the language. By default the dictionary that matches the system language is used.
+
+Corvus uses [Hunspell](https://hunspell.github.io/) dictionaries. Install the ones you need with your distribution (for example `hunspell-de`, `hunspell-en-us`; on Arch `hunspell-de`, `hunspell-en_us`), or put the `<language>.dic` and `<language>.aff` files into the `dictionaries` folder of Corvus' data directory (`~/.local/share/corvus/corvus/dictionaries/`; Flatpak: `~/.var/app/io.github.ada_h00k.Corvus/data/corvus/corvus/dictionaries/`). The `DICPATH` environment variable is honoured as well. The Flatpak ships German, English (US/GB), French, Spanish and Italian. Words you add are kept in `spellcheck-personal.txt` in the same data directory. Mentions, monospace text, links, e-mail addresses, abbreviations in capitals and words with digits are not checked. Without Hunspell (`-DCORVUS_SPELLCHECK=OFF`, or a build that does not find it), the message field is simply not checked. The Windows and macOS builds do not include Hunspell yet.
+
 ## Local data and encryption
 
 Corvus stores its chat history in an encrypted `history.corvus` file. By default, the history key is stored in your operating system's keychain; you can switch to passphrase protection in **Settings → History protection**.
@@ -151,7 +158,7 @@ On Debian/Ubuntu, install the build dependencies and compile:
 
 ```sh
 sudo apt update
-sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-multimedia-dev qt6-svg-dev qtkeychain-qt6-dev cargo rustc
+sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-multimedia-dev qt6-svg-dev qtkeychain-qt6-dev libhunspell-dev cargo rustc
 
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel

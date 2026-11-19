@@ -48,6 +48,7 @@ class QLineEdit;
 class QMimeData;
 class QNetworkReply;
 class QAudioOutput;
+class SpellChecker;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
@@ -477,6 +478,7 @@ private:
     QLabel *m_linkPreviewUrlLabel = nullptr;
     QToolButton *m_linkPreviewCloseButton = nullptr;
     QPointer<MessageInput> m_input;
+    SpellChecker *m_spell = nullptr; // spell checking for m_input (see Appearance::spellCheck)
     QToolButton *m_attachBtn;
     QToolButton *m_viewOnceBtn = nullptr;
     QToolButton *m_emojiBtn;

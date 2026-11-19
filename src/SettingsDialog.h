@@ -11,6 +11,7 @@ class ProfilePage;
 class Notifier;
 class SoundPlayer;
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QListWidget;
 class QPushButton;
@@ -52,6 +53,9 @@ private:
     QCheckBox *m_sortAlphabetically;
     QCheckBox *m_alwaysShowSend;
     QCheckBox *m_generateLinkPreviews;
+    QCheckBox *m_spellCheck;
+    QComboBox *m_spellLanguage;
+    QLabel *m_spellNote;
 };
 
 // --- Privacy --------------------------------------------------------------------------------

@@ -26,6 +26,15 @@ if(UNIX AND NOT APPLE)
     find_package(Qt6 QUIET OPTIONAL_COMPONENTS DBus)
 endif()
 
+# Spell checking uses Hunspell (optional; without it the message field is simply not checked).
+option(CORVUS_SPELLCHECK "Spell checking with Hunspell" ON)
+if(CORVUS_SPELLCHECK)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(HUNSPELL QUIET IMPORTED_TARGET hunspell)
+    endif()
+endif()
+
 # ---- Rust: encrypted history store (static library with C ABI) ------------
 find_program(CARGO cargo REQUIRED)
 set(STORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/history-store)
@@ -117,6 +126,8 @@ set(APP_SOURCES
     src/SafetyNumberDialog.cpp
     src/MessageInput.h
     src/MessageInput.cpp
+    src/SpellChecker.h
+    src/SpellChecker.cpp
     src/PollDialog.h
     src/PollDialog.cpp
     src/MainWindow.h
@@ -155,6 +166,14 @@ if(WIN32)
     endif()
 else()
     target_link_libraries(app_core PUBLIC m)
+endif()
+
+if(TARGET PkgConfig::HUNSPELL)
+    target_link_libraries(app_core PUBLIC PkgConfig::HUNSPELL)
+    target_compile_definitions(app_core PUBLIC HAVE_HUNSPELL)
+    message(STATUS "Spell checking: Hunspell ${HUNSPELL_VERSION}")
+else()
+    message(STATUS "Spell checking: disabled (Hunspell not found)")
 endif()
 
 if(TARGET Qt6::DBus)
@@ -384,6 +403,14 @@ if(CORVUS_TESTS)
     target_link_libraries(receipt_typing_test PRIVATE app_core Qt6::Test)
     add_test(NAME receipt_typing COMMAND receipt_typing_test)
     set_tests_properties(receipt_typing PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
+    add_executable(spellchecker_test tests/spellchecker_test.cpp)
+    target_link_libraries(spellchecker_test PRIVATE app_core Qt6::Test)
+    add_test(NAME spellchecker COMMAND spellchecker_test)
+    set_tests_properties(spellchecker PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 60
     )

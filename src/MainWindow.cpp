@@ -19,6 +19,7 @@
 #include "LinkDialog.h"
 #include "MediaGallery.h"
 #include "MessageInput.h"
+#include "SpellChecker.h"
 #include "Notifier.h"
 #include "PassphraseDialog.h"
 #include "PollDialog.h"
@@ -698,6 +699,22 @@ MainWindow::MainWindow()
 #endif
     m_input = new MessageInput;
     m_input->setPlaceholderText(tr("Write a message …"));
+
+    // Spell checking: the choices of the context menu are stored like the ones in the settings.
+    m_spell = new SpellChecker(this);
+    m_spell->setLanguage(m_appearance.spellLanguage);
+    m_input->setSpellChecker(m_spell);
+    m_input->setSpellCheckEnabled(m_appearance.spellCheck);
+    connect(m_input, &MessageInput::spellCheckEnableRequested, this, [this](bool enable) {
+        Appearance ap = m_appearance;
+        ap.spellCheck = enable;
+        applyAppearance(ap);
+    });
+    connect(m_input, &MessageInput::spellLanguageRequested, this, [this](const QString &code) {
+        Appearance ap = m_appearance;
+        ap.spellLanguage = code;
+        applyAppearance(ap);
+    });
 
     // A non-activating popup keeps keyboard focus in the composer while offering
     // native Signal-style @mentions for the members of the open group.
@@ -6786,6 +6803,8 @@ void MainWindow::applyAppearance(const Appearance &appearance)
     if (appearance == m_appearance) return;
     const bool previewsWereEnabled = m_appearance.generateLinkPreviews;
     m_appearance = appearance;
+    if (m_spell) m_spell->setLanguage(m_appearance.spellLanguage);
+    if (m_input) m_input->setSpellCheckEnabled(m_appearance.spellCheck);
     if (previewsWereEnabled && !m_appearance.generateLinkPreviews) {
         ++m_linkPreviewGeneration;
         if (m_linkPreviewReply) { m_linkPreviewReply->abort(); m_linkPreviewReply = nullptr; }

@@ -16,6 +16,8 @@ Appearance Appearance::defaults(const QPalette &pal)
     a.showAvatars = true;
     a.alwaysShowSend = false;
     a.generateLinkPreviews = true;
+    a.spellCheck = true;
+    a.spellLanguage.clear();
     a.sortAlphabetically = false;
 #ifdef Q_OS_MACOS
     // Like Messages: own bubbles follow the system accent colour, slightly rounder.
@@ -59,6 +61,9 @@ Appearance Appearance::load(const QPalette &pal)
         a.alwaysShowSend = s.value(QStringLiteral("alwaysShowSend")).toBool();
     if (s.contains(QStringLiteral("generateLinkPreviews")))
         a.generateLinkPreviews = s.value(QStringLiteral("generateLinkPreviews")).toBool();
+    if (s.contains(QStringLiteral("spellCheck")))
+        a.spellCheck = s.value(QStringLiteral("spellCheck")).toBool();
+    a.spellLanguage = s.value(QStringLiteral("spellLanguage")).toString().trimmed();
     const int icon = s.value(QStringLiteral("appIcon")).toInt(&ok);
     if (ok) a.appIcon = qBound(int(IconFollowTheme), icon, int(IconDark));
     return a;
@@ -95,6 +100,14 @@ void Appearance::save(const QPalette &pal) const
         s.remove(QStringLiteral("generateLinkPreviews"));
     else
         s.setValue(QStringLiteral("generateLinkPreviews"), generateLinkPreviews);
+    if (spellCheck == def.spellCheck)
+        s.remove(QStringLiteral("spellCheck"));
+    else
+        s.setValue(QStringLiteral("spellCheck"), spellCheck);
+    if (spellLanguage == def.spellLanguage)
+        s.remove(QStringLiteral("spellLanguage"));
+    else
+        s.setValue(QStringLiteral("spellLanguage"), spellLanguage);
     if (appIcon == def.appIcon)
         s.remove(QStringLiteral("appIcon"));
     else
@@ -111,5 +124,6 @@ bool Appearance::operator==(const Appearance &o) const
     return background == o.background && outBg == o.outBg && outText == o.outText && inBg == o.inBg &&
            inText == o.inText && radius == o.radius && showAvatars == o.showAvatars &&
            sortAlphabetically == o.sortAlphabetically && alwaysShowSend == o.alwaysShowSend &&
-           generateLinkPreviews == o.generateLinkPreviews && appIcon == o.appIcon;
+           generateLinkPreviews == o.generateLinkPreviews && spellCheck == o.spellCheck &&
+           spellLanguage == o.spellLanguage && appIcon == o.appIcon;
 }

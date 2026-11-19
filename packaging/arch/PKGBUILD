@@ -23,6 +23,7 @@ conflicts=('wren')
 depends=(
   'gcc-libs'
   'glibc'
+  'hunspell'
   'hicolor-icon-theme'
   'qt6-base'
   'qt6-multimedia'
@@ -39,6 +40,7 @@ makedepends=(
 optdepends=(
   'signal-cli: required at runtime, install it from the AUR or as a release archive'
   'qrencode: show the QR code when linking a device'
+  'hunspell-en_us: spell checking (English); other languages: hunspell-de, hunspell-fr, hunspell-es, …'
   'pipewire: notification sounds via pw-play'
   'libpulse: notification sounds via paplay'
 )

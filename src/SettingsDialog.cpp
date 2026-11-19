@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFrame>
 #include <QGroupBox>
@@ -17,6 +18,7 @@
 #include "AppearancePage.h"
 #include "NotificationPage.h"
 #include "ProfilePage.h"
+#include "SpellChecker.h"
 
 static QLabel *hint(const QString &text)
 {
@@ -72,10 +74,42 @@ GeneralPage::GeneralPage(const Appearance &ap, const NotificationSettings &ns, b
     m_generateLinkPreviews->setToolTip(tr("Fetch metadata only for HTTPS links and attach a preview when sending a message"));
     il->addWidget(m_alwaysShowSend);
     il->addWidget(m_generateLinkPreviews);
+
+    m_spellCheck = new QCheckBox(tr("Check spelling"));
+    m_spellCheck->setObjectName(QStringLiteral("spellCheck"));
+    m_spellCheck->setToolTip(tr("Underline misspelled words in the message field. Right-click a word for suggestions."));
+    il->addWidget(m_spellCheck);
+    auto *spellRow = new QHBoxLayout;
+    spellRow->setContentsMargins(24, 0, 0, 0);
+    spellRow->addWidget(new QLabel(tr("Language:")));
+    m_spellLanguage = new QComboBox;
+    m_spellLanguage->setObjectName(QStringLiteral("spellLanguage"));
+    m_spellLanguage->addItem(tr("Automatic (system language)"), QString());
+    const QStringList spellLanguages = SpellChecker::availableLanguages();
+    for (const QString &code : spellLanguages)
+        m_spellLanguage->addItem(SpellChecker::languageTitle(code), code);
+    spellRow->addWidget(m_spellLanguage, 1);
+    il->addLayout(spellRow);
+    m_spellNote = hint(QString());
+    il->addWidget(m_spellNote);
+    if (!SpellChecker::available()) {
+        m_spellNote->setText(tr("This build of Corvus was made without spell checking support."));
+        m_spellCheck->setEnabled(false);
+        m_spellLanguage->setEnabled(false);
+    } else if (spellLanguages.isEmpty()) {
+        m_spellNote->setText(tr("No Hunspell dictionaries were found. Install one (for example hunspell-de or "
+                                "hunspell-en-us), or put the .dic and .aff files into the \"dictionaries\" folder "
+                                "of Corvus' data directory."));
+        m_spellCheck->setEnabled(false);
+        m_spellLanguage->setEnabled(false);
+    } else {
+        m_spellNote->hide();
+    }
     lay->addWidget(inputBox);
     lay->addStretch(1);
 
-    for (QCheckBox *c : {m_tray, m_closeToTray, m_startMinimizedInTray, m_showAvatars, m_sortAlphabetically, m_alwaysShowSend, m_generateLinkPreviews})
+    connect(m_spellLanguage, &QComboBox::currentIndexChanged, this, [this] { emit changed(); });
+    for (QCheckBox *c : {m_tray, m_closeToTray, m_startMinimizedInTray, m_showAvatars, m_sortAlphabetically, m_alwaysShowSend, m_generateLinkPreviews, m_spellCheck})
         connect(c, &QCheckBox::toggled, this, [this] {
             refreshEnabled();
             emit changed();
@@ -86,7 +120,8 @@ GeneralPage::GeneralPage(const Appearance &ap, const NotificationSettings &ns, b
 void GeneralPage::load(const Appearance &ap, const NotificationSettings &ns)
 {
     const QSignalBlocker b1(m_tray), b2(m_closeToTray), b3(m_startMinimizedInTray), b4(m_showAvatars),
-        b5(m_sortAlphabetically), b6(m_alwaysShowSend), b7(m_generateLinkPreviews);
+        b5(m_sortAlphabetically), b6(m_alwaysShowSend), b7(m_generateLinkPreviews), b8(m_spellCheck),
+        b9(m_spellLanguage);
     m_tray->setChecked(ns.trayIcon);
     m_closeToTray->setChecked(ns.closeToTray);
     m_startMinimizedInTray->setChecked(ns.startMinimizedInTray);
@@ -94,6 +129,10 @@ void GeneralPage::load(const Appearance &ap, const NotificationSettings &ns)
     m_sortAlphabetically->setChecked(ap.sortAlphabetically);
     m_alwaysShowSend->setChecked(ap.alwaysShowSend);
     m_generateLinkPreviews->setChecked(ap.generateLinkPreviews);
+    m_spellCheck->setChecked(ap.spellCheck);
+    int spellIndex = m_spellLanguage->findData(ap.spellLanguage);
+    if (spellIndex < 0) spellIndex = 0; // a dictionary that is gone: back to automatic
+    m_spellLanguage->setCurrentIndex(spellIndex);
     refreshEnabled();
 }
 
@@ -102,6 +141,7 @@ void GeneralPage::refreshEnabled()
     const bool on = m_trayAvailable && m_tray->isChecked();
     m_closeToTray->setEnabled(on);
     m_startMinimizedInTray->setEnabled(on);
+    m_spellLanguage->setEnabled(m_spellCheck->isEnabled() && m_spellCheck->isChecked());
 }
 
 void GeneralPage::applyTo(Appearance &ap) const
@@ -110,6 +150,8 @@ void GeneralPage::applyTo(Appearance &ap) const
     ap.sortAlphabetically = m_sortAlphabetically->isChecked();
     ap.alwaysShowSend = m_alwaysShowSend->isChecked();
     ap.generateLinkPreviews = m_generateLinkPreviews->isChecked();
+    ap.spellCheck = m_spellCheck->isChecked();
+    ap.spellLanguage = m_spellLanguage->currentData().toString();
 }
 
 void GeneralPage::applyTo(NotificationSettings &ns) const
