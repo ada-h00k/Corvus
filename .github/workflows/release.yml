@@ -338,6 +338,7 @@ jobs:
   # ------------------------------------------------------
   flatpak:
     name: Build Flatpak (x86_64)
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     env:
       FLATPAK_APP_ID: io.github.ada_h00k.Corvus
