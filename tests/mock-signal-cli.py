@@ -149,8 +149,8 @@ if "--version" in args:
     time.sleep(nap)
     # MOCK_VERSION overrides the reported backend, e.g. for the screenshots: a
     # "corvus-cli <version> compatible with signal-cli <version>" line (without a
-    # commit in parentheses) makes the GUI show corvus-cli as the connected backend.
-    print(os.environ.get("MOCK_VERSION", "signal-cli 0.14.9"))
+    # commit in parentheses) overrides the default, which already is a corvus-cli.
+    print(os.environ.get("MOCK_VERSION", "corvus-cli 1.6.0 (0123456) compatible with signal-cli 0.14.9"))
     sys.exit(0)
 
 if "listAccounts" in args:

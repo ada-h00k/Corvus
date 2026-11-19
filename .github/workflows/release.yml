@@ -879,7 +879,7 @@ jobs:
           file "macos/build/Corvus.app/Contents/MacOS/corvus"
           ls -lh dist
 
-          # Files created by the app must be quarantined; signal-cli runs through the helper app.
+          # Files created by the app must be quarantined; corvus-cli runs through the helper app.
           packaging/macos/check-signal-cli-helper.sh macos/build/Corvus.app
 
       - name: Upload build artifacts
@@ -1022,7 +1022,7 @@ jobs:
 
           codesign --verify --deep --strict --verbose=2 "$QT_APP_PATH"
 
-          # Files created by the app must be quarantined; signal-cli runs through the helper app.
+          # Files created by the app must be quarantined; corvus-cli runs through the helper app.
           packaging/macos/check-signal-cli-helper.sh "$QT_APP_PATH"
 
           find "$QT_APP_PATH/Contents/MacOS" \
@@ -1209,7 +1209,7 @@ jobs:
 
           find stage -maxdepth 1 -type f | sort
 
-      # corvus-cli replaces signal-cli: a single native exe (no Java) plus the OpenSSL DLL it
+      # corvus-cli: a single native exe (no Java) plus the OpenSSL DLL it
       # links dynamically. Both go to <app>\corvus-cli\, where Corvus looks first
       # (SignalCli::autodetect). The build fails if the download does not match the pinned hash
       # or the program does not start.
@@ -1253,7 +1253,7 @@ jobs:
             -Uri "https://raw.githubusercontent.com/ada-h00k/corvus-cli/$env:CORVUS_CLI_COMMIT/LICENSE" `
             -OutFile 'stage\licenses\corvus-cli-LICENSE.txt'
 
-          # Smoke test: starts, finds its DLL, and speaks the signal-cli command line
+          # Smoke test: starts and finds its DLL
           $out = & (Join-Path $dest 'corvus-cli.exe') --version
           if ($LASTEXITCODE -ne 0) { throw 'corvus-cli.exe does not run' }
           Write-Host $out
@@ -1459,7 +1459,7 @@ jobs:
           Url=$base/repo/
           Homepage=$REPO_URL
           Comment=Desktop client for Signal
-          Description=Corvus, a Qt 6 desktop client for Signal (includes signal-cli)
+          Description=Corvus, a Qt 6 desktop client for Signal (includes corvus-cli)
           GPGKey=$gpgkey
           EOF
 
@@ -1553,7 +1553,7 @@ jobs:
             - `corvus-windows-x64-portable.zip` — Windows, no installation (unzip and run `corvus.exe`), includes corvus-cli
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `signal-cli` must be installed separately on Linux (plain executable, installer, Arch), and on macOS (`brew install signal-cli`). The Flatpak and the Windows builds include corvus-cli instead and need nothing else.
+            `corvus-cli` must be installed separately on Linux (plain executable, installer, Arch), and on macOS (`brew install --cask corvus-cli`). The Flatpak and the Windows builds include corvus-cli and need nothing else.
           draft: false
           prerelease: false
           make_latest: true

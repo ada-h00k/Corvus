@@ -76,7 +76,7 @@ public struct RpcError: Error, LocalizedError {
     public var errorDescription: String? { message }
 }
 
-/// Thin layer around the externally installed Signal backend: corvus-cli (recommended) or signal-cli.
+/// Thin layer around the externally installed Signal backend, corvus-cli.
 /// The type keeps its old name; both programs speak the same JSON-RPC.
 /// Only the CLI program is invoked (one-shot commands and "signal-cli -a <account> jsonRpc" as a
 /// long-running process). There is no dependency on signal-cli internals, so signal-cli can be
@@ -111,21 +111,19 @@ public final class SignalCli {
     /// The usual install locations, searched after PATH: apps started from Finder get a minimal PATH without Homebrew.
     nonisolated public static var defaultExtraDirs: [String] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return ["/opt/homebrew/bin", "/usr/local/bin", "/opt/signal-cli/bin", home + "/.local/bin", home + "/bin"]
+        return ["/opt/homebrew/bin", "/usr/local/bin", home + "/.local/bin", home + "/bin"]
     }
 
     nonisolated public static func autodetect(environment: [String: String] = ProcessInfo.processInfo.environment,
                                               extraDirs: [String] = SignalCli.defaultExtraDirs) -> String {
-        // corvus-cli is the recommended backend and is preferred; signal-cli is the alternative. An executable
-        // chosen in the settings always wins, so this only decides for a first start. Unlike the Qt app, corvus-cli
-        // is also looked for in the extra folders: on macOS, Homebrew's folder is usually not on a Finder app's PATH.
+        // An executable chosen in the settings always wins, so this only decides for a first start. Unlike the
+        // Qt app, corvus-cli is also looked for in the extra folders: on macOS, Homebrew's folder is usually not
+        // on a Finder app's PATH.
         var dirs = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
         dirs += extraDirs
-        for name in ["corvus-cli", "signal-cli"] {
-            for d in dirs {
-                let p = (d as NSString).appendingPathComponent(name)
-                if FileManager.default.isExecutableFile(atPath: p) { return p }
-            }
+        for d in dirs {
+            let p = (d as NSString).appendingPathComponent("corvus-cli")
+            if FileManager.default.isExecutableFile(atPath: p) { return p }
         }
         return ""
     }
@@ -134,7 +132,7 @@ public final class SignalCli {
     nonisolated public static func configure(_ p: Process, executable: String, arguments: [String]) {
         let helper = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers/corvus-signal-cli.app/Contents/MacOS/corvus-signal-cli")
-        // A missing signal-cli is started directly, so run() throws right away.
+        // A missing corvus-cli is started directly, so run() throws right away.
         if FileManager.default.isExecutableFile(atPath: helper.path), FileManager.default.isExecutableFile(atPath: executable) {
             p.executableURL = helper
             p.arguments = [executable] + arguments
@@ -219,7 +217,7 @@ public final class SignalCli {
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
-        p.standardInput = FileHandle.nullDevice // signal-cli never needs stdin for these commands
+        p.standardInput = FileHandle.nullDevice // corvus-cli never needs stdin for these commands
         do {
             try p.run()
         } catch {

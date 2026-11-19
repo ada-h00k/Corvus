@@ -119,4 +119,4 @@ fi
 printf 'Installed Corvus for %s\n' "$USER"
 printf 'Application menu entry: %s\n' "$desktop_file"
 printf 'Command-line link: %s\n' "$bin_link"
-printf 'Install signal-cli and ensure its executable is on PATH before launching.\n'
+printf 'Install corvus-cli (https://github.com/ada-h00k/corvus-cli/releases) and ensure its executable is on PATH before launching.\n'

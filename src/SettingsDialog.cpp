@@ -207,7 +207,7 @@ PrivacyPage::PrivacyPage(const NotificationSettings &settings, QWidget *parent) 
     bl->addWidget(hint(tr("A forgotten passphrase cannot be recovered.")));
     lay->addWidget(box);
 
-    lay->addWidget(hint(tr("Corvus only encrypts its own chat history. The data of signal-cli itself (account, "
+    lay->addWidget(hint(tr("Corvus only encrypts its own chat history. The data of corvus-cli itself (account, "
                            "sessions, contacts, attachments) is not encrypted by Corvus – use your system's disk "
                            "encryption to protect it.")));
     lay->addStretch(1);
@@ -238,7 +238,7 @@ AdvancedPage::AdvancedPage(QWidget *parent) : QWidget(parent)
     auto *lay = new QVBoxLayout(this);
     lay->setContentsMargins(0, 0, 0, 0);
 
-    auto *cliBox = new QGroupBox(tr("Signal backend (corvus-cli or signal-cli)"));
+    auto *cliBox = new QGroupBox(tr("Signal backend (corvus-cli)"));
     auto *cl = new QVBoxLayout(cliBox);
     auto *pathRow = new QHBoxLayout;
     pathRow->addWidget(new QLabel(tr("Path:")));

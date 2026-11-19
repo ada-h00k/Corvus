@@ -113,9 +113,10 @@ private slots:
     void activateConversation(const QString &key);
 
 private:
-    // --- setup / signal-cli
+    // --- setup / corvus-cli
     bool ensureExecutable();
     void showCliProblem(const QString &title, const SignalCli::Result &r);
+    void showUnsupportedBackend(const QString &reportedVersion);
     void connectAccount();
     void loadContactsAndGroups();
     void setConnected(bool connected);
@@ -152,8 +153,8 @@ private:
     bool applyReaction(const QString &key, qint64 ts, const QStringList &authors, const QString &reactor,
                        const QString &emoji);
     // --- Polls (like the official clients): vote by click, the author can end the poll early
-    bool supportsPolls() const; // backend version that knows the sendPoll* JSON-RPC methods
-    bool supportsContacts() const; // backend that can send contact cards (corvus-cli 1.5.0+; signal-cli cannot)
+    bool supportsPolls() const; // corvus-cli version that knows the sendPoll* JSON-RPC methods
+    bool supportsContacts() const; // corvus-cli 1.5.0+ can send contact cards
     void showAttachMenu();      // ➕ button: the official clients' attach menu (photos, files, contacts, polls)
     void sendContactCard();     // "Contact": pick a contact and send a contact card message
     void openContactChat(int idx); // click on a contact card: open the chat with that contact
@@ -385,8 +386,7 @@ private:
     QHash<QString, QHash<qint64, QString>> m_pendingReadReceipts; // conversation -> timestamp -> author
     QHash<QString, QHash<QString, qint64>> m_typingUntil; // conversation -> peer -> expiration ms
     QString m_account;
-    QString m_version; // signal-cli version, e.g. "0.13.12" (for corvus-cli: the one it is compatible with)
-    QString m_backend = QStringLiteral("signal-cli"); // "signal-cli" or "corvus-cli"
+    QString m_version; // the signal-cli version corvus-cli is compatible with, e.g. "0.14.9"
     QString m_backendVersion; // version of the backend itself, e.g. "0.1.0"
     QString m_backendBuild;   // corvus-cli: commit of the build ("4d76022"), empty if it does not say
     QString backendDescription() const;

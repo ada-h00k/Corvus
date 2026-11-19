@@ -250,7 +250,7 @@ final class AppModel {
         flash = nil
     }
 
-    // MARK: - Signal backend (corvus-cli / signal-cli)
+    // MARK: - Signal backend (corvus-cli)
 
     /// "corvus-cli" or "signal-cli": the connected backend, else what the chosen executable looks like.
     var backendName: String { backend.version.isEmpty ? cli.backendName : backend.name }
@@ -260,14 +260,12 @@ final class AppModel {
         if exe.isEmpty || !FileManager.default.fileExists(atPath: exe) { exe = SignalCli.autodetect() }
         while exe.isEmpty {
             let r = await Dialogs.ask("Signal backend not found",
-                                      "Neither corvus-cli nor signal-cli was found.\n\nThis app needs a separately installed backend. "
-                                          + "corvus-cli is recommended:\n\nbrew tap ada-h00k/corvus\nbrew install --cask corvus-cli\n\n"
-                                          + "signal-cli works as well.",
-                                      buttons: ["Choose path …", "Get corvus-cli", "Get signal-cli", "Close"], style: .warning)
+                                      "corvus-cli was not found.\n\nThis app needs corvus-cli as its Signal backend:\n\n"
+                                          + "brew tap ada-h00k/corvus\nbrew install --cask corvus-cli",
+                                      buttons: ["Choose path …", "Get corvus-cli", "Close"], style: .warning)
             switch r {
             case 0: exe = pickExecutable() ?? ""
             case 1: NSWorkspace.shared.open(URL(string: "https://github.com/ada-h00k/corvus-cli/releases/latest")!)
-            case 2: NSWorkspace.shared.open(URL(string: "https://github.com/AsamK/signal-cli/releases")!)
             default: return false
             }
         }
@@ -278,7 +276,7 @@ final class AppModel {
 
     private func pickExecutable() -> String? {
         let panel = NSOpenPanel()
-        panel.title = "Select corvus-cli or signal-cli"
+        panel.title = "Select corvus-cli"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.treatsFilePackagesAsDirectories = true
@@ -300,8 +298,8 @@ final class AppModel {
         }
     }
 
-    /// Everything here is asynchronous so the window never freezes while the JVM behind signal-cli starts.
-    /// The version is read on every (re)connect, so an update of signal-cli is noticed without restarting.
+    /// Everything here is asynchronous so the window never freezes while the backend starts.
+    /// The version is read on every (re)connect, so an update of corvus-cli is noticed without restarting.
     func connectAccount() async {
         guard historyReady else { return }
         connectGen += 1
@@ -361,8 +359,7 @@ final class AppModel {
     private func showCliProblem(_ title: String, _ r: CliResult) async {
         setConnected(false, info: title)
         let info = r.describe() + "\n\nCommand: " + SignalCli.maskNumbers(r.command)
-            + "\n\nThis does not mean that no account is linked. Check that the command works in a terminal "
-            + "(the non-native signal-cli build needs Java; corvus-cli does not)."
+            + "\n\nThis does not mean that no account is linked. Check that the command works in a terminal."
         switch await Dialogs.ask(title, info, buttons: ["Retry", "Choose backend …", "Close"], style: .warning) {
         case 0: await connectAccount()
         case 1: chooseExecutable()
@@ -2581,14 +2578,12 @@ final class AppModel {
         return (try JSONSerialization.jsonObject(with: data)) as? JSON ?? [:]
     }
 
-    /// signal-cli publishes numbered releases ("v0.14.9"). corvus-cli publishes one release per commit
-    /// (tag "commit-<sha>"), so it is compared by commit: the installed build reports its commit in --version,
+    /// corvus-cli publishes one release per commit (tag "commit-<sha>"), so it is compared by commit: the installed build reports its commit in --version,
     /// and GitHub's compare API says whether the latest build is ahead of it. (Same as the Qt app.)
     func checkForUpdates(silent: Bool) {
         let info = backend
         let name = info.name
-        let corvus = info.isCorvusCli
-        let repo = corvus ? "ada-h00k/corvus-cli" : "AsamK/signal-cli"
+        let repo = "ada-h00k/corvus-cli"
         Task {
             if info.version.isEmpty {
                 if !silent { await Dialogs.info("Update check", "The installed backend version is not known yet. Connect first.") }
@@ -2600,19 +2595,14 @@ final class AppModel {
                 let o = try await github(repo + "/releases/latest")
                 latest = jsonString(o["tag_name"])
                 if let u = URL(string: jsonString(o["html_url"])) { url = u }
-                if !corvus {
-                    if latest.hasPrefix("v") { latest.removeFirst() }
-                    newer = !latest.isEmpty && AppModel.compareVersions(latest, info.version) == .orderedDescending
-                } else {
-                    if latest.hasPrefix("commit-") { latest.removeFirst(7) }
-                    let sha = latest.lowercased()
-                    latest = "(\(sha.prefix(7)))"
-                    if info.build.isEmpty {
-                        unknown = true
-                    } else if !(sha.hasPrefix(info.build) || info.build.hasPrefix(sha)) {
-                        // Is the latest build ahead of the installed one? (It may also be older or on another branch.)
-                        newer = jsonString(try await github(repo + "/compare/\(info.build)...\(sha)")["status"]) == "ahead"
-                    }
+                if latest.hasPrefix("commit-") { latest.removeFirst(7) }
+                let sha = latest.lowercased()
+                latest = "(\(sha.prefix(7)))"
+                if info.build.isEmpty {
+                    unknown = true
+                } else if !(sha.hasPrefix(info.build) || info.build.hasPrefix(sha)) {
+                    // Is the latest build ahead of the installed one? (It may also be older or on another branch.)
+                    newer = jsonString(try await github(repo + "/compare/\(info.build)...\(sha)")["status"]) == "ahead"
                 }
             } catch {
                 if !silent { await Dialogs.warn("Update check", "Could not reach GitHub:\n\(error.localizedDescription)") }
@@ -2622,9 +2612,7 @@ final class AppModel {
             if silent { return }
             let installed = info.description
             if newer {
-                let how = corvus
-                    ? "Update corvus-cli the way you installed it (e.g. brew upgrade --cask corvus-cli) or download it from the release page. "
-                    : "Update signal-cli the way you usually do (e.g. brew upgrade signal-cli) – this app does not need to be changed for that. "
+                let how = "Update corvus-cli the way you installed it (e.g. brew upgrade --cask corvus-cli) or download it from the release page. "
                 let r = await Dialogs.ask("Update available",
                                           "Installed: \(installed)\nLatest version: \(name) \(latest)\n\n\(how)Afterwards choose “File → Reconnect”.",
                                           buttons: ["Open release page", "Close"])
@@ -2643,10 +2631,10 @@ final class AppModel {
 
     func showAbout() {
         let credits = NSMutableAttributedString(
-            string: "Graphical front end for a Signal backend: corvus-cli (recommended) or signal-cli.\n"
+            string: "Graphical front end for Signal. It uses corvus-cli as its backend.\n"
                 + "The backend is used as a standalone program and is not part of this app.\n\n"
                 + "Backend: \(backend.version.isEmpty ? backendName : backend.description)\nPath: \(cli.executable)"
-                + (backend.isCorvusCli ? "\nCompatible with signal-cli \(version)" : "")
+                + "\nCompatible with signal-cli \(version)"
                 + "\n\nChat history (encrypted): \(AppPaths.historyPath)",
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor])
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .applicationName: "Corvus"])

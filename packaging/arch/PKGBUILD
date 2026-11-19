@@ -13,7 +13,7 @@
 pkgname=corvus
 pkgver=0.2.0
 pkgrel=1
-pkgdesc='Native Qt 6 GUI for signal-cli with an encrypted local chat history'
+pkgdesc='Native Qt 6 GUI for Signal with an encrypted local chat history'
 arch=('x86_64')
 url='https://github.com/ada-h00k/Corvus'
 license=('AGPL-3.0-only')
@@ -35,10 +35,10 @@ makedepends=(
   'cmake'
   'ninja'
 )
-# signal-cli is not in the official repositories (AUR: signal-cli / signal-cli-bin),
-# so it cannot be a hard dependency. The program needs it at runtime, though.
+# corvus-cli is not in the official repositories, so it cannot be a hard dependency.
+# The program needs it at runtime, though.
 optdepends=(
-  'signal-cli: required at runtime, install it from the AUR or as a release archive'
+  'corvus-cli: required at runtime, download it from https://github.com/ada-h00k/corvus-cli/releases'
   'qrencode: show the QR code when linking a device'
   'hunspell-en_us: spell checking (English); other languages: hunspell-de, hunspell-fr, hunspell-es, …'
   'pipewire: notification sounds via pw-play'

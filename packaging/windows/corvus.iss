@@ -4,9 +4,8 @@
 ;   iscc /DAppVersion=0.2.0 /DStageDir=C:\path\to\staged\files packaging\windows\corvus.iss
 ;
 ; The setup is English only. It installs Corvus together with corvus-cli
-; (https://github.com/ada-h00k/corvus-cli, in <app>\corvus-cli\), the Signal backend that
-; replaces signal-cli: no Java and no download at install time. Corvus finds it by itself.
-; signal-cli can still be used: select it in Corvus under Settings -> Advanced -> Choose ...
+; (https://github.com/ada-h00k/corvus-cli, in <app>\corvus-cli\), the Signal backend:
+; no Java and no download at install time. Corvus finds it by itself.
 
 #ifndef AppVersion
   #define AppVersion "0.2.0"
@@ -71,6 +70,5 @@ Type: files; Name: "{autodesktop}\Wren.lnk"
 
 [UninstallDelete]
 ; Older setups downloaded signal-cli (and optionally a Java runtime) into this folder.
-; Your Signal account data (corvus-cli: ~\.local\share\corvus-cli, signal-cli: ~\.local\share\signal-cli)
-; and Corvus's chat history are NOT removed.
+; Your Signal account data (~\.local\share\corvus-cli) and Corvus's chat history are NOT removed.
 Type: filesandordirs; Name: "{app}\signal-cli"

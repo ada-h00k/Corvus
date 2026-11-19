@@ -25,9 +25,8 @@ SignalCli::~SignalCli()
 
 QString SignalCli::autodetect()
 {
-    // corvus-cli is the recommended backend and is preferred; signal-cli is the alternative.
-    // Both speak the same JSON-RPC. An executable chosen in the settings always wins (see
-    // MainWindow::ensureExecutable), so this only decides for a first start.
+    // Only decides for a first start: an executable chosen in the settings always wins
+    // (see MainWindow::ensureExecutable).
 #ifdef Q_OS_WIN
     // corvus-cli shipped by the Windows setup and the portable zip in <app>/corvus-cli/.
     {
@@ -38,30 +37,16 @@ QString SignalCli::autodetect()
     }
 #endif
     // On PATH (the Flatpak ships it as /app/bin/corvus-cli).
-    QString p = QStandardPaths::findExecutable(QStringLiteral("corvus-cli"));
-    if (!p.isEmpty())
-        return p;
-    p = QStandardPaths::findExecutable(QStringLiteral("signal-cli"));
+    const QString p = QStandardPaths::findExecutable(QStringLiteral("corvus-cli"));
     if (!p.isEmpty())
         return p;
     const QStringList extra = {
-#ifdef Q_OS_WIN
-        // Installed by the Windows setup next to the application (signal-cli/bin/signal-cli.bat).
-        QCoreApplication::applicationDirPath() + QStringLiteral("/signal-cli/bin"),
-        qEnvironmentVariable("LOCALAPPDATA") + QStringLiteral("/Programs/Corvus/signal-cli/bin"),
-        qEnvironmentVariable("ProgramFiles") + QStringLiteral("/Corvus/signal-cli/bin"),
-        // Installations made under the former name "Wren".
-        qEnvironmentVariable("LOCALAPPDATA") + QStringLiteral("/Programs/Wren/signal-cli/bin"),
-        qEnvironmentVariable("ProgramFiles") + QStringLiteral("/Wren/signal-cli/bin"),
-        qEnvironmentVariable("ProgramFiles") + QStringLiteral("/signal-cli/bin"),
-#endif
         QStringLiteral("/usr/local/bin"),
         QStringLiteral("/opt/homebrew/bin"),
-        QStringLiteral("/opt/signal-cli/bin"),
         QDir::homePath() + QStringLiteral("/.local/bin"),
         QDir::homePath() + QStringLiteral("/bin"),
     };
-    return QStandardPaths::findExecutable(QStringLiteral("signal-cli"), extra);
+    return QStandardPaths::findExecutable(QStringLiteral("corvus-cli"), extra);
 }
 
 void SignalCli::killTree(QProcess *p)
@@ -79,9 +64,9 @@ void SignalCli::killTree(QProcess *p)
 QString SignalCli::Result::describe() const
 {
     if (ok) return {};
-    if (!startError.isEmpty()) return QObject::tr("signal-cli could not be started: %1").arg(startError);
-    if (timedOut) return QObject::tr("signal-cli did not answer in time.");
-    QString text = QObject::tr("signal-cli exited with code %1.").arg(exitCode);
+    if (!startError.isEmpty()) return QObject::tr("corvus-cli could not be started: %1").arg(startError);
+    if (timedOut) return QObject::tr("corvus-cli did not answer in time.");
+    QString text = QObject::tr("corvus-cli exited with code %1.").arg(exitCode);
     const QString e = err.trimmed();
     if (!e.isEmpty()) text += QStringLiteral("\n\n") + (e.size() > 700 ? e.left(700) + QStringLiteral("…") : e);
     return text;
@@ -98,15 +83,6 @@ QString SignalCli::maskNumbers(const QString &text)
 QProcessEnvironment SignalCli::childEnvironment(const QProcessEnvironment &base)
 {
     QProcessEnvironment env = base;
-#ifdef Q_OS_WIN
-    // The Windows setup can install a private Java runtime next to signal-cli
-    // (signal-cli.bat honours JAVA_HOME). It is only used if present.
-    {
-        const QString jre = QCoreApplication::applicationDirPath() + QStringLiteral("/signal-cli/jre");
-        if (QFileInfo::exists(jre + QStringLiteral("/bin/java.exe")))
-            env.insert(QStringLiteral("JAVA_HOME"), QDir::toNativeSeparators(jre));
-    }
-#endif
     const QString appdir = env.value(QStringLiteral("APPDIR"));
     if (appdir.isEmpty()) return env;
 
@@ -133,7 +109,7 @@ void SignalCli::startProcess(QProcess *p, const QString &exe, const QStringList 
 #ifdef Q_OS_MACOS
     const QString helper = QCoreApplication::applicationDirPath() +
                            QStringLiteral("/../Helpers/corvus-signal-cli.app/Contents/MacOS/corvus-signal-cli");
-    // A missing signal-cli is started directly, so QProcess reports FailedToStart right away.
+    // A missing corvus-cli is started directly, so QProcess reports FailedToStart right away.
     const QString resolved = QFileInfo(exe).isAbsolute() ? exe : QStandardPaths::findExecutable(exe);
     if (QFileInfo::exists(helper) && QFileInfo(resolved).isExecutable()) {
         p->start(helper, QStringList{resolved} + args);
@@ -148,7 +124,7 @@ QStringList SignalCli::stageFiles(const QStringList &paths, const QString &dir)
 #ifdef Q_OS_MACOS
     QStringList staged;
     for (const QString &path : paths) {
-        // One folder per file: signal-cli sends the file name along.
+        // One folder per file: corvus-cli sends the file name along.
         const QString target = dir + QLatin1Char('/') + QString::number(staged.size()) + QLatin1Char('/') +
                                QFileInfo(path).fileName();
         staged << (QDir().mkpath(QFileInfo(target).path()) && QFile::copy(path, target) ? target : path);
@@ -171,7 +147,7 @@ static void logResult(const QString &exe, const QStringList &args, const SignalC
                    : !r.startError.isEmpty() ? QStringLiteral("START FAILED: ") + r.startError
                    : r.timedOut ? QStringLiteral("TIMEOUT")
                    : QStringLiteral("exit code %1").arg(r.exitCode);
-    qInfo().noquote() << "signal-cli:" << QFileInfo(exe).fileName() << args.join(QLatin1Char(' ')) << "->" << status
+    qInfo().noquote() << "corvus-cli:" << QFileInfo(exe).fileName() << args.join(QLatin1Char(' ')) << "->" << status
                       << QStringLiteral("(%1 ms)").arg(r.ms)
                       << (r.out.trimmed().isEmpty() ? QString() : QStringLiteral("| stdout: ") + show(r.out))
                       << (r.err.trimmed().isEmpty() ? QString() : QStringLiteral("| stderr: ") + show(r.err));
@@ -219,7 +195,7 @@ void SignalCli::runAsync(const QStringList &args, int timeoutMs, ResultCallback 
         finish(true, QString());
     });
     startProcess(p, m_exe, args);
-    p->closeWriteChannel(); // signal-cli never needs stdin for these commands
+    p->closeWriteChannel(); // corvus-cli never needs stdin for these commands
     timer->start(timeoutMs);
 }
 
@@ -285,13 +261,13 @@ void SignalCli::start(const QString &account)
         if (p != m_proc) return;
         m_proc = nullptr;
         p->deleteLater();
-        QString reason = QStringLiteral("signal-cli exited (exit code %1)").arg(code);
+        QString reason = QStringLiteral("corvus-cli exited (exit code %1)").arg(code);
         if (!m_lastErrLine.isEmpty()) reason += QStringLiteral(": ") + m_lastErrLine;
         failPending(reason);
         emit stopped(reason);
     });
 
-    // Be explicit instead of relying on signal-cli's version-dependent receive-mode default.
+    // Be explicit instead of relying on the backend's version-dependent receive-mode default.
     startProcess(p, m_exe, {QStringLiteral("-a"), account, QStringLiteral("jsonRpc"),
                             QStringLiteral("--receive-mode=on-start")});
 }
@@ -315,7 +291,7 @@ void SignalCli::stop()
 void SignalCli::call(const QString &method, const QJsonObject &params, Callback cb)
 {
     if (!m_proc) {
-        if (cb) cb({}, QStringLiteral("signal-cli is not running"));
+        if (cb) cb({}, QStringLiteral("corvus-cli is not running"));
         return;
     }
     const int id = m_nextId++;

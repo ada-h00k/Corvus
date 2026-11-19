@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks a built macOS app: files it creates are quarantined (LSFileQuarantineEnabled), and signal-cli
+# Checks a built macOS app: files it creates are quarantined (LSFileQuarantineEnabled), and corvus-cli
 # runs through the embedded helper app (src/SignalCliHelper.cpp), passing output and exit code through.
 #   packaging/macos/check-signal-cli-helper.sh <path to .app>
 set -eu
@@ -17,8 +17,8 @@ helper="$app/Contents/Helpers/corvus-signal-cli.app/Contents/MacOS/corvus-signal
 err=$(mktemp)
 out=$("$helper" /bin/sh -c 'ps -o ppid= -p $PPID | tr -d " "; exit 3' 2>"$err") && rc=0 || rc=$?
 if [ "$out" != 1 ] || [ "$rc" != 3 ] || [ -s "$err" ]; then
-    echo "error: signal-cli helper failed (output '$out', exit code $rc, stderr '$(cat "$err")')" >&2
+    echo "error: corvus-cli helper failed (output '$out', exit code $rc, stderr '$(cat "$err")')" >&2
     exit 1
 fi
 rm -f "$err"
-echo "signal-cli helper ok: $app"
+echo "corvus-cli helper ok: $app"

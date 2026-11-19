@@ -2,7 +2,7 @@
 # Builds "Corvus.app" into macos/build/.
 #   1. the Rust history store (static library, shared with the Qt app)
 #   2. the Swift package (release)
-#   3. the app bundle: executable, resources, Info.plist, icon, signal-cli helper, ad-hoc signature
+#   3. the app bundle: executable, resources, Info.plist, icon, corvus-cli helper, ad-hoc signature
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -49,8 +49,8 @@ else
     echo "warning: icon could not be rendered, the app uses the generic icon"
 fi
 
-# signal-cli runs through this helper app (src/SignalCliHelper.cpp, shared with the Qt app).
-echo "==> Building signal-cli helper"
+# corvus-cli runs through this helper app (src/SignalCliHelper.cpp, shared with the Qt app).
+echo "==> Building corvus-cli helper"
 HELPER="$APP/Contents/Helpers/corvus-signal-cli.app"
 mkdir -p "$HELPER/Contents/MacOS"
 xcrun clang++ -std=c++17 -O2 -mmacosx-version-min=14.0 "$REPO_DIR/src/SignalCliHelper.cpp" \

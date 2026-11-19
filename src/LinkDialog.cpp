@@ -70,7 +70,7 @@ void LinkDialog::startLinking()
     m_buf.clear();
     m_qr->clear();
     m_uri->clear();
-    m_status->setText(tr("Waiting for signal-cli …"));
+    m_status->setText(tr("Waiting for corvus-cli …"));
     m_start->setEnabled(false);
     m_name->setEnabled(false);
 
@@ -80,7 +80,7 @@ void LinkDialog::startLinking()
     connect(m_proc, &QProcess::finished, this, [this](int code, QProcess::ExitStatus) { onFinished(code); });
     connect(m_proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
         if (e == QProcess::FailedToStart) {
-            m_status->setText(tr("signal-cli could not be started: %1").arg(m_proc->errorString()));
+            m_status->setText(tr("corvus-cli could not be started: %1").arg(m_proc->errorString()));
             m_start->setEnabled(true);
             m_name->setEnabled(true);
         }

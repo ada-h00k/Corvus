@@ -311,7 +311,7 @@ void GroupDialog::buildSettingsUi()
     m_link->addItem(tr("Off"), QStringLiteral("disabled"));
     m_link->addItem(tr("On"), QStringLiteral("enabled"));
     m_link->addItem(tr("On, admins approve requests"), QStringLiteral("enabled-with-approval"));
-    m_link->setToolTip(tr("signal-cli does not report whether admin approval is required. "
+    m_link->setToolTip(tr("corvus-cli does not report whether admin approval is required. "
                           "The setting is only sent when you change it here."));
     pform->addRow(tr("Invite link:"), m_link);
     m_linkUrl = new QLabel;
@@ -435,7 +435,7 @@ void GroupDialog::reload()
         const auto info = GroupInfo::find(res, self->m_groupId);
         if (!info) {
             self->setBusy(false);
-            self->setStatus(tr("signal-cli does not know this group."), true);
+            self->setStatus(tr("corvus-cli does not know this group."), true);
             return;
         }
         self->m_info = *info;
@@ -610,7 +610,7 @@ void GroupDialog::leave()
         return;
 
     QJsonObject params{{QStringLiteral("groupId"), m_groupId}};
-    // signal-cli refuses to let the only admin go without naming a successor.
+    // the backend refuses to let the only admin go without naming a successor.
     if (m_info.isAdmin(m_account) && m_info.adminCount() == 1 && m_info.members.size() > 1) {
         QStringList labels;
         QStringList ids;

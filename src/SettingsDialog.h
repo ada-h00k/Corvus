@@ -24,11 +24,11 @@ class QStackedWidget;
 //   Notifications  desktop notifications and sound
 //   Profile        Signal username, display name, avatar
 //   Privacy        protection of the local chat history
-//   Advanced       signal-cli and the GIPHY API key
+//   Advanced       corvus-cli and the GIPHY API key
 //
 // General, Appearance and Notifications are applied with OK / Apply (and can be cancelled).
 // Buttons on the Profile, Privacy and Advanced pages act immediately because they change
-// something outside this window (Signal, the keychain, the signal-cli process).
+// something outside this window (Signal, the keychain, the corvus-cli process).
 // The dialog never touches the application itself: MainWindow reacts to the signals.
 
 // --- General --------------------------------------------------------------------------------

@@ -7,8 +7,8 @@ class QLineEdit;
 class QProcess;
 class QPushButton;
 
-// Links signal-cli as an additional device to an existing Signal account
-// ("signal-cli link -n <name>") and shows the link URI / QR code.
+// Links corvus-cli as an additional device to an existing Signal account
+// ("corvus-cli link -n <name>") and shows the link URI / QR code.
 class LinkDialog : public QDialog
 {
     Q_OBJECT

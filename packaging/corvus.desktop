@@ -2,7 +2,7 @@
 Type=Application
 Name=Corvus
 GenericName=Messenger
-Comment=Qt GUI for signal-cli
+Comment=Qt GUI for Signal
 Exec=corvus
 Icon=corvus
 Terminal=false

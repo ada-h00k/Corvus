@@ -199,7 +199,7 @@ target_link_libraries(corvus PRIVATE app_core)
 if(APPLE)
     # Own Info.plist: sets LSFileQuarantineEnabled, so files created by the app
     # (received attachments, temporary copies) get the com.apple.quarantine flag.
-    # Child processes inherit that, hence the signal-cli helper app below.
+    # Child processes inherit that, hence the corvus-cli helper app below.
     configure_file(packaging/macos/Info.plist.in
         ${CMAKE_BINARY_DIR}/Info.plist @ONLY)
     set_target_properties(corvus PROPERTIES
@@ -207,7 +207,7 @@ if(APPLE)
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/Info.plist
     )
 
-    # signal-cli helper, embedded as Contents/Helpers/corvus-signal-cli.app (src/SignalCliHelper.cpp).
+    # corvus-cli helper, embedded as Contents/Helpers/corvus-signal-cli.app (src/SignalCliHelper.cpp).
     configure_file(packaging/macos/SignalCliHelper.plist.in
         ${CMAKE_BINARY_DIR}/SignalCliHelper.plist @ONLY)
     add_executable(corvus-signal-cli MACOSX_BUNDLE src/SignalCliHelper.cpp)

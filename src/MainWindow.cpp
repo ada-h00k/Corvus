@@ -1606,20 +1606,16 @@ bool MainWindow::ensureExecutable()
         QMessageBox box(this);
         box.setIcon(QMessageBox::Warning);
         box.setWindowTitle(tr("Signal backend not found"));
-        box.setText(tr("Neither corvus-cli nor signal-cli was found.\n\n"
-                       "This GUI needs a separately installed backend. corvus-cli is recommended; "
-                       "signal-cli works as well."));
+        box.setText(tr("corvus-cli was not found.\n\n"
+                       "This GUI needs corvus-cli as its Signal backend."));
         QPushButton *dl = box.addButton(tr("Get corvus-cli"), QMessageBox::HelpRole);
-        QPushButton *dlSignalCli = box.addButton(tr("Get signal-cli"), QMessageBox::HelpRole);
         QPushButton *pick = box.addButton(tr("Choose path …"), QMessageBox::AcceptRole);
         box.addButton(QMessageBox::Close);
         box.exec();
         if (box.clickedButton() == dl) {
             QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/ada-h00k/corvus-cli/releases/latest")));
-        } else if (box.clickedButton() == dlSignalCli) {
-            QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/AsamK/signal-cli/releases")));
         } else if (box.clickedButton() == pick) {
-            exe = QFileDialog::getOpenFileName(this, tr("Select corvus-cli or signal-cli"));
+            exe = QFileDialog::getOpenFileName(this, tr("Select corvus-cli"));
         } else {
             return false;
         }
@@ -1631,7 +1627,7 @@ bool MainWindow::ensureExecutable()
 
 void MainWindow::chooseExecutable()
 {
-    const QString exe = QFileDialog::getOpenFileName(this, tr("Select corvus-cli or signal-cli"), m_cli.executable());
+    const QString exe = QFileDialog::getOpenFileName(this, tr("Select corvus-cli"), m_cli.executable());
     if (exe.isEmpty()) return;
     QSettings().setValue(QStringLiteral("executable"), exe);
     m_cli.setExecutable(exe);
@@ -1640,9 +1636,9 @@ void MainWindow::chooseExecutable()
 
 void MainWindow::connectAccount()
 {
-    // Everything here is asynchronous so the window never freezes while the JVM
-    // behind signal-cli starts. The version is read on every (re)connect, so an
-    // update of signal-cli is noticed without restarting the GUI.
+    // Everything here is asynchronous so the window never freezes while the backend
+    // starts. The version is read on every (re)connect, so an update of corvus-cli
+    // is noticed without restarting the GUI.
     const int gen = ++m_connectGen;
     m_cli.stop();
     setConnected(false);
@@ -1650,26 +1646,22 @@ void MainWindow::connectAccount()
     m_cli.queryVersion([this, gen](const SignalCli::Result &r, const QString &version) {
         if (gen != m_connectGen) return;
         if (!r.ok) {
-            showCliProblem(tr("signal-cli could not be run."), r);
+            showCliProblem(tr("corvus-cli could not be run."), r);
             return;
         }
-        // signal-cli:  "signal-cli 0.14.9"
         // corvus-cli:  "corvus-cli 0.1.0 [(<commit>)] compatible with signal-cli 0.14.9"
-        // m_version always is the signal-cli version: feature checks depend on it.
+        // m_version is the signal-cli version corvus-cli is compatible with: some feature
+        // checks depend on it.
         static const QRegularExpression corvusCli(
             QStringLiteral(R"(^corvus-cli\s+(\S+)(?:\s+\(([0-9a-fA-F]{7,40})\))?\s+compatible with signal-cli\s+(\S+))"));
         const QRegularExpressionMatch cm = corvusCli.match(version);
-        if (cm.hasMatch()) {
-            m_backend = QStringLiteral("corvus-cli");
-            m_backendVersion = cm.captured(1);
-            m_backendBuild = cm.captured(2).toLower();
-            m_version = cm.captured(3);
-        } else {
-            m_backend = QStringLiteral("signal-cli");
-            m_version = version.section(QLatin1Char(' '), -1);
-            m_backendVersion = m_version;
-            m_backendBuild.clear();
+        if (!cm.hasMatch()) {
+            showUnsupportedBackend(version);
+            return;
         }
+        m_backendVersion = cm.captured(1);
+        m_backendBuild = cm.captured(2).toLower();
+        m_version = cm.captured(3);
         syncSettingsDialog();
 
         m_cli.queryAccounts([this, gen](const SignalCli::Result &r, const QStringList &accounts) {
@@ -1682,7 +1674,7 @@ void MainWindow::connectAccount()
             if (accounts.isEmpty()) {
                 setConnected(false);
                 if (QMessageBox::question(this, tr("No account"),
-                                          tr("signal-cli reports that no account is set up yet.\n"
+                                          tr("corvus-cli reports that no account is set up yet.\n"
                                              "Link this device with your phone now?"))
                         == QMessageBox::Yes &&
                     gen == m_connectGen)
@@ -1720,19 +1712,38 @@ void MainWindow::showCliProblem(const QString &title, const SignalCli::Result &r
     setConnected(false);
     QMessageBox box(this);
     box.setIcon(QMessageBox::Warning);
-    box.setWindowTitle(tr("signal-cli problem"));
+    box.setWindowTitle(tr("corvus-cli problem"));
     box.setText(title + QStringLiteral("\n\n") + r.describe());
     box.setInformativeText(tr("Command: %1\n\nThis does not mean that no account is linked. Check that the command "
-                              "works in a terminal (the non-native signal-cli build needs Java).")
+                              "works in a terminal.")
                                .arg(SignalCli::maskNumbers(r.command)));
     QPushButton *retry = box.addButton(tr("Retry"), QMessageBox::AcceptRole);
-    QPushButton *pick = box.addButton(tr("Choose signal-cli …"), QMessageBox::ActionRole);
+    QPushButton *pick = box.addButton(tr("Choose corvus-cli …"), QMessageBox::ActionRole);
     box.addButton(QMessageBox::Close);
     box.exec();
     if (box.clickedButton() == retry)
         QTimer::singleShot(0, this, &MainWindow::connectAccount);
     else if (box.clickedButton() == pick)
         chooseExecutable();
+}
+
+// The selected program does not identify itself as corvus-cli (e.g. a signal-cli was chosen).
+void MainWindow::showUnsupportedBackend(const QString &reportedVersion)
+{
+    setConnected(false);
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(tr("Unsupported backend"));
+    box.setText(tr("The selected program is not corvus-cli.\n\nCorvus needs corvus-cli as its Signal backend."));
+    box.setInformativeText(tr("It reports: %1").arg(reportedVersion.trimmed().left(200)));
+    QPushButton *dl = box.addButton(tr("Get corvus-cli"), QMessageBox::HelpRole);
+    QPushButton *pick = box.addButton(tr("Choose corvus-cli …"), QMessageBox::ActionRole);
+    box.addButton(QMessageBox::Close);
+    box.exec();
+    if (box.clickedButton() == dl)
+        QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/ada-h00k/corvus-cli/releases/latest")));
+    else if (box.clickedButton() == pick)
+        QTimer::singleShot(0, this, &MainWindow::chooseExecutable);
 }
 
 void MainWindow::reconnect()
@@ -3970,7 +3981,7 @@ void MainWindow::updateAttachBar()
         m_viewOnceBtn->setEnabled(composerEligible);
         m_viewOnceBtn->setToolTip(cliSupportsViewOnce
             ? tr("Send one photo that can be viewed once (one image, no caption)")
-            : tr("View Once requires signal-cli 0.13.18 or newer"));
+            : tr("View Once requires a newer corvus-cli"));
     }
     if (m_pendingFiles.isEmpty()) {
         m_attachBar->hide();
@@ -5672,22 +5683,16 @@ void MainWindow::sendReaction(int idx, const QString &emoji)
 
 // --------------------------------------------------------------- Polls
 
-// sendPollCreate / sendPollVote / sendPollTerminate exist since signal-cli 0.13.23;
-// corvus-cli reports the signal-cli version it is compatible with, so a backend that
-// predates the poll commands is recognised here (corvus-cli itself since 1.4.0).
+// sendPollCreate / sendPollVote / sendPollTerminate exist since corvus-cli 1.4.0.
 bool MainWindow::supportsPolls() const
 {
-    if (m_backend == QLatin1String("corvus-cli"))
-        return QVersionNumber::fromString(m_backendVersion) >= QVersionNumber(1, 4, 0);
-    return QVersionNumber::fromString(m_version) >= QVersionNumber(0, 13, 23);
+    return QVersionNumber::fromString(m_backendVersion) >= QVersionNumber(1, 4, 0);
 }
 
-// Contact cards ride on DataMessage.contact: corvus-cli can send and report them since
-// 1.5.0; signal-cli has no contact support at all, so the ➕ entry stays disabled there.
+// Contact cards ride on DataMessage.contact: corvus-cli can send and report them since 1.5.0.
 bool MainWindow::supportsContacts() const
 {
-    return m_backend == QLatin1String("corvus-cli")
-        && QVersionNumber::fromString(m_backendVersion) >= QVersionNumber(1, 5, 0);
+    return QVersionNumber::fromString(m_backendVersion) >= QVersionNumber(1, 5, 0);
 }
 
 // ➕ button: the attach menu of the official clients. "Photos & Videos" and "File" open
@@ -6140,8 +6145,8 @@ bool MainWindow::applyPollTerminate(const QString &key, qint64 targetTs, const Q
 
 // ------------------------------------------------------ Pinned messages
 
-// The same JSON-RPC commands signal-cli offers (sendPinMessage / sendUnpinMessage);
-// corvus-cli needs a matching update before the backend accepts them (see docs).
+// JSON-RPC commands sendPinMessage / sendUnpinMessage; corvus-cli needs a matching
+// update before the backend accepts them (see docs).
 void MainWindow::sendPin(int idx, qint64 durationSeconds)
 {
     if (!m_convs.contains(m_current) || idx < 0 || idx >= m_convs[m_current].msgs.size()) return;
@@ -6670,28 +6675,23 @@ void MainWindow::saveAttachment(int msgIdx, int attIdx)
     });
 }
 
-// --------------------------------------------------- Updating the backend (corvus-cli / signal-cli)
+// --------------------------------------------------- Updating the backend (corvus-cli)
 
 QString MainWindow::backendDescription() const
 {
-    if (m_backend == QLatin1String("corvus-cli")) {
-        QString d = QStringLiteral("corvus-cli %1").arg(m_backendVersion);
-        if (!m_backendBuild.isEmpty()) d += QStringLiteral(" (%1)").arg(m_backendBuild.left(7));
-        return d;
-    }
-    return QStringLiteral("signal-cli %1").arg(m_version);
+    QString d = QStringLiteral("corvus-cli %1").arg(m_backendVersion);
+    if (!m_backendBuild.isEmpty()) d += QStringLiteral(" (%1)").arg(m_backendBuild.left(7));
+    return d;
 }
 
-// signal-cli publishes numbered releases ("v0.14.9"). corvus-cli publishes one release per commit
-// (tag "commit-<sha>"), so it is compared by commit: the installed build reports its commit in
-// --version, and GitHub's compare API says whether the latest build is ahead of it.
+// corvus-cli publishes one release per commit (tag "commit-<sha>"), so it is compared by commit:
+// the installed build reports its commit in --version, and GitHub's compare API says whether the
+// latest build is ahead of it.
 void MainWindow::checkForUpdates()
 {
-    const bool corvus = m_backend == QLatin1String("corvus-cli");
-    const QString name = m_backend;
-    const QString repo = corvus ? QStringLiteral("ada-h00k/corvus-cli") : QStringLiteral("AsamK/signal-cli");
+    const QString name = QStringLiteral("corvus-cli");
+    const QString repo = QStringLiteral("ada-h00k/corvus-cli");
     const QString installedBuild = m_backendBuild;
-    const QString installedVersion = m_version;
 
     auto github = [this](const QString &path) {
         QNetworkRequest req(QUrl(QStringLiteral("https://api.github.com/repos/") + path));
@@ -6701,17 +6701,15 @@ void MainWindow::checkForUpdates()
     };
 
     // Shows the result. `unknown`: the installed build cannot tell which build it is.
-    auto show = [this, name, corvus](bool newer, bool unknown, const QString &latest, const QString &url,
-                                     const QString &installed) {
+    auto show = [this, name](bool newer, bool unknown, const QString &latest, const QString &url,
+                             const QString &installed) {
         if (newer) {
             QMessageBox box(this);
             box.setWindowTitle(tr("Update available"));
             const QString how =
-                corvus ? tr("Update corvus-cli the way you installed it: the Flatpak and the Windows builds bring a "
-                            "new corvus-cli with the next Corvus update; otherwise download it from the release page. "
-                            "Afterwards choose “File → Reconnect”.")
-                       : tr("Update signal-cli the way you usually do (package manager or download) – this GUI "
-                            "does not need to be changed for that. Afterwards choose “File → Reconnect”.");
+                tr("Update corvus-cli the way you installed it: the Flatpak and the Windows builds bring a "
+                   "new corvus-cli with the next Corvus update; otherwise download it from the release page. "
+                   "Afterwards choose “File → Reconnect”.");
             box.setText(tr("Installed: %1\nLatest version: %2 %3\n\n%4").arg(installed, name, latest, how));
             QPushButton *open = box.addButton(tr("Open release page"), QMessageBox::AcceptRole);
             box.addButton(QMessageBox::Close);
@@ -6738,50 +6736,42 @@ void MainWindow::checkForUpdates()
     };
 
     QNetworkReply *rep = github(repo + QStringLiteral("/releases/latest"));
-    connect(rep, &QNetworkReply::finished, this,
-            [this, rep, corvus, installedBuild, installedVersion, repo, github, show, fail] {
-                rep->deleteLater();
-                if (rep->error() != QNetworkReply::NoError) {
-                    fail(rep->errorString());
-                    return;
-                }
-                const QJsonObject o = QJsonDocument::fromJson(rep->readAll()).object();
-                QString latest = o.value(QStringLiteral("tag_name")).toString();
-                const QString url = o.value(QStringLiteral("html_url")).toString();
+    connect(rep, &QNetworkReply::finished, this, [this, rep, installedBuild, repo, github, show, fail] {
+        rep->deleteLater();
+        if (rep->error() != QNetworkReply::NoError) {
+            fail(rep->errorString());
+            return;
+        }
+        const QJsonObject o = QJsonDocument::fromJson(rep->readAll()).object();
+        QString latest = o.value(QStringLiteral("tag_name")).toString();
+        const QString url = o.value(QStringLiteral("html_url")).toString();
 
-                if (!corvus) {
-                    if (latest.startsWith(QLatin1Char('v'))) latest.remove(0, 1);
-                    const bool newer = QVersionNumber::fromString(latest) > QVersionNumber::fromString(installedVersion);
-                    show(newer, false, latest, url, QStringLiteral("signal-cli %1").arg(installedVersion));
-                    return;
-                }
-
-                // corvus-cli: tag "commit-<sha>"
-                if (latest.startsWith(QLatin1String("commit-"))) latest.remove(0, 7);
-                latest = latest.toLower();
-                const QString installed = backendDescription();
-                const QString latestShort = QStringLiteral("(%1)").arg(latest.left(7));
-                if (installedBuild.isEmpty()) {
-                    show(false, true, latestShort, url, installed);
-                    return;
-                }
-                if (latest.startsWith(installedBuild) || installedBuild.startsWith(latest)) {
-                    show(false, false, latestShort, url, installed);
-                    return;
-                }
-                // Is the latest build ahead of the installed one? (It may also be older or on another branch.)
-                QNetworkReply *cmp = github(repo + QStringLiteral("/compare/") + installedBuild + QStringLiteral("...") + latest);
-                connect(cmp, &QNetworkReply::finished, this, [cmp, latestShort, url, installed, show, fail] {
-                    cmp->deleteLater();
-                    if (cmp->error() != QNetworkReply::NoError) {
-                        fail(cmp->errorString());
-                        return;
-                    }
-                    const QString status =
-                        QJsonDocument::fromJson(cmp->readAll()).object().value(QStringLiteral("status")).toString();
-                    show(status == QLatin1String("ahead"), false, latestShort, url, installed);
-                });
-            });
+        // tag "commit-<sha>"
+        if (latest.startsWith(QLatin1String("commit-"))) latest.remove(0, 7);
+        latest = latest.toLower();
+        const QString installed = backendDescription();
+        const QString latestShort = QStringLiteral("(%1)").arg(latest.left(7));
+        if (installedBuild.isEmpty()) {
+            show(false, true, latestShort, url, installed);
+            return;
+        }
+        if (latest.startsWith(installedBuild) || installedBuild.startsWith(latest)) {
+            show(false, false, latestShort, url, installed);
+            return;
+        }
+        // Is the latest build ahead of the installed one? (It may also be older or on another branch.)
+        QNetworkReply *cmp = github(repo + QStringLiteral("/compare/") + installedBuild + QStringLiteral("...") + latest);
+        connect(cmp, &QNetworkReply::finished, this, [cmp, latestShort, url, installed, show, fail] {
+            cmp->deleteLater();
+            if (cmp->error() != QNetworkReply::NoError) {
+                fail(cmp->errorString());
+                return;
+            }
+            const QString status =
+                QJsonDocument::fromJson(cmp->readAll()).object().value(QStringLiteral("status")).toString();
+            show(status == QLatin1String("ahead"), false, latestShort, url, installed);
+        });
+    });
 }
 
 void MainWindow::showAbout()
@@ -6789,8 +6779,7 @@ void MainWindow::showAbout()
     QMessageBox::about(this, tr("About Corvus"),
                        tr("<b>Corvus</b> %1<br><br>"
                           "Graphical front end for Signal. It uses "
-                          "<a href=\"https://github.com/ada-h00k/corvus-cli\">corvus-cli</a> (recommended) or "
-                          "<a href=\"https://github.com/AsamK/signal-cli\">signal-cli</a> as a standalone backend, "
+                          "<a href=\"https://github.com/ada-h00k/corvus-cli\">corvus-cli</a> as a standalone backend, "
                           "which is not part of this GUI.<br><br>"
                           "Path: %2<br>Backend: %3<br><br>"
                           "Chat history (encrypted): %4")
@@ -7242,7 +7231,7 @@ void MainWindow::loadOwnAvatar()
 void MainWindow::applySignalUsername(const QString &username)
 {
     if (m_account.isEmpty() || !m_cli.isRunning()) {
-        reportProfileStatus(tr("Connect to signal-cli before editing your profile."), true);
+        reportProfileStatus(tr("Connect to corvus-cli before editing your profile."), true);
         return;
     }
     m_cli.call(QStringLiteral("updateAccount"),
@@ -7264,7 +7253,7 @@ void MainWindow::sendProfileUpdate(const QJsonObject &params, const QString &suc
                                    const std::function<void()> &onSuccess)
 {
     if (m_account.isEmpty() || !m_cli.isRunning()) {
-        reportProfileStatus(tr("Connect to signal-cli before editing your profile."), true);
+        reportProfileStatus(tr("Connect to corvus-cli before editing your profile."), true);
         return;
     }
     m_cli.call(QStringLiteral("updateProfile"), params, [this, successMessage, onSuccess](const QJsonValue &, const QString &err) {

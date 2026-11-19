@@ -3,7 +3,7 @@ import CoreImage.CIFilterBuiltins
 import CorvusCore
 import SwiftUI
 
-/// Links this Mac as a secondary device: runs `signal-cli link -n <name>` and shows the
+/// Links this Mac as a secondary device: runs `corvus-cli link -n <name>` and shows the
 /// returned URI as a QR code (rendered with Core Image, no qrencode needed).
 struct LinkView: View {
     let executable: String

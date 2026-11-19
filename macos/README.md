@@ -5,22 +5,22 @@
 | ![Light](../docs/screenshots/corvus_macOS_Light.png) | ![Dark](../docs/screenshots/corvus_macOS_Dark.png) |
 
 This directory contains a native macOS version of Corvus, written in Swift / SwiftUI (macOS 14 or newer). It has the
-same features and talks to signal-cli the same way. It links the same Rust history store (`../history-store`), so the
+same features and talks to corvus-cli the same way. It links the same Rust history store (`../history-store`), so the
 `history.corvus` format, encryption and keychain entries are identical to the Qt app.
 
 | Part | Job |
 |------|-----|
-| `Sources/CorvusCore` | UI-free logic: signal-cli process / JSON-RPC, envelope parsing, history records, chat model, keychain |
+| `Sources/CorvusCore` | UI-free logic: corvus-cli process / JSON-RPC, envelope parsing, history records, chat model, keychain |
 | `Sources/CorvusMac` | SwiftUI app: window, chat view, composer, settings, notifications, menu bar icon |
 | `Sources/CHistoryStore` | module map for `history-store/include/history_store.h` |
 
 Requirements: Xcode (its toolchain provides the SwiftUI macros; the Command Line Tools alone are not
-enough), Rust with cargo, and signal-cli (`brew install signal-cli`).
+enough), Rust with cargo, and corvus-cli (`brew install --cask corvus-cli`).
 
 ```sh
 scripts/build-app.sh            # Rust store + Swift release build -> build/Corvus.app
 open "build/Corvus.app"
-swift test                      # unit tests (envelopes, records, Rust store round trip, mock signal-cli)
+swift test                      # unit tests (envelopes, records, Rust store round trip, mock corvus-cli)
 ```
 
 If `xcode-select` points to the Command Line Tools, the script uses `/Applications/Xcode.app`
@@ -41,7 +41,7 @@ Differences from the Qt app:
   - everything else is opened in the default app only after a confirmation dialog
 
   Every file Corvus writes from an attachment is marked as downloaded (quarantine), so Gatekeeper checks it before it runs.
-  The app quarantines all files it creates (`LSFileQuarantineEnabled`); signal-cli runs through the embedded helper
+  The app quarantines all files it creates (`LSFileQuarantineEnabled`); corvus-cli runs through the embedded helper
   `Contents/Helpers/corvus-signal-cli.app` so it does not inherit that and can load its native libraries.
 - The history is stored in `~/Library/Application Support/corvus/corvus/`, the same
   location a Qt build on macOS uses.

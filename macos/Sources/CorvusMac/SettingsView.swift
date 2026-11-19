@@ -23,7 +23,7 @@ private struct GeneralSettings: View {
 
     var body: some View {
         Form {
-            Section("Signal backend (corvus-cli or signal-cli)") {
+            Section("Signal backend (corvus-cli)") {
                 LabeledContent("Backend", value: model.backendName)
                 LabeledContent("Path") {
                     Text(model.cli.executable.isEmpty ? "not found" : model.cli.executable)

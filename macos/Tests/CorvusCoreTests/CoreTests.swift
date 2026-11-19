@@ -719,7 +719,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(r.describe(), "corvus-cli did not answer in time.")
     }
 
-    func testAutodetectPrefersCorvusCli() throws {
+    func testAutodetectFindsOnlyCorvusCli() throws {
         let fm = FileManager.default
         let a = fm.temporaryDirectory.appendingPathComponent("corvus-autodetect-\(UUID().uuidString)")
         let b = a.appendingPathComponent("second")
@@ -729,14 +729,14 @@ final class BackendTests: XCTestCase {
             let p = dir.appendingPathComponent(name).path
             fm.createFile(atPath: p, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
         }
-        // signal-cli comes first on PATH, corvus-cli later: corvus-cli still wins.
+        // A signal-cli on PATH is ignored: only corvus-cli is a supported backend.
         try exe(a, "signal-cli")
         try exe(b, "corvus-cli")
         XCTAssertEqual(SignalCli.autodetect(environment: ["PATH": a.path + ":" + b.path], extraDirs: []), b.appendingPathComponent("corvus-cli").path)
         // Also when corvus-cli is only in an extra folder (Homebrew, not on a Finder app's PATH).
         XCTAssertEqual(SignalCli.autodetect(environment: ["PATH": a.path], extraDirs: [b.path]), b.appendingPathComponent("corvus-cli").path)
         try fm.removeItem(at: b.appendingPathComponent("corvus-cli"))
-        XCTAssertEqual(SignalCli.autodetect(environment: ["PATH": a.path + ":" + b.path], extraDirs: []), a.appendingPathComponent("signal-cli").path)
+        XCTAssertEqual(SignalCli.autodetect(environment: ["PATH": a.path + ":" + b.path], extraDirs: []), "")
     }
 }
 
