@@ -75,7 +75,7 @@ void LinkDialog::startLinking()
     m_name->setEnabled(false);
 
     m_proc = new QProcess(this);
-    m_proc->setProcessEnvironment(SignalCli::childEnvironment());
+    m_proc->setProcessEnvironment(SignalCli::environmentWithSecret(m_secret));
     connect(m_proc, &QProcess::readyReadStandardOutput, this, &LinkDialog::onStdout);
     connect(m_proc, &QProcess::finished, this, [this](int code, QProcess::ExitStatus) { onFinished(code); });
     connect(m_proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {

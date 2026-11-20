@@ -29,6 +29,13 @@ public:
     QString executable() const { return m_exe; }
     void setExecutable(const QString &path) { m_exe = path; }
 
+    // The secret that unlocks the encrypted data (the keychain entry, or the user's passphrase).
+    // It is passed to every corvus-cli process in its environment, so the backend's sessions,
+    // contacts and attachments open with the same unlock the chat history uses. The previous
+    // secret is passed along after a change until corvus-cli has re-wrapped its keyring.
+    void setSecret(const QString &secret) { m_secret = secret; }
+    void setPreviousSecret(const QString &secret) { m_prevSecret = secret; }
+
     // Result of a one-shot corvus-cli call.
     struct Result {
         bool ok = false;        // started, exited normally with code 0
@@ -57,6 +64,12 @@ public:
     // Environment for child processes: inside an AppImage the library/plugin
     // paths that point into the bundle are removed so the backend is not confused.
     static QProcessEnvironment childEnvironment(const QProcessEnvironment &base = QProcessEnvironment::systemEnvironment());
+    // The same, plus the unlock secret in the variables corvus-cli reads. Used for every
+    // backend process, so the encrypted sessions, contacts and attachments open with the
+    // secret the chat history was unlocked with.
+    static QProcessEnvironment environmentWithSecret(const QString &secret, const QString &previous = QString(),
+                                                     const QProcessEnvironment &base = QProcessEnvironment::systemEnvironment());
+    QProcessEnvironment backendEnvironment() const;
     // Starts corvus-cli in `p`; in the macOS app bundle through the helper app (src/SignalCliHelper.cpp).
     static void startProcess(QProcess *p, const QString &exe, const QStringList &args);
     // On macOS corvus-cli runs as another app and may not read protected folders (Desktop, Documents, …):
@@ -85,6 +98,8 @@ private:
     void failPending(const QString &reason);
 
     QString m_exe;
+    QString m_secret;
+    QString m_prevSecret;
     QProcess *m_proc = nullptr;
     QByteArray m_buf;
     QString m_lastErrLine;

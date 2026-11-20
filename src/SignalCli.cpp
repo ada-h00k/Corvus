@@ -104,6 +104,26 @@ QProcessEnvironment SignalCli::childEnvironment(const QProcessEnvironment &base)
     return env;
 }
 
+QProcessEnvironment SignalCli::environmentWithSecret(const QString &secret, const QString &previous,
+                                                     const QProcessEnvironment &base)
+{
+    QProcessEnvironment env = childEnvironment(base);
+    // The unlock secret goes to corvus-cli, which encrypts its sessions, contacts and
+    // attachments with it (the same unlock the chat history uses). The environment is used
+    // instead of the command line, whose arguments are visible to every user of the machine.
+    // A backend that does not know the variables just ignores them.
+    if (!secret.isEmpty()) {
+        env.insert(QStringLiteral("CORVUS_CLI_SECRET"), secret);
+        if (!previous.isEmpty()) env.insert(QStringLiteral("CORVUS_CLI_SECRET_PREVIOUS"), previous);
+    }
+    return env;
+}
+
+QProcessEnvironment SignalCli::backendEnvironment() const
+{
+    return environmentWithSecret(m_secret, m_prevSecret);
+}
+
 void SignalCli::startProcess(QProcess *p, const QString &exe, const QStringList &args)
 {
 #ifdef Q_OS_MACOS
@@ -156,7 +176,7 @@ static void logResult(const QString &exe, const QStringList &args, const SignalC
 void SignalCli::runAsync(const QStringList &args, int timeoutMs, ResultCallback cb)
 {
     auto *p = new QProcess(this);
-    p->setProcessEnvironment(childEnvironment());
+    p->setProcessEnvironment(backendEnvironment());
     auto *timer = new QTimer(p);
     timer->setSingleShot(true);
     auto clock = std::make_shared<QElapsedTimer>();
@@ -235,7 +255,7 @@ void SignalCli::start(const QString &account)
 {
     stop();
     QProcess *p = new QProcess(this);
-    p->setProcessEnvironment(childEnvironment());
+    p->setProcessEnvironment(backendEnvironment());
     m_proc = p;
     m_buf.clear();
     m_lastErrLine.clear();

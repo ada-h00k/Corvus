@@ -338,6 +338,12 @@ private:
 
     SignalCli m_cli;
     HistoryStore m_store;
+    // The secret the history was unlocked with (keychain entry or passphrase); every
+    // corvus-cli process gets it, so the backend's data opens with the same unlock.
+    // m_prevCliSecret holds the secret that was just replaced, until corvus-cli's keyring
+    // has been re-wrapped under the new one.
+    QString m_historySecret;
+    QString m_prevCliSecret;
     QNetworkAccessManager m_nam;
     QPointer<QNetworkReply> m_linkPreviewReply;
     QPointer<QNetworkReply> m_linkPreviewImageReply;

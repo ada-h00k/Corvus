@@ -16,9 +16,6 @@ finish-args:
   - --device=dri
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
-  # No org.freedesktop.secrets: inside the sandbox libsecret (built below) stores the history
-  # key through the Secret portal (org.freedesktop.portal.Secret), so Corvus never gets
-  # access to the host keyring and the passwords of other applications.
 
 modules:
   - name: libsecret

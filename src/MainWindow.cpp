@@ -1592,6 +1592,9 @@ void MainWindow::initialise()
         close();
         return;
     }
+    // The unlock also opens the backend's encrypted data (sessions, contacts, attachments).
+    m_cli.setSecret(m_historySecret);
+    if (!m_prevCliSecret.isEmpty()) m_cli.setPreviousSecret(m_prevCliSecret);
     if (!ensureExecutable()) return;
     connectAccount(); // asynchronous: version, accounts, then the update hint
 }
@@ -1757,6 +1760,7 @@ void MainWindow::linkDevice()
     m_cli.stop();
     setConnected(false);
     LinkDialog dlg(m_cli.executable(), this);
+    dlg.setSecret(m_historySecret);
     if (dlg.exec() == QDialog::Accepted) {
         QSettings().remove(QStringLiteral("account"));
         connectAccount();
@@ -2163,6 +2167,7 @@ bool MainWindow::unlockHistory()
                 m_historyProtectionMode = QStringLiteral("keychain");
                 settings.setValue(QStringLiteral("historyProtectionMode"), m_historyProtectionMode);
                 settings.sync();
+                m_historySecret = secret;
                 loadHistory(records);
                 return true;
             }
@@ -2198,6 +2203,7 @@ bool MainWindow::unlockHistory()
                 m_historyProtectionMode = QStringLiteral("passphrase");
             }
             if (rc == SC_OK) {
+                m_historySecret = secret;
                 loadHistory(records);
                 return true;
             }
@@ -2216,6 +2222,7 @@ bool MainWindow::unlockHistory()
                 QMessageBox::critical(this, tr("Chat history"), HistoryStore::errorText(rc));
                 return false;
             }
+            m_historySecret = secret;
             settings.setValue(QStringLiteral("historyProtectionMode"), m_historyProtectionMode);
             settings.sync();
             if (settings.status() != QSettings::NoError) {
@@ -2245,6 +2252,7 @@ bool MainWindow::unlockHistory()
                 QMessageBox::warning(this, tr("Chat history"),
                                      tr("Could not save the history protection setting."));
             }
+            m_historySecret = dlg.passphrase();
             loadHistory(records);
             return true;
         }
@@ -2514,6 +2522,12 @@ void MainWindow::changeHistoryProtection()
                 return;
             }
             m_historyProtectionMode = QStringLiteral("keychain");
+            // The backend's keyring (encrypted sessions, contacts, attachments) is re-wrapped
+            // with the new secret on its next start; until then the old secret is passed along.
+            m_prevCliSecret = oldDialog.passphrase();
+            m_historySecret = newSecret;
+            m_cli.setSecret(m_historySecret);
+            m_cli.setPreviousSecret(m_prevCliSecret);
             QMessageBox::information(this, tr("Chat history"),
                                      tr("The history is now protected by the system keychain."));
             return;
@@ -2547,6 +2561,10 @@ void MainWindow::changeHistoryProtection()
         m_historyProtectionMode = QStringLiteral("passphrase");
         if (!HistoryKeychain::clear(error))
             QMessageBox::warning(this, tr("Chat history"), error);
+        m_prevCliSecret = oldSecret;
+        m_historySecret = newDialog.passphrase();
+        m_cli.setSecret(m_historySecret);
+        m_cli.setPreviousSecret(m_prevCliSecret);
         QMessageBox::information(this, tr("Chat history"),
                                  tr("The history is now protected by your passphrase."));
         return;
@@ -2560,6 +2578,10 @@ void MainWindow::changeHistoryProtection()
         const int rc = m_store.changePassphrase(dlg.oldPassphrase(), dlg.passphrase());
         QApplication::restoreOverrideCursor();
         if (rc == SC_OK) {
+            m_prevCliSecret = dlg.oldPassphrase();
+            m_historySecret = dlg.passphrase();
+            m_cli.setSecret(m_historySecret);
+            m_cli.setPreviousSecret(m_prevCliSecret);
             QMessageBox::information(this, tr("Chat history"), tr("The passphrase has been changed."));
             return;
         }

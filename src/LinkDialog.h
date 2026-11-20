@@ -16,6 +16,10 @@ public:
     explicit LinkDialog(const QString &executable, QWidget *parent = nullptr);
     ~LinkDialog() override;
 
+    // The unlock secret, passed to corvus-cli so the freshly linked account is encrypted
+    // right away (see SignalCli::environmentWithSecret).
+    void setSecret(const QString &secret) { m_secret = secret; }
+
 private slots:
     void startLinking();
     void onStdout();
@@ -27,6 +31,7 @@ private:
     void killProcess();
 
     QString m_exe;
+    QString m_secret;
     QProcess *m_proc = nullptr;
     QByteArray m_buf;
     QLineEdit *m_name;
