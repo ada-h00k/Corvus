@@ -471,7 +471,7 @@ final class SignalCliProcessTests: XCTestCase {
         defer { try? FileManager.default.removeItem(atPath: cli.executable) }
         let (vr, version) = await cli.queryVersion()
         XCTAssertTrue(vr.ok, vr.describe())
-        XCTAssertEqual(version, "signal-cli 0.14.9")
+        XCTAssertEqual(version, "corvus-cli 1.6.0 (0123456) compatible with signal-cli 0.14.9")
         let (ar, accounts) = await cli.queryAccounts()
         XCTAssertTrue(ar.ok)
         XCTAssertEqual(accounts, ["+491234567"])
