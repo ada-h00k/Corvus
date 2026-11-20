@@ -468,15 +468,15 @@ int main(int argc, char **argv)
             CHECK(c.notification.value("category").toString() == "im.received");
             CHECK(c.notification.value("default-action").toString() == "open");
             CHECK(c.notification.value("sound").toString() == "silent"); // Corvus plays its own sound
-            // the avatar arrives as a ("bytes", PNG) icon tuple (serialized GIcon);
-            // the members are read directly (a plain QVariant would mis-read the byte array)
+            // the avatar arrives as a ("bytes", PNG) icon tuple (serialized GIcon); the tuple's
+            // second member is a variant, so it is read as one (a QByteArray read would fail)
             const QDBusArgument icon = c.notification.value("icon").value<QDBusArgument>();
             QString kind;
-            QByteArray png;
+            QVariant value;
             icon.beginStructure();
-            icon >> kind >> png;
+            icon >> kind >> value;
             icon.endStructure();
-            CHECK(kind == "bytes" && png.startsWith("\x89PNG"));
+            CHECK(kind == "bytes" && value.value<QByteArray>().startsWith("\x89PNG"));
         }
         // the same chat re-adds the same id (the portal replaces it), another chat adds another
         n.notify("conv1", "Alice", "second");

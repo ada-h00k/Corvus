@@ -212,8 +212,9 @@ bool Notifier::usingDBus()
 }
 
 // The "icon" field of the portal notification: a serialized GIcon. With an avatar that is a
-// ("bytes", PNG data) tuple, the form every portal accepts; the raw-pixel form of the direct
-// service is not part of the portal API. Without an avatar the themed application icon
+// ("bytes", PNG data) tuple, the form every portal accepts — the tuple's second member must
+// be a variant (the wire type is (sv); a plain byte array would produce (say) and make the
+// portal reject the notification as a whole). Without an avatar the themed application icon
 // shorthand (a plain icon name) is used.
 QVariant Notifier::portalIcon(const QPixmap &icon)
 {
@@ -225,7 +226,7 @@ QVariant Notifier::portalIcon(const QPixmap &icon)
         icon.save(&buffer, "PNG");
         QDBusArgument serialized;
         serialized.beginStructure();
-        serialized << QStringLiteral("bytes") << png;
+        serialized << QStringLiteral("bytes") << QDBusVariant(png);
         serialized.endStructure();
         return QVariant::fromValue(serialized);
     }
