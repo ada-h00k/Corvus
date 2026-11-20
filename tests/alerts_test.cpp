@@ -1,4 +1,5 @@
 // Tray icon, desktop notifications and sound – tested against fake D-Bus services:
+//  * org.freedesktop.portal.Notification (the portal, records every Add/RemoveNotification call)
 //  * org.freedesktop.Notifications (records every Notify / CloseNotification call)
 //  * org.kde.StatusNotifierWatcher (so Qt believes a system tray exists)
 // and a fake `paplay` in PATH that logs what it was asked to play.
@@ -16,6 +17,7 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDir>
@@ -85,6 +87,34 @@ public slots:
     void CloseNotification(uint id) { QMutexLocker l(&mu); closed.append(id); }
 };
 
+class FakePortal : public QObject
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.portal.Notification")
+    Q_PROPERTY(uint version READ version)
+public:
+    struct Call {
+        QString id;
+        QVariantMap notification;
+    };
+    mutable QMutex mu;
+    QList<Call> added;
+    QStringList removed;
+    uint version() const { return 2; }
+
+    QList<Call> snapshot() const { QMutexLocker l(&mu); return added; }
+    QStringList removedSnapshot() const { QMutexLocker l(&mu); return removed; }
+    void reset() { QMutexLocker l(&mu); added.clear(); removed.clear(); }
+
+public slots:
+    void AddNotification(const QString &id, const QVariantMap &notification)
+    {
+        QMutexLocker l(&mu);
+        added.append({id, notification});
+    }
+    void RemoveNotification(const QString &id) { QMutexLocker l(&mu); removed.append(id); }
+};
+
 class FakeWatcher : public QObject
 {
     Q_OBJECT
@@ -105,10 +135,12 @@ struct FakeBus {
     QThread thread;
     FakeNotifications *notif = new FakeNotifications;
     FakeWatcher *watcher = new FakeWatcher;
+    FakePortal *portal = new FakePortal;
     FakeBus()
     {
         notif->moveToThread(&thread);
         watcher->moveToThread(&thread);
+        portal->moveToThread(&thread);
         thread.start();
         QMetaObject::invokeMethod(notif, [this] {
             QDBusConnection bus = QDBusConnection::connectToBus(QDBusConnection::SessionBus, QStringLiteral("fake"));
@@ -117,12 +149,26 @@ struct FakeBus {
             bus.registerObject(QStringLiteral("/StatusNotifierWatcher"), watcher,
                                QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllProperties);
             bus.registerService(QStringLiteral("org.kde.StatusNotifierWatcher"));
+            bus.registerObject(QStringLiteral("/org/freedesktop/portal/desktop"), portal,
+                               QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllProperties);
         }, Qt::BlockingQueuedConnection);
     }
     ~FakeBus()
     {
         thread.quit();
         thread.wait();
+    }
+    // The portal is switched on only for the tests that exercise it: without the bus name no
+    // portal is found, and the notifier falls back to the direct Notifications service below.
+    bool setPortalUp(bool up)
+    {
+        bool ok = false;
+        QMetaObject::invokeMethod(notif, [this, up, &ok] {
+            QDBusConnection bus = QDBusConnection(QStringLiteral("fake"));
+            ok = up ? bus.registerService(QStringLiteral("org.freedesktop.portal.Desktop"))
+                    : bus.unregisterService(QStringLiteral("org.freedesktop.portal.Desktop"));
+        }, Qt::BlockingQueuedConnection);
+        return ok;
     }
     void clickNotification(uint id)
     {
@@ -131,6 +177,17 @@ struct FakeBus {
                                                         QStringLiteral("org.freedesktop.Notifications"),
                                                         QStringLiteral("ActionInvoked"));
             m << id << QStringLiteral("default");
+            QDBusConnection(QStringLiteral("fake")).send(m);
+        }, Qt::QueuedConnection);
+    }
+    // The portal's ActionInvoked grew arguments over versions (id, action, parameter av since 2).
+    void clickPortal(const QString &id)
+    {
+        QMetaObject::invokeMethod(portal, [id] {
+            QDBusMessage m = QDBusMessage::createSignal(QStringLiteral("/org/freedesktop/portal/desktop"),
+                                                        QStringLiteral("org.freedesktop.portal.Notification"),
+                                                        QStringLiteral("ActionInvoked"));
+            m << id << QStringLiteral("open") << QVariantList{QVariantMap{}};
             QDBusConnection(QStringLiteral("fake")).send(m);
         }, Qt::QueuedConnection);
     }
@@ -168,6 +225,15 @@ static void autoDialogs()
         for (QLineEdit *e : pd->findChildren<QLineEdit *>()) e->setText(QStringLiteral("test-passphrase-1"));
         pd->accept();
     } else if (auto *mb = qobject_cast<QMessageBox *>(w)) {
+        // Fresh history without a stored protection mode: choose passphrase, so the scenarios
+        // run the same way with and without a system keychain (like gui_integration_test).
+        if (mb->windowTitle() == QStringLiteral("Protect chat history")) {
+            for (QAbstractButton *b : mb->buttons())
+                if (b->text() == QStringLiteral("Use a passphrase")) {
+                    b->click();
+                    return;
+                }
+        }
         std::printf("  [unexpected message box] %s\n", qPrintable(mb->text()));
         ++g_failed;
         mb->reject();
@@ -380,6 +446,60 @@ int main(int argc, char **argv)
         CHECK(p.play(n));
         CHECK(waitFor([&] { return s.sounds() == 1; }));
         CHECK(s.lastSoundArg() == n.soundFile);
+    }
+
+    std::printf("notifier (portal)\n");
+    {
+        CHECK(bus.setPortalUp(true));
+        bus.portal->reset();
+        Notifier n;
+        CHECK(n.usingPortal());
+        QSignalSpy clicked(&n, &Notifier::activated);
+        QPixmap pm(32, 32);
+        pm.fill(Qt::blue);
+        CHECK(n.notify("conv1", "Alice", "hello <b>world</b> & co", pm) == Notifier::Delivery::Portal);
+        auto calls = bus.portal->snapshot();
+        CHECK(calls.size() == 1);
+        if (calls.size() == 1) {
+            const auto &c = calls[0];
+            CHECK(c.id == "conv1");
+            CHECK(c.notification.value("title").toString() == "Alice");
+            CHECK(c.notification.value("body").toString() == "hello <b>world</b> & co"); // plain text, the portal escapes it
+            CHECK(c.notification.value("category").toString() == "im.received");
+            CHECK(c.notification.value("default-action").toString() == "open");
+            CHECK(c.notification.value("sound").toString() == "silent"); // Corvus plays its own sound
+            // the avatar arrives as a ("bytes", PNG) icon tuple (serialized GIcon);
+            // the members are read directly (a plain QVariant would mis-read the byte array)
+            const QDBusArgument icon = c.notification.value("icon").value<QDBusArgument>();
+            QString kind;
+            QByteArray png;
+            icon.beginStructure();
+            icon >> kind >> png;
+            icon.endStructure();
+            CHECK(kind == "bytes" && png.startsWith("\x89PNG"));
+        }
+        // the same chat re-adds the same id (the portal replaces it), another chat adds another
+        n.notify("conv1", "Alice", "second");
+        n.notify("conv2", "Bob", "other chat");
+        calls = bus.portal->snapshot();
+        CHECK(calls.size() == 3);
+        if (calls.size() == 3) CHECK(calls[1].id == "conv1" && calls[2].id == "conv2");
+
+        bus.clickPortal("conv1");
+        CHECK(waitFor([&] { return clicked.count() == 1; }));
+        if (clicked.count() == 1) CHECK(clicked[0][0].toString() == "conv1");
+
+        n.close("conv2");  // withdraws that notification
+        n.close("conv3");  // never sent: must not withdraw anything
+        CHECK(waitFor([&] { return bus.portal->removedSnapshot().size() == 1; }));
+        if (bus.portal->removedSnapshot().size() == 1) CHECK(bus.portal->removedSnapshot().first() == "conv2");
+
+        CHECK(bus.setPortalUp(false));
+        bus.portal->reset();
+        Notifier offline;  // no portal on the bus: the direct service takes over
+        CHECK(!offline.usingPortal());
+        CHECK(offline.notify("k", "Alice", "hi") == Notifier::Delivery::DBus);
+        CHECK(bus.notif->snapshot().size() == 1);
     }
 
     std::printf("notifier (D-Bus)\n");

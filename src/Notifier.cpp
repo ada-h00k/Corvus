@@ -1,11 +1,12 @@
 #include "Notifier.h"
 
+#include <QBuffer>
 #include <QImage>
 #include <QSystemTrayIcon>
 
 #ifdef HAVE_QT_DBUS
-#include <QDBusConnection>
 #include <QDBusArgument>
+#include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusMetaType>
 #include <QDBusMessage>
@@ -60,8 +61,22 @@ static QVariant imageHint(const QPixmap &pm)
 #endif
 
 namespace {
+// The XDG desktop portal's notification interface. It is always reachable from inside a
+// Flatpak sandbox (no --talk-name permission needed) and is tried first wherever it runs.
+const char *kPortalService = "org.freedesktop.portal.Desktop";
+const char *kPortalPath = "/org/freedesktop/portal/desktop";
+const char *kPortalInterface = "org.freedesktop.portal.Notification";
+// Fallback when no portal runs: the freedesktop.org Notifications service, used directly.
 const char *kService = "org.freedesktop.Notifications";
 const char *kPath = "/org/freedesktop/Notifications";
+}
+
+// The icon name announced for notifications without an avatar. In a Flatpak the icon (like the
+// .desktop file) is named after the Flatpak app id, elsewhere it is the plain "corvus".
+static QString themedIconName()
+{
+    const QString flatpakId = qEnvironmentVariable("FLATPAK_ID");
+    return flatpakId.isEmpty() ? QStringLiteral("corvus") : flatpakId;
 }
 
 Notifier::Notifier(QObject *parent) : QObject(parent)
@@ -83,6 +98,8 @@ void Notifier::setTrayCapabilitiesForTesting(bool available, bool supportsMessag
 QString Notifier::describe(Delivery d)
 {
     switch (d) {
+    case Delivery::Portal:
+        return tr("Sent to the desktop notification service through the portal.");
     case Delivery::DBus:
         return tr("Sent to the desktop notification service.");
     case Delivery::Tray:
@@ -128,6 +145,40 @@ void Notifier::connectTray(QSystemTrayIcon *tray)
     });
 }
 
+bool Notifier::ensurePortal()
+{
+#ifdef HAVE_QT_DBUS
+    if (m_portalChecked) return m_portalOk;
+    m_portalChecked = true;
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.isConnected()) return false;
+    m_portal = new QDBusInterface(QLatin1String(kPortalService), QLatin1String(kPortalPath),
+                                  QLatin1String(kPortalInterface), bus, this);
+    m_portal->setTimeout(3000);
+    if (!m_portal->isValid()) {
+        m_portal->deleteLater();
+        m_portal = nullptr;
+        return false;
+    }
+    const QVariant version = m_portal->property("version"); // advertised by every portal
+    m_portalVersion = version.isValid() ? version.toUInt() : 1;
+    // The portal reports clicks by sending ActionInvoked back to the caller. The signal grew
+    // arguments over versions (id, action, [platform data …]); a slot with only the first one
+    // (the notification id, i.e. our conversation key) matches every variant of it.
+    bus.connect(QLatin1String(kPortalService), QLatin1String(kPortalPath), QLatin1String(kPortalInterface),
+                QStringLiteral("ActionInvoked"), this, SLOT(onPortalActionInvoked(QString)));
+    m_portalOk = true;
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool Notifier::usingPortal()
+{
+    return ensurePortal();
+}
+
 bool Notifier::ensureDBus()
 {
 #ifdef HAVE_QT_DBUS
@@ -160,18 +211,66 @@ bool Notifier::usingDBus()
     return ensureDBus();
 }
 
+// The "icon" field of the portal notification: a serialized GIcon. With an avatar that is a
+// ("bytes", PNG data) tuple, the form every portal accepts; the raw-pixel form of the direct
+// service is not part of the portal API. Without an avatar the themed application icon
+// shorthand (a plain icon name) is used.
+QVariant Notifier::portalIcon(const QPixmap &icon)
+{
+#ifdef HAVE_QT_DBUS
+    if (!icon.isNull()) {
+        QByteArray png;
+        QBuffer buffer(&png);
+        buffer.open(QIODevice::WriteOnly);
+        icon.save(&buffer, "PNG");
+        QDBusArgument serialized;
+        serialized.beginStructure();
+        serialized << QStringLiteral("bytes") << png;
+        serialized.endStructure();
+        return QVariant::fromValue(serialized);
+    }
+    return themedIconName();
+#else
+    Q_UNUSED(icon)
+    return {};
+#endif
+}
+
 Notifier::Delivery Notifier::notify(const QString &key, const QString &title, const QString &body, const QPixmap &icon)
 {
 #ifdef HAVE_QT_DBUS
+    if (ensurePortal()) {
+        QVariantMap notification;
+        notification.insert(QStringLiteral("title"), title);
+        notification.insert(QStringLiteral("body"), body); // plain text: the portal escapes it itself
+        notification.insert(QStringLiteral("category"), QStringLiteral("im.received"));
+        notification.insert(QStringLiteral("default-action"), QStringLiteral("open"));
+        notification.insert(QStringLiteral("icon"), portalIcon(icon));
+        if (m_portalVersion >= 2)
+            notification.insert(QStringLiteral("sound"), QStringLiteral("silent")); // Corvus plays its own sound
+        // Re-adding the same id replaces the previous notification, so per-conversation
+        // replacement needs no id bookkeeping here (unlike the direct service below).
+        const QDBusMessage reply =
+            m_portal->call(QStringLiteral("AddNotification"), key, QVariant::fromValue(notification));
+        if (reply.type() != QDBusMessage::ErrorMessage) {
+            m_portalSent.insert(key);
+            return Delivery::Portal;
+        }
+        // The portal stopped answering: fall through to the direct service or the tray.
+        m_portalOk = false;
+        m_portalChecked = false;
+        m_portal->deleteLater();
+        m_portal = nullptr;
+    }
     if (ensureDBus()) {
         QVariantMap hints;
-        hints.insert(QStringLiteral("desktop-entry"), QStringLiteral("corvus"));
+        hints.insert(QStringLiteral("desktop-entry"), themedIconName());
         hints.insert(QStringLiteral("category"), QStringLiteral("im.received"));
         if (!icon.isNull()) hints.insert(QStringLiteral("image-data"), imageHint(icon)); // preferred over app_icon
         const QString text = m_markup ? body.toHtmlEscaped() : body; // servers with markup would eat "<"
         const QDBusMessage reply = m_iface->call(QStringLiteral("Notify"), QStringLiteral("Corvus"),
                                                  QVariant::fromValue<uint>(m_idForKey.value(key, 0)),
-                                                 QStringLiteral("corvus"), title, text,
+                                                 themedIconName(), title, text,
                                                  QStringList{QStringLiteral("default"), tr("Open")}, hints, -1);
         if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
             const uint id = reply.arguments().first().toUInt();
@@ -202,6 +301,8 @@ Notifier::Delivery Notifier::notify(const QString &key, const QString &title, co
 void Notifier::close(const QString &key)
 {
 #ifdef HAVE_QT_DBUS
+    if (m_portalSent.remove(key) && m_portalOk && m_portal)
+        m_portal->call(QStringLiteral("RemoveNotification"), key);
     const uint id = m_idForKey.take(key);
     if (id) {
         m_keyForId.remove(id);
@@ -216,6 +317,11 @@ void Notifier::onActionInvoked(uint id, const QString &)
 {
     const QString key = m_keyForId.value(id);
     if (!key.isEmpty()) emit activated(key);
+}
+
+void Notifier::onPortalActionInvoked(const QString &id)
+{
+    if (!id.isEmpty()) emit activated(id);
 }
 
 void Notifier::onClosed(uint id, uint)

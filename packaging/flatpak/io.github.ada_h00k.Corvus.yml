@@ -14,7 +14,6 @@ finish-args:
   - --socket=fallback-x11
   - --socket=pulseaudio
   - --device=dri
-  - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
 
 modules:
@@ -112,10 +111,6 @@ modules:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
 
-  # Spell checking (Hunspell) and the dictionaries for it. The dictionaries come from the
-  # LibreOffice dictionaries repository (pinned to one commit); their licences are the ones
-  # of the README files installed next to the licence of Corvus. More languages: put
-  # <lang>.dic/.aff into ~/.var/app/io.github.ada_h00k.Corvus/data/corvus/corvus/dictionaries/
   - name: hunspell
     buildsystem: autotools
     config-opts:
@@ -252,7 +247,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/ada-h00k/Corvus.git
-        tag: v1.5.0
+        tag: v1.5.1
         commit: 379ed63930a0852eda6cadcf916e252d75fee282
         x-checker-data:
           type: git

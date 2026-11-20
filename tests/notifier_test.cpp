@@ -83,6 +83,7 @@ private slots:
         QVERIFY(!none.isEmpty() && !tray.isEmpty());
         QVERIFY(none != tray);
         QVERIFY(tray.contains(QStringLiteral("Focus assist"))); // points at the Windows setting
+        QVERIFY(!Notifier::describe(Notifier::Delivery::Portal).isEmpty());
         QVERIFY(!Notifier::describe(Notifier::Delivery::DBus).isEmpty());
         QVERIFY(!Notifier::describe(Notifier::Delivery::TemporaryTray).isEmpty());
     }

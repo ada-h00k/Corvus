@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Stable local/default version; release builds take their version from the vX.Y.Z Git tag.
-set(CORVUS_VERSION "1.5.0")
+set(CORVUS_VERSION "1.5.1")
 if(DEFINED ENV{GITHUB_REF_TYPE} AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag")
     set(CORVUS_TAG "$ENV{GITHUB_REF_NAME}")
     if(NOT CORVUS_TAG MATCHES "^v([0-9]+\\.[0-9]+\\.[0-9]+)$")
@@ -177,7 +177,7 @@ endif()
 if(TARGET Qt6::DBus)
     target_link_libraries(app_core PUBLIC Qt6::DBus)
     target_compile_definitions(app_core PUBLIC HAVE_QT_DBUS)
-    message(STATUS "Desktop notifications: freedesktop.org D-Bus")
+    message(STATUS "Desktop notifications: desktop portal + freedesktop.org D-Bus fallback")
 else()
     message(STATUS "Desktop notifications: tray icon fallback only (Qt DBus not found)")
 endif()
