@@ -54,6 +54,8 @@ flatpak install --user flatpark io.github.ada_h00k.Corvus
 
 The Flatpak includes [`corvus-cli`](https://github.com/ada-h00k/corvus-cli) and `qrencode`, so nothing else has to be installed.
 
+The history key (and the GIPHY API key) is stored through the Flatpak Secret portal, so Corvus does not get access to your system keyring or to the passwords of other applications. This needs a portal backend that implements the Secret portal; if your desktop has none, protect the history with a passphrase instead.
+
 **Other installation methods**
 
 The standalone installer is also available from the [latest GitHub release](https://github.com/ada-h00k/Corvus/releases/latest). Download `corvus-linux-x86_64-installer.tar.gz`, extract it and run:
