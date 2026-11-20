@@ -156,16 +156,7 @@ enum AppPaths {
         return base.appendingPathComponent("corvus/corvus", isDirectory: true)
     }
 
-    /// Moves a history from the former "wren" / "signal-cli-qt" locations once per run.
-    private static let legacyMigration: Void = {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["CORVUS_DATA_DIR"] != nil { return }
-        #endif
-        LegacyMigration.migrateData(to: dataDirURL)
-    }()
-
     static var dataDir: URL {
-        _ = legacyMigration
         let dir = dataDirURL
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir

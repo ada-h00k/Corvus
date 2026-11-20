@@ -134,8 +134,6 @@ set(APP_SOURCES
     src/MainWindow.cpp
     src/LinkDialog.h
     src/LinkDialog.cpp
-    src/LegacyMigration.h
-    src/LegacyMigration.cpp
 )
 
 add_library(app_core STATIC ${APP_SOURCES})
@@ -307,14 +305,6 @@ if(CORVUS_TESTS)
         MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
     add_test(NAME voice_window COMMAND voice_window_test)
     set_tests_properties(voice_window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)
-
-    add_executable(migration_test tests/migration_test.cpp)
-    target_link_libraries(migration_test PRIVATE app_core Qt6::Test)
-    add_test(NAME migration COMMAND migration_test)
-    set_tests_properties(migration PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-        TIMEOUT 60
-    )
 
     add_executable(startup_test tests/startup_test.cpp)
     target_link_libraries(startup_test PRIVATE app_core)

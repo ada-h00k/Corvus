@@ -1,5 +1,4 @@
 #include "HistoryKeychain.h"
-#include "LegacyMigration.h"
 
 #include <qt6keychain/keychain.h>
 
@@ -20,42 +19,6 @@ void waitForJob(QKeychain::Job &job)
     loop.exec();
 }
 
-// Entries written under a former name (wren-history, signal-cli-qt-history) are moved over on first read.
-void deleteLegacy()
-{
-    const QStringList services = LegacyMigration::legacyHistoryServices();
-    for (const QString &service : services) {
-        QKeychain::DeletePasswordJob job(service);
-        job.setKey(kKey);
-        job.setInsecureFallback(false);
-        waitForJob(job);
-    }
-}
-
-// Copies the secret from the newest old service name that has one to the new one and removes the
-// old entries. If the new entry cannot be written, the old ones are kept and tried again on the
-// next start.
-bool migrateLegacy(QString &secret)
-{
-    const QStringList services = LegacyMigration::legacyHistoryServices();
-    for (const QString &service : services) {
-        QKeychain::ReadPasswordJob legacy(service);
-        legacy.setKey(kKey);
-        legacy.setInsecureFallback(false);
-        waitForJob(legacy);
-        if (legacy.error() != QKeychain::NoError) continue;
-        secret = legacy.textData();
-
-        QKeychain::WritePasswordJob write(kService);
-        write.setKey(kKey);
-        write.setTextData(secret);
-        write.setInsecureFallback(false);
-        waitForJob(write);
-        if (write.error() == QKeychain::NoError) deleteLegacy();
-        return true;
-    }
-    return false;
-}
 }
 
 bool HistoryKeychain::isAvailable()
@@ -71,7 +34,6 @@ bool HistoryKeychain::load(QString &secret, QString &error)
     job.setKey(kKey);
     job.setInsecureFallback(false);
     waitForJob(job);
-    if (job.error() == QKeychain::EntryNotFound && migrateLegacy(secret)) return true;
     if (job.error() != QKeychain::NoError) {
         error = job.errorString();
         return false;
@@ -100,7 +62,6 @@ bool HistoryKeychain::clear(QString &error)
     job.setKey(kKey);
     job.setInsecureFallback(false);
     waitForJob(job);
-    deleteLegacy(); // an old entry must not resurrect a secret that was just removed
     if (job.error() == QKeychain::NoError || job.error() == QKeychain::EntryNotFound) return true;
     error = job.errorString();
     return false;

@@ -17,9 +17,6 @@ pkgdesc='Native Qt 6 GUI for Signal with an encrypted local chat history'
 arch=('x86_64')
 url='https://github.com/ada-h00k/Corvus'
 license=('AGPL-3.0-only')
-# Corvus was called Wren before: replace the old package instead of clashing with it.
-replaces=('wren')
-conflicts=('wren')
 depends=(
   'gcc-libs'
   'glibc'

@@ -1,5 +1,4 @@
 #include "GiphyApiKeyStore.h"
-#include "LegacyMigration.h"
 
 #include <qt6keychain/keychain.h>
 
@@ -29,33 +28,6 @@ bool removeLegacySetting(QString &error)
     if (settings.status() == QSettings::NoError) return true;
     error = QObject::tr("Could not remove the old plaintext GIPHY API key from settings.");
     return false;
-}
-
-// Entries written under a former name (wren, signal-cli-qt) are moved over on first read.
-bool readLegacyKeychain(QString &apiKey)
-{
-    const QStringList services = LegacyMigration::legacyGiphyServices();
-    for (const QString &service : services) {
-        QKeychain::ReadPasswordJob job(service);
-        job.setKey(kKey);
-        job.setInsecureFallback(false);
-        waitForJob(job);
-        if (job.error() != QKeychain::NoError) continue;
-        apiKey = job.textData();
-        return true;
-    }
-    return false;
-}
-
-void deleteLegacyKeychain()
-{
-    const QStringList services = LegacyMigration::legacyGiphyServices();
-    for (const QString &service : services) {
-        QKeychain::DeletePasswordJob job(service);
-        job.setKey(kKey);
-        job.setInsecureFallback(false);
-        waitForJob(job);
-    }
 }
 
 bool writeKeychain(const QString &apiKey, QString &error)
@@ -99,18 +71,6 @@ bool GiphyApiKeyStore::load(QString &apiKey, QString &error)
         return false;
     }
 
-    QString oldEntry;
-    if (readLegacyKeychain(oldEntry)) {
-        apiKey = oldEntry.trimmed();
-        QString ignored;
-        if (writeKeychain(apiKey, ignored)) deleteLegacyKeychain(); // otherwise retried on the next start
-        if (QSettings().contains(kLegacySetting) && !removeLegacySetting(error)) {
-            apiKey.clear();
-            return false;
-        }
-        return true;
-    }
-
     const QString legacyKey = QSettings().value(kLegacySetting).toString().trimmed();
     if (legacyKey.isEmpty()) return true;
     if (!writeKeychain(legacyKey, error)) return false;
@@ -148,6 +108,5 @@ bool GiphyApiKeyStore::clear(QString &error)
         error = job.errorString();
         return false;
     }
-    deleteLegacyKeychain();
     return removeLegacySetting(error);
 }

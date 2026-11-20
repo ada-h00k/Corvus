@@ -61,13 +61,6 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
-[InstallDelete]
-; Corvus was called Wren before. The AppId is unchanged, so this setup upgrades an existing
-; installation in place (same folder); remove the files and shortcuts of the old name.
-Type: files; Name: "{app}\wren.exe"
-Type: files; Name: "{autoprograms}\Wren.lnk"
-Type: files; Name: "{autodesktop}\Wren.lnk"
-
 [UninstallDelete]
 ; Older setups downloaded signal-cli (and optionally a Java runtime) into this folder.
 ; Your Signal account data (~\.local\share\corvus-cli) and Corvus's chat history are NOT removed.

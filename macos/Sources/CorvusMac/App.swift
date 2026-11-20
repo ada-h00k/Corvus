@@ -32,8 +32,7 @@ enum SingleInstance {
     private static var fd: Int32 = -1
 
     static func acquire() -> Bool {
-        _ = AppPaths.dataDir // runs the one-time data migration first
-        if LegacyMigration.olderInstanceRunning { return false } // an older version still uses the history
+        _ = AppPaths.dataDir // creates the data folder
         fd = open(AppPaths.lockPath, O_RDWR | O_CREAT, 0o600)
         guard fd >= 0 else { return true } // cannot lock (permissions): let the store report problems
         if flock(fd, LOCK_EX | LOCK_NB) == 0 {
@@ -56,10 +55,7 @@ enum SingleInstance {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let model: AppModel = {
-        LegacyMigration.migrateDefaults() // before anything reads the preferences
-        return AppModel()
-    }()
+    let model = AppModel()
     private var inputMonitor: Any?
 
     func applicationWillFinishLaunching(_ notification: Notification) {

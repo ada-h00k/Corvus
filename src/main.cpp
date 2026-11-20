@@ -1,5 +1,4 @@
 #include "AppIcon.h"
-#include "LegacyMigration.h"
 #include "MainWindow.h"
 
 #include <QApplication>
@@ -41,13 +40,6 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QApplication::setOrganizationName(QStringLiteral("corvus"));
     QApplication::setApplicationName(QStringLiteral("corvus"));
-
-    // Data written under the former name "signal-cli-qt" (history, settings) is moved over once.
-    QString migrationError;
-    if (!LegacyMigration::migrateDataAndSettings(migrationError)) {
-        QMessageBox::critical(nullptr, QObject::tr("Corvus"), migrationError);
-        return 1;
-    }
 
     // Registering an application ID with the desktop portal only works when a matching
     // .desktop file is installed. Without one (e.g. running from the build directory) it

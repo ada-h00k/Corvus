@@ -15,26 +15,6 @@ binary_file="$app_dir/corvus"
 bin_link="$bin_dir/corvus"
 
 # ------------------------------------------------------------
-# Former name (Wren)
-# ------------------------------------------------------------
-
-# Removes an installation made under the former name "Wren". Chat history, settings and
-# keychain entries are not touched; Corvus migrates them on first start.
-remove_former_install() {
-    local old_app_dir="$HOME/.local/opt/wren"
-    local old_link="$bin_dir/wren"
-
-    # Only remove the link if it points into the old installation directory.
-    if [[ -L "$old_link" && "$(readlink -- "$old_link")" == "$old_app_dir/"* ]]; then
-        rm -f -- "$old_link"
-    fi
-    rm -f -- "$applications_dir/wren.desktop"
-    rm -f -- "$icons_dir/wren.svg"
-    rm -f -- "$old_app_dir/wren"
-    rmdir -- "$old_app_dir" 2>/dev/null || true
-}
-
-# ------------------------------------------------------------
 # Uninstall
 # ------------------------------------------------------------
 
@@ -45,7 +25,6 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f -- "$desktop_file"
     rm -f -- "$icon_file"
     rm -f -- "$binary_file"
-    remove_former_install
 
     # Remove installation directory if it is now empty.
     rmdir -- "$app_dir" 2>/dev/null || true
@@ -90,7 +69,6 @@ done
 
 mkdir -p "$app_dir" "$bin_dir" "$applications_dir" "$icons_dir"
 
-remove_former_install
 
 install -m 755 "$binary_source" "$binary_file"
 ln -sfn "$binary_file" "$bin_link"
