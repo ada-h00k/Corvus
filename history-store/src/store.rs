@@ -118,6 +118,18 @@ pub enum Record {
     Mute { c: String, v: bool },
     /// Signal disappearing-message timer in seconds (0 = disabled).
     Expiration { c: String, v: i64 },
+    /// One vote on a poll by `by` on the poll message `(ts, au)`. `oi` holds the
+    /// chosen option indexes (an empty list takes the vote back), `vc` the voter's
+    /// sequence number and `vt` the vote timestamp.
+    PollVote { c: String, ts: i64, au: String, by: String, oi: Vec<i64>, vc: i64, vt: i64 },
+    /// A pinned message. `at` is when the pin was received/sent (local clock) and
+    /// `d` its duration in seconds (-1 = forever); `rm` removes the pin again.
+    /// Written by the Qt app at Records.cpp:pin.
+    Pin { c: String, ts: i64, au: String, by: String, at: i64, d: i64, rm: bool },
+    /// Conversation blocked (signal-cli "block" state synced from the phone).
+    Blocked { c: String, v: bool },
+    /// Message request declined (the conversation was never opened).
+    Declined { c: String },
 }
 
 /// Incremental writer for one flat JSON object with a fixed key order.
@@ -174,6 +186,17 @@ fn f_i64(o: &Fields, k: &str) -> Result<i64, json::Error> {
 fn f_bool(o: &Fields, k: &str) -> Result<bool, json::Error> {
     field(o, k)?.as_bool().ok_or_else(|| json::Error(format!("field `{k}` must be a boolean")))
 }
+fn f_i64_arr(o: &Fields, k: &str) -> Result<Vec<i64>, json::Error> {
+    let items = match field(o, k)? {
+        Value::Arr(items) => items,
+        _ => return Err(json::Error(format!("field `{k}` must be an array of integers"))),
+    };
+    items
+        .iter()
+        .map(Value::as_i64)
+        .collect::<Option<Vec<i64>>>()
+        .ok_or_else(|| json::Error(format!("field `{k}` must be an array of integers")))
+}
 
 impl Record {
     /// Compact JSON object; the tag `t` comes first.
@@ -194,6 +217,26 @@ impl Record {
             Record::Archive { c, v, s } => ObjWriter::new("a").str("c", c).bool("v", *v).bool("s", *s).end(),
             Record::Mute { c, v } => ObjWriter::new("k").str("c", c).bool("v", *v).end(),
             Record::Expiration { c, v } => ObjWriter::new("e").str("c", c).int("v", *v).end(),
+            Record::PollVote { c, ts, au, by, oi, vc, vt } => {
+                let oi: Vec<Value> = oi.iter().map(|&i| Value::from_i64(i)).collect();
+                ObjWriter::new("pv")
+                    .str("c", c)
+                    .int("ts", *ts)
+                    .str("au", au)
+                    .str("by", by)
+                    .val("oi", &Value::Arr(oi))
+                    .int("vc", *vc)
+                    .int("vt", *vt)
+                    .end()
+            }
+            Record::Pin { c, ts, au, by, at, d, rm } => {
+                // Records.cpp only writes "rm" for an actual unpin; keep the same shape.
+                let w = ObjWriter::new("pi").str("c", c).int("ts", *ts).str("au", au).str("by", by).int("at", *at).int("d", *d);
+                let w = if *rm { w.bool("rm", true) } else { w };
+                w.end()
+            }
+            Record::Blocked { c, v } => ObjWriter::new("b").str("c", c).bool("v", *v).end(),
+            Record::Declined { c } => ObjWriter::new("j").str("c", c).end(),
         }
     }
 
@@ -228,6 +271,26 @@ impl Record {
             "a" => Record::Archive { c: f_str(o, "c")?, v: f_bool(o, "v")?, s: f_bool(o, "s")? },
             "k" => Record::Mute { c: f_str(o, "c")?, v: f_bool(o, "v")? },
             "e" => Record::Expiration { c: f_str(o, "c")?, v: f_i64(o, "v")? },
+            "pv" => Record::PollVote {
+                c: f_str(o, "c")?,
+                ts: f_i64(o, "ts")?,
+                au: f_str(o, "au")?,
+                by: f_str(o, "by")?,
+                oi: f_i64_arr(o, "oi")?,
+                vc: f_i64(o, "vc")?,
+                vt: f_i64(o, "vt")?,
+            },
+            "pi" => Record::Pin {
+                c: f_str(o, "c")?,
+                ts: f_i64(o, "ts")?,
+                au: f_str(o, "au")?,
+                by: f_str(o, "by")?,
+                at: f_i64(o, "at")?,
+                d: f_i64(o, "d")?,
+                rm: o.get("rm").and_then(Value::as_bool).unwrap_or(false),
+            },
+            "b" => Record::Blocked { c: f_str(o, "c")?, v: f_bool(o, "v")? },
+            "j" => Record::Declined { c: f_str(o, "c")? },
             other => return Err(json::Error(format!("unknown record type `{other}`"))),
         })
     }
@@ -747,6 +810,53 @@ mod tests {
         );
         // and null extras are not written back
         assert!(!r.to_json().contains("\"d\""));
+    }
+
+    /// The Qt app (Records.cpp) writes four tags the store used not to know: poll
+    /// votes (`pv`), pins (`pi`), blocks (`b`) and declined requests (`j`). Before
+    /// these variants existed, any of them made append fail and let a whole rewrite
+    /// fail with SC_ERR_ARG, so deleting a conversation, deleting a message, a
+    /// remote delete-for-everyone and disappearing-message expiry never scrubbed
+    /// the old ciphertext from the history file.
+    #[test]
+    fn qt_only_record_kinds_roundtrip_through_the_store() {
+        let p = tmp();
+        let recs = vec![
+            Record::PollVote { c: "+49".into(), ts: 10, au: "+49".into(), by: "+1".into(), oi: vec![0, 2], vc: 3, vt: 10 },
+            Record::Pin { c: "+49".into(), ts: 10, au: "+1".into(), by: "+1".into(), at: 20, d: -1, rm: false },
+            Record::Pin { c: "+49".into(), ts: 10, au: "+1".into(), by: "+1".into(), at: 21, d: 86400, rm: true },
+            Record::Blocked { c: "+49".into(), v: true },
+            Record::Declined { c: "+49".into() },
+        ];
+        // Exactly the JSON Records.cpp emits for these kinds parses into the variants.
+        for (json, want) in [
+            (
+                r#"{"t":"pv","c":"+49","ts":10,"au":"+49","by":"+1","oi":[0,2],"vc":3,"vt":10}"#,
+                recs[0].clone(),
+            ),
+            (
+                r#"{"t":"pi","c":"+49","ts":10,"au":"+1","by":"+1","at":20,"d":-1}"#,
+                recs[1].clone(),
+            ),
+            (
+                r#"{"t":"pi","c":"+49","ts":10,"au":"+1","by":"+1","at":21,"d":86400,"rm":true}"#,
+                recs[2].clone(),
+            ),
+            (r#"{"t":"b","c":"+49","v":true}"#, recs[3].clone()),
+            (r#"{"t":"j","c":"+49"}"#, recs[4].clone()),
+        ] {
+            assert_eq!(Record::from_json(json).unwrap(), want);
+        }
+
+        let mut s = Store::create(&p, "pw", FAST).unwrap();
+        for r in &recs {
+            s.append(r).unwrap();
+        }
+        // The compaction path (delete/expiry) must keep these records, not choke on them.
+        s.rewrite(&recs).unwrap();
+        drop(s);
+        let (_, back) = Store::open(&p, "pw").unwrap();
+        assert_eq!(back, recs);
     }
 
     #[test]

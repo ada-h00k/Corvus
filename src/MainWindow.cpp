@@ -1110,7 +1110,10 @@ MainWindow::MainWindow()
     });
     m_notifier = new Notifier(this);
     // History appends are written by a background thread; failures come back here.
+    // Appends are not worth a dialog (the message stays visible in the chat either
+    // way), but they must never be lost silently.
     m_store.setAppendErrorHandler(this, [this](int rc) {
+        qWarning() << "History append failed:" << HistoryStore::errorText(rc);
     });
     m_tray = new QSystemTrayIcon(AppIcon::tray(0), this);
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &MainWindow::applyTheme);
@@ -2430,6 +2433,17 @@ void MainWindow::persist(const QJsonObject &record)
     m_store.append(record);
 }
 
+void MainWindow::handleHistoryWriteError(int rc)
+{
+    const QString detail = HistoryStore::errorText(rc);
+    qWarning() << "History write failed:" << detail;
+    // Deletion and expiry promise that the ciphertext leaves the disk; a failed
+    // rewrite breaks that promise silently. The user must get a chance to act.
+    QMessageBox::warning(this, tr("Chat history"),
+                         tr("Writing the encrypted chat history failed (%1). Deleted or expired messages may reappear after a restart, and recent changes may not be saved.")
+                             .arg(detail));
+}
+
 void MainWindow::learnName(const QString &key, const QString &name)
 {
     if (isNoteToSelf(key)) return; // the chat with ourselves keeps its fixed title
@@ -2621,7 +2635,9 @@ void MainWindow::removeConversation(const QString &key)
         updateAttachBar();
     }
     // Compacts the file (old ciphertext is gone); runs on the history writer thread.
-    m_store.rewriteAsync(allRecords(), this, [this](int) { });
+    m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+        if (rc != SC_OK) handleHistoryWriteError(rc);
+    });
     refreshList();
     showConversation();
 }
@@ -2686,6 +2702,7 @@ bool MainWindow::removeMessage(const QString &key, qint64 timestamp)
         int at = conversation->msgs.size();
         while (at > 0 && conversation->msgs[at - 1].sortTs() > removed.sortTs()) --at;
         conversation->msgs.insert(at, removed);
+        handleHistoryWriteError(rc);
         return false;
     }
     if (key == m_current) showConversation(true);
@@ -3008,6 +3025,7 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     const int rc = m_store.rewrite(allRecords());
     if (rc != SC_OK) {
         persist(Records::deletion(key, m)); // at least keep the placeholder after a restart
+        handleHistoryWriteError(rc);
     }
     if (key == m_current) showConversation(true);
     refreshList();
@@ -3288,7 +3306,9 @@ void MainWindow::expireMessages()
     if (!changed) return;
 
     // Serialising and encrypting the whole history happens on the history writer thread.
-    m_store.rewriteAsync(allRecords(), this, [this](int) { });
+    m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+        if (rc != SC_OK) handleHistoryWriteError(rc);
+    });
     if (m_convs.contains(m_current)) showConversation(true);
     refreshList();
 }
@@ -7045,7 +7065,9 @@ void MainWindow::openMessageRequests()
         m_hiddenContacts.remove(key);
         m_declined.remove(key);
         // drop a stored "declined" record, if any
-        m_store.rewriteAsync(allRecords(), this, [this](int) { });
+        m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+            if (rc != SC_OK) handleHistoryWriteError(rc);
+        });
         if (m_convs.contains(key)) {
             m_showArchived = false;
             switchConversation(key);
