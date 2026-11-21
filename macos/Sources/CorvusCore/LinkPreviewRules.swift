@@ -39,6 +39,62 @@ public enum LinkPreviewRules {
         return inet_pton(AF_INET, h, &v4) == 1 || inet_pton(AF_INET6, h, &v6) == 1
     }
 
+    /// True when every address `host` resolves to is public. `isSafeToFetch` only looks
+    /// at the name: "127.0.0.1.nip.io" or a DNS-rebinding server would pass it and could
+    /// still point a preview fetch at this machine or the local network. Called before
+    /// every fetch and again for every redirect target.
+    public static func resolvesPublicly(_ host: String) -> Bool {
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &info) == 0, let first = info else { return false }
+        defer { freeaddrinfo(info) }
+        var node: UnsafeMutablePointer<addrinfo>? = first
+        while let p = node {
+            defer { node = p.pointee.ai_next }
+            guard let sa = p.pointee.ai_addr else { return false }
+            if sa.pointee.sa_family == sa_family_t(AF_INET) {
+                let sin = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                let bytes = withUnsafeBytes(of: sin.sin_addr.s_addr) { Array($0) }
+                if isNonPublicIPv4(bytes) { return false }
+            } else if sa.pointee.sa_family == sa_family_t(AF_INET6) {
+                let sin6 = sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee }
+                let bytes = withUnsafeBytes(of: sin6.sin6_addr) { Array($0) }
+                if isNonPublicIPv6(bytes) { return false }
+            } else {
+                return false // neither IPv4 nor IPv6: do not fetch
+            }
+        }
+        return true
+    }
+
+    /// Four bytes of an IPv4 address in network order: loopback, RFC 1918, link-local,
+    /// CGNAT, 0/8 ("this network") are not public.
+    static func isNonPublicIPv4(_ b: [UInt8]) -> Bool {
+        switch b[0] {
+        case 0, 10, 127: return true
+        case 169: return b[1] == 254 // 169.254/16 link-local (incl. cloud metadata)
+        case 172: return (b[1] & 0xF0) == 16 // 172.16/12
+        case 192: return b[1] == 168 // 192.168/16
+        case 100: return (b[1] & 0xC0) == 64 // 100.64/10 carrier-grade NAT
+        default: return false
+        }
+    }
+
+    /// Sixteen bytes of an IPv6 address in network order: loopback, unspecified,
+    /// unique-local, link-local and every IPv4-embedded form are not public.
+    static func isNonPublicIPv6(_ b: [UInt8]) -> Bool {
+        if b[0] == 0xFE && (b[1] & 0xC0) == 0x80 { return true } // fe80::/10 link-local
+        if b[0] == 0xFC || b[0] == 0xFD { return true } // fc00::/7 unique-local
+        if b.starts(with: [UInt8](repeating: 0, count: 12)) { return true } // :: and IPv4-compatible
+        if b.starts(with: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF]) { // ::ffff:0:0/96 mapped
+            return isNonPublicIPv4([b[12], b[13], b[14], b[15]])
+        }
+        if b.starts(with: [0x64, 0xFF, 0x9B, 0]) { return true } // 64:ff9b::/96 NAT64 of local space
+        return false
+    }
+
     /// File suffix for a preview image's content type; "" if the type is not accepted.
     public static func imageSuffix(contentType: String) -> String {
         switch contentType.split(separator: ";").first.map({ $0.trimmingCharacters(in: .whitespaces).lowercased() }) ?? "" {

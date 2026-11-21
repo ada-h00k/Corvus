@@ -59,6 +59,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHostAddress>
+#include <QHostInfo>
 #include <QIconEngine>
 #include <QInputDialog>
 #include <QBuffer>
@@ -143,6 +144,40 @@ static bool safeHttpsPreviewUrl(const QUrl &url)
         host.endsWith(QLatin1String(".test")) || !host.contains(QLatin1Char('.'))) return false;
     QHostAddress address;
     if (address.setAddress(host)) return false; // never fetch an IP literal (local/private or otherwise)
+    return true;
+}
+
+// True when every address the host resolves to is public. safeHttpsPreviewUrl only
+// looks at the name: "127.0.0.1.nip.io" or a DNS-rebinding server would pass it and
+// could still point a preview fetch at this machine or the local network.
+static bool isPublicPreviewAddress(const QHostAddress &a)
+{
+    QHostAddress addr = a;
+    // IPv4-mapped IPv6 (::ffff:10.0.0.1): classify by the embedded IPv4 address.
+    if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
+        bool mapped = false;
+        const quint32 v4 = addr.toIPv4Address(&mapped);
+        if (mapped) addr = QHostAddress(v4);
+    }
+    if (addr.isNull() || addr.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol) return false;
+    if (addr == QHostAddress(QHostAddress::Any) || addr == QHostAddress(QHostAddress::AnyIPv4))
+        return false; // the unspecified addresses ("::" and 0.0.0.0)
+    if (addr.isLoopback() || addr.isLinkLocal() || addr.isMulticast()) return false;
+    if (addr.protocol() == QAbstractSocket::IPv4Protocol) {
+        // RFC 1918 private ranges, the shared (carrier NAT) range 100.64/10 and 0/8.
+        // Checked on the bytes so no Qt version's address-classification API matters.
+        bool ok = false;
+        const quint32 v4 = addr.toIPv4Address(&ok);
+        const quint8 b0 = static_cast<quint8>(v4 >> 24), b1 = static_cast<quint8>(v4 >> 16);
+        if (b0 == 0 || b0 == 10 || b0 == 127 || (b0 == 169 && b1 == 254) ||
+            (b0 == 172 && (b1 & 0xF0) == 16) || (b0 == 192 && b1 == 168) ||
+            (b0 == 100 && (b1 & 0xC0) == 64))
+            return false;
+    } else {
+        // IPv6 unique-local fc00::/7.
+        const Q_IPV6ADDR v6 = addr.toIPv6Address();
+        if (v6.c[0] == 0xFC || v6.c[0] == 0xFD) return false;
+    }
     return true;
 }
 
@@ -510,6 +545,8 @@ MainWindow::MainWindow()
     auto *right = new QWidget;
     auto *v = new QVBoxLayout(right);
     m_title = new QLabel(tr("No conversation selected"));
+    // Profile and group names come from the network: never interpret them as rich text.
+    m_title->setTextFormat(Qt::PlainText);
     QFont f = m_title->font();
     f.setBold(true);
     f.setPointSize(f.pointSize() + 2);
@@ -1110,7 +1147,10 @@ MainWindow::MainWindow()
     });
     m_notifier = new Notifier(this);
     // History appends are written by a background thread; failures come back here.
+    // Appends are not worth a dialog (the message stays visible in the chat either
+    // way), but they must never be lost silently.
     m_store.setAppendErrorHandler(this, [this](int rc) {
+        qWarning() << "History append failed:" << HistoryStore::errorText(rc);
     });
     m_tray = new QSystemTrayIcon(AppIcon::tray(0), this);
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &MainWindow::applyTheme);
@@ -2430,6 +2470,17 @@ void MainWindow::persist(const QJsonObject &record)
     m_store.append(record);
 }
 
+void MainWindow::handleHistoryWriteError(int rc)
+{
+    const QString detail = HistoryStore::errorText(rc);
+    qWarning() << "History write failed:" << detail;
+    // Deletion and expiry promise that the ciphertext leaves the disk; a failed
+    // rewrite breaks that promise silently. The user must get a chance to act.
+    QMessageBox::warning(this, tr("Chat history"),
+                         tr("Writing the encrypted chat history failed (%1). Deleted or expired messages may reappear after a restart, and recent changes may not be saved.")
+                             .arg(detail));
+}
+
 void MainWindow::learnName(const QString &key, const QString &name)
 {
     if (isNoteToSelf(key)) return; // the chat with ourselves keeps its fixed title
@@ -2621,7 +2672,9 @@ void MainWindow::removeConversation(const QString &key)
         updateAttachBar();
     }
     // Compacts the file (old ciphertext is gone); runs on the history writer thread.
-    m_store.rewriteAsync(allRecords(), this, [this](int) { });
+    m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+        if (rc != SC_OK) handleHistoryWriteError(rc);
+    });
     refreshList();
     showConversation();
 }
@@ -2686,6 +2739,7 @@ bool MainWindow::removeMessage(const QString &key, qint64 timestamp)
         int at = conversation->msgs.size();
         while (at > 0 && conversation->msgs[at - 1].sortTs() > removed.sortTs()) --at;
         conversation->msgs.insert(at, removed);
+        handleHistoryWriteError(rc);
         return false;
     }
     if (key == m_current) showConversation(true);
@@ -3008,6 +3062,7 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     const int rc = m_store.rewrite(allRecords());
     if (rc != SC_OK) {
         persist(Records::deletion(key, m)); // at least keep the placeholder after a restart
+        handleHistoryWriteError(rc);
     }
     if (key == m_current) showConversation(true);
     refreshList();
@@ -3288,7 +3343,9 @@ void MainWindow::expireMessages()
     if (!changed) return;
 
     // Serialising and encrypting the whole history happens on the history writer thread.
-    m_store.rewriteAsync(allRecords(), this, [this](int) { });
+    m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+        if (rc != SC_OK) handleHistoryWriteError(rc);
+    });
     if (m_convs.contains(m_current)) showConversation(true);
     refreshList();
 }
@@ -4107,7 +4164,45 @@ void MainWindow::updateDraftLinkPreview()
         finishPendingLinkPreviewSend();
         return;
     }
-    requestLinkPreviewPage(url, 0, m_linkPreviewGeneration);
+    // The name check passed; now make sure the name does not resolve into the
+    // local network before anything is fetched (see requestPreviewUrlResolved).
+    requestPreviewUrlResolved(url, 0, m_linkPreviewGeneration, false, {});
+}
+
+// Resolves the host of a preview URL and only starts the fetch when every address
+// is public (see isPublicPreviewAddress). The lookup runs asynchronously so slow
+// DNS never blocks the GUI; a result for a superseded preview (generation changed)
+// is dropped. Everything else about the fetch keeps the established behaviour.
+void MainWindow::requestPreviewUrlResolved(const QString &url, int redirects, quint64 generation,
+                                           bool image, const QString &previewUrl)
+{
+    const QUrl parsed(url, QUrl::StrictMode);
+    if (generation != m_linkPreviewGeneration || !safeHttpsPreviewUrl(parsed)) {
+        if (generation == m_linkPreviewGeneration) {
+            if (!image) m_draftLinkPreview = LinkPreview();
+            m_linkPreviewLoading = false;
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+        }
+        return;
+    }
+    QHostInfo::lookupHost(parsed.host(), this,
+                          [this, url, redirects, generation, image, previewUrl](const QHostInfo &info) {
+        if (generation != m_linkPreviewGeneration) return;
+        const bool safe = info.error() == QHostInfo::NoError && !info.addresses().isEmpty() &&
+                          std::all_of(info.addresses().cbegin(), info.addresses().cend(), isPublicPreviewAddress);
+        if (!safe) {
+            if (!image) m_draftLinkPreview = LinkPreview();
+            m_linkPreviewLoading = false;
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+            return;
+        }
+        if (image)
+            requestLinkPreviewImage(url, previewUrl, redirects, generation);
+        else
+            requestLinkPreviewPage(url, redirects, generation);
+    });
 }
 
 void MainWindow::requestLinkPreviewPage(const QString &url, int redirects, quint64 generation)
@@ -4146,7 +4241,7 @@ void MainWindow::requestLinkPreviewPage(const QString &url, int redirects, quint
         if (redirect.isValid()) {
             const QUrl next = QUrl(url).resolved(redirect);
             if (redirects < 5 && safeHttpsPreviewUrl(next)) {
-                requestLinkPreviewPage(next.toString(QUrl::FullyEncoded), redirects + 1, generation);
+                requestPreviewUrlResolved(next.toString(QUrl::FullyEncoded), redirects + 1, generation, false, {});
                 return;
             }
             m_linkPreviewLoading = false;
@@ -4186,7 +4281,8 @@ void MainWindow::requestLinkPreviewPage(const QString &url, int redirects, quint
                 // If the user presses Send while metadata is loading, wait for the image too
                 // so it can be included in the signal-cli preview payload.
                 m_linkPreviewLoading = true;
-                requestLinkPreviewImage(imageUrl.toString(QUrl::FullyEncoded), m_draftLinkPreview.url, 0, generation);
+                requestPreviewUrlResolved(imageUrl.toString(QUrl::FullyEncoded), 0, generation, true,
+                                          m_draftLinkPreview.url);
                 return;
             }
         }
@@ -4225,7 +4321,7 @@ void MainWindow::requestLinkPreviewImage(const QString &url, const QString &prev
         if (redirect.isValid()) {
             const QUrl next = QUrl(url).resolved(redirect);
             if (redirects < 5 && safeHttpsPreviewUrl(next)) {
-                requestLinkPreviewImage(next.toString(QUrl::FullyEncoded), previewUrl, redirects + 1, generation);
+                requestPreviewUrlResolved(next.toString(QUrl::FullyEncoded), redirects + 1, generation, true, previewUrl);
                 return;
             }
             m_linkPreviewLoading = false;
@@ -4490,8 +4586,15 @@ void MainWindow::onEnvelope(const QJsonObject &env)
 
     // Like signal-cli: messages from blocked contacts are dropped entirely — no chat entry,
     // no notification. Our own outgoing messages are unaffected (the phone may not have blocked).
-    const auto blockedIt = m_convs.find(key);
-    if (!pe.outgoing && !group && blockedIt != m_convs.end() && blockedIt->blocked) return;
+    if (!pe.outgoing) {
+        const auto blockedIt = m_convs.find(key);
+        if (!group && blockedIt != m_convs.end() && blockedIt->blocked) return;
+        // In a group the sender is a member: their messages (and receipts/typing state)
+        // are dropped too when that member is blocked. The block state of a member lives
+        // in their direct conversation; without one there is nothing to check.
+        const auto senderIt = m_convs.find(srcKey);
+        if (senderIt != m_convs.end() && !senderIt->isGroup && senderIt->blocked) return;
+    }
 
     // A dataMessage straight from our own number is a note to ourselves: like the official
     // client we treat it as our own send (no unread badge, no notification for it).
@@ -4859,6 +4962,7 @@ void MainWindow::showMessageDetails(int idx)
     } else {
         auto *received = new QLabel(tr("Received from: %1").arg(message.sender.isEmpty()
             ? displayName(message.authorKey) : message.sender), &dialog);
+        received->setTextFormat(Qt::PlainText); // sender and profile names are remote data
         received->setTextInteractionFlags(Qt::TextSelectableByMouse);
         layout->addWidget(received);
     }
@@ -6068,6 +6172,7 @@ void MainWindow::showPollVotes(int idx)
     auto *lay = new QVBoxLayout(&dialog);
 
     auto *question = new QLabel(m.poll.question, &dialog);
+    question->setTextFormat(Qt::PlainText); // the question comes from any group member
     question->setWordWrap(true);
     QFont bold = question->font();
     bold.setBold(true);
@@ -6327,8 +6432,11 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
                        Attachment &at = mm.attachments[a];
                        at.width = img.width();
                        at.height = img.height();
+                       // Never fall back to the raw attachment here: a record storing it
+                       // (up to 30 MB) would exceed the history store's 16 MiB record
+                       // limit and make the whole history file fail to open. A missing
+                       // thumbnail only means no preview until the image is opened.
                        at.thumb = AttachmentUtil::makeThumbnail(img);
-                       if (at.thumb.isEmpty()) at.thumb = data;
                        persist(Records::attachmentsUpdate(key, mm));
                        if (key == m_current) showConversation(true);
                    });
@@ -6412,8 +6520,6 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
         cb(QByteArray::fromBase64(encoded.toLatin1()), QString());
     });
 }
-
-static bool isRiskyFile(const QString &name) { return AttachmentUtil::isRiskyFileName(name); }
 
 void MainWindow::consumeViewOnce(const QString &key, qint64 timestamp, const QString &author, bool expired)
 {
@@ -6534,10 +6640,12 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
         return;
     }
 
-    if (!att.isImage() && isRiskyFile(att.filename)) {
+    // Allowlist, whatever the sender claims the content type to be: an executable
+    // disguised as "image/png" must not pass because of the claimed type.
+    if (!AttachmentUtil::isSafeToOpen(att)) {
         QMessageBox::information(this, tr("Attachment"),
                                  tr("For safety, “%1” is not opened directly. Use “Save …” from the message menu instead.")
-                                     .arg(att.filename));
+                                     .arg(AttachmentUtil::displayFileName(att, selectedMessage.time).toHtmlEscaped()));
         return;
     }
 
@@ -6566,13 +6674,21 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
                 return;
             }
             delete viewer;
+            // A file the sender claimed is an image but that no decoder accepts must
+            // never fall through to the system "open" handler: it can be an executable
+            // in disguise, and the OS would run its default handler for the name.
+            QMessageBox::warning(this, tr("Attachment"),
+                                 tr("“%1” cannot be displayed as an image. Use “Save …” from the message menu to store it.")
+                                     .arg(viewerName.toHtmlEscaped()));
+            return;
         }
         if (!m_tmp.isValid()) {
             QMessageBox::warning(this, tr("Attachment"), tr("No temporary directory available."));
             return;
         }
         static int counter = 0;
-        QString name = QFileInfo(att.filename).fileName();
+        // Normalized: no NTFS stream separator, trailing dots/spaces or bidi controls.
+        QString name = AttachmentUtil::normalizedFileName(att.filename);
         if (name.isEmpty()) name = QStringLiteral("attachment") + QLatin1Char('.') + QMimeDatabase().mimeTypeForName(att.contentType).preferredSuffix();
         const QString dir = m_tmp.path() + QLatin1Char('/') + QString::number(++counter);
         QDir().mkpath(dir);
@@ -7038,7 +7154,9 @@ void MainWindow::openMessageRequests()
         m_hiddenContacts.remove(key);
         m_declined.remove(key);
         // drop a stored "declined" record, if any
-        m_store.rewriteAsync(allRecords(), this, [this](int) { });
+        m_store.rewriteAsync(allRecords(), this, [this](int rc) {
+            if (rc != SC_OK) handleHistoryWriteError(rc);
+        });
         if (m_convs.contains(key)) {
             m_showArchived = false;
             switchConversation(key);

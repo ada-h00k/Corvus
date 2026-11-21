@@ -32,6 +32,7 @@ GroupInvitesDialog::GroupInvitesDialog(SignalCli &cli, const QList<GroupInfo::In
     lay->addWidget(m_list, 1);
 
     m_status = new QLabel;
+    m_status->setTextFormat(Qt::PlainText); // invited group names come from strangers
     m_status->setWordWrap(true);
     lay->addWidget(m_status);
 
@@ -82,7 +83,8 @@ void GroupInvitesDialog::act(bool accept)
     const QString id = item->data(kIdRole).toString();
     const QString name = item->data(kNameRole).toString();
     if (!accept &&
-        QMessageBox::question(this, tr("Decline invitation"), tr("Decline the invitation to “%1”?").arg(name)) !=
+        QMessageBox::question(this, tr("Decline invitation"),
+                              tr("Decline the invitation to “%1”?").arg(name.toHtmlEscaped())) !=
             QMessageBox::Yes)
         return;
 

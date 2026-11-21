@@ -12,7 +12,8 @@
 //!
 //! * A random 32 byte data key (DEK) encrypts all records with XChaCha20-Poly1305.
 //! * The DEK is wrapped with a key derived from the passphrase via Argon2id.
-//!   Changing the passphrase therefore only rewrites the header.
+//!   Changing the passphrase rotates the DEK and re-encrypts every record, so a
+//!   backup taken before the change cannot decrypt data written after it.
 //! * Every record is authenticated together with its sequence number, so
 //!   reordering or removing records in the middle of the file is detected.
 //!   (Removing records at the very end cannot be detected by an append-only log.)
@@ -64,6 +65,10 @@ pub enum StoreError {
     AlreadyExists,
     Io(io::Error),
     Crypto(String),
+    /// A single record exceeded `MAX_RECORD` and was refused before being written.
+    /// (open() rejects such frames as Corrupt: writing them would make the file
+    /// unreadable on the next start.)
+    TooLarge(String),
 }
 
 impl fmt::Display for StoreError {
@@ -74,6 +79,7 @@ impl fmt::Display for StoreError {
             StoreError::AlreadyExists => write!(f, "history file already exists"),
             StoreError::Io(e) => write!(f, "I/O error: {e}"),
             StoreError::Crypto(m) => write!(f, "crypto error: {m}"),
+            StoreError::TooLarge(m) => write!(f, "record too large: {m}"),
         }
     }
 }
@@ -118,6 +124,18 @@ pub enum Record {
     Mute { c: String, v: bool },
     /// Signal disappearing-message timer in seconds (0 = disabled).
     Expiration { c: String, v: i64 },
+    /// One vote on a poll by `by` on the poll message `(ts, au)`. `oi` holds the
+    /// chosen option indexes (an empty list takes the vote back), `vc` the voter's
+    /// sequence number and `vt` the vote timestamp.
+    PollVote { c: String, ts: i64, au: String, by: String, oi: Vec<i64>, vc: i64, vt: i64 },
+    /// A pinned message. `at` is when the pin was received/sent (local clock) and
+    /// `d` its duration in seconds (-1 = forever); `rm` removes the pin again.
+    /// Written by the Qt app at Records.cpp:pin.
+    Pin { c: String, ts: i64, au: String, by: String, at: i64, d: i64, rm: bool },
+    /// Conversation blocked (signal-cli "block" state synced from the phone).
+    Blocked { c: String, v: bool },
+    /// Message request declined (the conversation was never opened).
+    Declined { c: String },
 }
 
 /// Incremental writer for one flat JSON object with a fixed key order.
@@ -174,6 +192,17 @@ fn f_i64(o: &Fields, k: &str) -> Result<i64, json::Error> {
 fn f_bool(o: &Fields, k: &str) -> Result<bool, json::Error> {
     field(o, k)?.as_bool().ok_or_else(|| json::Error(format!("field `{k}` must be a boolean")))
 }
+fn f_i64_arr(o: &Fields, k: &str) -> Result<Vec<i64>, json::Error> {
+    let items = match field(o, k)? {
+        Value::Arr(items) => items,
+        _ => return Err(json::Error(format!("field `{k}` must be an array of integers"))),
+    };
+    items
+        .iter()
+        .map(Value::as_i64)
+        .collect::<Option<Vec<i64>>>()
+        .ok_or_else(|| json::Error(format!("field `{k}` must be an array of integers")))
+}
 
 impl Record {
     /// Compact JSON object; the tag `t` comes first.
@@ -194,6 +223,26 @@ impl Record {
             Record::Archive { c, v, s } => ObjWriter::new("a").str("c", c).bool("v", *v).bool("s", *s).end(),
             Record::Mute { c, v } => ObjWriter::new("k").str("c", c).bool("v", *v).end(),
             Record::Expiration { c, v } => ObjWriter::new("e").str("c", c).int("v", *v).end(),
+            Record::PollVote { c, ts, au, by, oi, vc, vt } => {
+                let oi: Vec<Value> = oi.iter().map(|&i| Value::from_i64(i)).collect();
+                ObjWriter::new("pv")
+                    .str("c", c)
+                    .int("ts", *ts)
+                    .str("au", au)
+                    .str("by", by)
+                    .val("oi", &Value::Arr(oi))
+                    .int("vc", *vc)
+                    .int("vt", *vt)
+                    .end()
+            }
+            Record::Pin { c, ts, au, by, at, d, rm } => {
+                // Records.cpp only writes "rm" for an actual unpin; keep the same shape.
+                let w = ObjWriter::new("pi").str("c", c).int("ts", *ts).str("au", au).str("by", by).int("at", *at).int("d", *d);
+                let w = if *rm { w.bool("rm", true) } else { w };
+                w.end()
+            }
+            Record::Blocked { c, v } => ObjWriter::new("b").str("c", c).bool("v", *v).end(),
+            Record::Declined { c } => ObjWriter::new("j").str("c", c).end(),
         }
     }
 
@@ -228,6 +277,26 @@ impl Record {
             "a" => Record::Archive { c: f_str(o, "c")?, v: f_bool(o, "v")?, s: f_bool(o, "s")? },
             "k" => Record::Mute { c: f_str(o, "c")?, v: f_bool(o, "v")? },
             "e" => Record::Expiration { c: f_str(o, "c")?, v: f_i64(o, "v")? },
+            "pv" => Record::PollVote {
+                c: f_str(o, "c")?,
+                ts: f_i64(o, "ts")?,
+                au: f_str(o, "au")?,
+                by: f_str(o, "by")?,
+                oi: f_i64_arr(o, "oi")?,
+                vc: f_i64(o, "vc")?,
+                vt: f_i64(o, "vt")?,
+            },
+            "pi" => Record::Pin {
+                c: f_str(o, "c")?,
+                ts: f_i64(o, "ts")?,
+                au: f_str(o, "au")?,
+                by: f_str(o, "by")?,
+                at: f_i64(o, "at")?,
+                d: f_i64(o, "d")?,
+                rm: o.get("rm").and_then(Value::as_bool).unwrap_or(false),
+            },
+            "b" => Record::Blocked { c: f_str(o, "c")?, v: f_bool(o, "v")? },
+            "j" => Record::Declined { c: f_str(o, "c")? },
             other => return Err(json::Error(format!("unknown record type `{other}`"))),
         })
     }
@@ -383,11 +452,16 @@ fn record_aad(seq: u64) -> [u8; 16] {
     a
 }
 
-fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
+fn encrypt_with(cipher: &XChaCha20Poly1305, seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
     let json = Zeroizing::new(rec.to_json().into_bytes());
+    // Writing must never produce a record that open() would reject as Corrupt:
+    // one oversized record (e.g. a message whose record carries all its
+    // attachment thumbnails) used to make the whole history fail to open.
+    if json.len() > MAX_RECORD {
+        return Err(StoreError::TooLarge(format!("{} bytes (limit {MAX_RECORD})", json.len())));
+    }
     let mut nonce = [0u8; NONCE_LEN];
     rng::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
-    let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
     let aad = record_aad(seq);
     let ct = cipher
         .encrypt(nonce_ref(&nonce)?, Payload { msg: &json, aad: &aad })
@@ -397,6 +471,11 @@ fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>
     buf.extend_from_slice(&nonce);
     buf.extend_from_slice(&ct);
     Ok(buf)
+}
+
+fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
+    let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
+    encrypt_with(&cipher, seq, rec)
 }
 
 fn open_new(path: &Path) -> io::Result<File> {
@@ -553,19 +632,62 @@ impl Store {
         Ok(())
     }
 
-    /// Re-wrap the data key under a new passphrase; records stay untouched.
+    /// Decrypt the records of the current file with the open store's data key.
+    /// A partially written trailing record is dropped, like in `open()`; any other
+    /// failure is an error. Used by the re-keying passphrase change.
+    fn decrypt_all_records(&self) -> Result<Vec<Record>, StoreError> {
+        let raw = fs::read(&self.path)?;
+        if raw.len() < HEADER_LEN || &raw[..4] != MAGIC {
+            return Err(StoreError::Corrupt("not a history file".into()));
+        }
+        let cipher = XChaCha20Poly1305::new(key_ref(&self.dek[..])?);
+        let mut records = Vec::new();
+        let mut pos = HEADER_LEN;
+        let mut seq = 0u64;
+        while pos + 4 <= raw.len() {
+            let len = u32::from_le_bytes(raw[pos..pos + 4].try_into().unwrap()) as usize;
+            if !(NONCE_LEN + TAG_LEN..=MAX_RECORD).contains(&len) {
+                return Err(StoreError::Corrupt(format!("bad length of record {seq}")));
+            }
+            if pos + 4 + len > raw.len() {
+                break; // partial tail
+            }
+            let frame = &raw[pos + 4..pos + 4 + len];
+            let pt = cipher
+                .decrypt(nonce_ref(&frame[..NONCE_LEN])?, Payload { msg: &frame[NONCE_LEN..], aad: &record_aad(seq) })
+                .map_err(|_| StoreError::Corrupt(format!("record {seq} failed authentication")))?;
+            records.push(Record::from_slice(&pt).map_err(|e| StoreError::Corrupt(format!("record {seq}: {e}")))?);
+            pos += 4 + len;
+            seq += 1;
+        }
+        Ok(records)
+    }
+
+    /// Change the passphrase and rotate the data key at the same time: all records
+    /// are decrypted with the old key and re-encrypted with a fresh one, wrapped
+    /// under the new passphrase. An old backup plus the old passphrase therefore no
+    /// longer decrypts anything written after the change. The file is replaced
+    /// atomically; on failure the old file is untouched.
     pub fn change_passphrase(&mut self, old: &str, new: &str, params: KdfParams) -> Result<(), StoreError> {
         let check = self.header.unwrap_dek(old)?;
         if check[..] != self.dek[..] {
             return Err(StoreError::Corrupt("key mismatch".into()));
         }
-        let header = Header::wrap_new(new, &self.dek, params)?;
-        let current = fs::read(&self.path)?;
+        let records = self.decrypt_all_records()?;
+
+        let mut dek = Zeroizing::new([0u8; KEY_LEN]);
+        rng::fill(&mut dek[..]).map_err(|e| StoreError::Crypto(e.to_string()))?;
+        let header = Header::wrap_new(new, &dek, params)?;
+        let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
         let mut data = header.to_bytes();
-        data.extend_from_slice(&current[HEADER_LEN..]);
+        for (i, rec) in records.iter().enumerate() {
+            data.extend_from_slice(&encrypt_with(&cipher, i as u64, rec)?);
+        }
         write_atomic(&self.path, &data)?;
         self.file = open_append(&self.path)?;
+        self.dek = dek;
         self.header = header;
+        self.seq = records.len() as u64;
         self.len = data.len() as u64;
         Ok(())
     }
@@ -737,6 +859,36 @@ mod tests {
         assert_eq!(recs, vec![msg(1), msg(2)]);
     }
 
+    /// The change rotates the data key: a backup taken before the change cannot
+    /// decrypt the re-encrypted records, even though it still opens with the old
+    /// passphrase.
+    #[test]
+    fn change_passphrase_rotates_the_data_key() {
+        let p = tmp();
+        let mut s = Store::create(&p, "old", FAST).unwrap();
+        s.append(&msg(1)).unwrap();
+        s.append(&msg(2)).unwrap();
+        let backup = p.parent().unwrap().join("backup.corvus");
+        fs::copy(&p, &backup).unwrap();
+
+        s.change_passphrase("old", "new", FAST).unwrap();
+        s.append(&msg(3)).unwrap(); // written under the new key
+        drop(s);
+
+        // The backup still opens with the old passphrase and holds the same records...
+        let (_, backup_recs) = Store::open(&backup, "old").unwrap();
+        assert_eq!(backup_recs, vec![msg(1), msg(2)]);
+        // ...but the current file is rejected with the old passphrase and re-encrypted
+        // with the new key (every record's ciphertext changed, not just the header).
+        assert!(matches!(Store::open(&p, "old"), Err(StoreError::WrongPassphrase)));
+        let (_, recs) = Store::open(&p, "new").unwrap();
+        assert_eq!(recs, vec![msg(1), msg(2), msg(3)]);
+        let backup_raw = fs::read(&backup).unwrap();
+        let current_raw = fs::read(&p).unwrap();
+        assert!(current_raw.len() > backup_raw.len());
+        assert_ne!(backup_raw[HEADER_LEN..], current_raw[HEADER_LEN..backup_raw.len()]);
+    }
+
     #[test]
     fn old_records_without_new_fields_still_parse() {
         let old = r#"{"t":"m","c":"+49","ts":5,"s":"A","x":"hi","o":true}"#;
@@ -747,6 +899,77 @@ mod tests {
         );
         // and null extras are not written back
         assert!(!r.to_json().contains("\"d\""));
+    }
+
+    /// The Qt app (Records.cpp) writes four tags the store used not to know: poll
+    /// votes (`pv`), pins (`pi`), blocks (`b`) and declined requests (`j`). Before
+    /// these variants existed, any of them made append fail and let a whole rewrite
+    /// fail with SC_ERR_ARG, so deleting a conversation, deleting a message, a
+    /// remote delete-for-everyone and disappearing-message expiry never scrubbed
+    /// the old ciphertext from the history file.
+    #[test]
+    fn qt_only_record_kinds_roundtrip_through_the_store() {
+        let p = tmp();
+        let recs = vec![
+            Record::PollVote { c: "+49".into(), ts: 10, au: "+49".into(), by: "+1".into(), oi: vec![0, 2], vc: 3, vt: 10 },
+            Record::Pin { c: "+49".into(), ts: 10, au: "+1".into(), by: "+1".into(), at: 20, d: -1, rm: false },
+            Record::Pin { c: "+49".into(), ts: 10, au: "+1".into(), by: "+1".into(), at: 21, d: 86400, rm: true },
+            Record::Blocked { c: "+49".into(), v: true },
+            Record::Declined { c: "+49".into() },
+        ];
+        // Exactly the JSON Records.cpp emits for these kinds parses into the variants.
+        for (json, want) in [
+            (
+                r#"{"t":"pv","c":"+49","ts":10,"au":"+49","by":"+1","oi":[0,2],"vc":3,"vt":10}"#,
+                recs[0].clone(),
+            ),
+            (
+                r#"{"t":"pi","c":"+49","ts":10,"au":"+1","by":"+1","at":20,"d":-1}"#,
+                recs[1].clone(),
+            ),
+            (
+                r#"{"t":"pi","c":"+49","ts":10,"au":"+1","by":"+1","at":21,"d":86400,"rm":true}"#,
+                recs[2].clone(),
+            ),
+            (r#"{"t":"b","c":"+49","v":true}"#, recs[3].clone()),
+            (r#"{"t":"j","c":"+49"}"#, recs[4].clone()),
+        ] {
+            assert_eq!(Record::from_json(json).unwrap(), want);
+        }
+
+        let mut s = Store::create(&p, "pw", FAST).unwrap();
+        for r in &recs {
+            s.append(r).unwrap();
+        }
+        // The compaction path (delete/expiry) must keep these records, not choke on them.
+        s.rewrite(&recs).unwrap();
+        drop(s);
+        let (_, back) = Store::open(&p, "pw").unwrap();
+        assert_eq!(back, recs);
+    }
+
+    /// One oversized record used to be written and then made the file fail to open
+    /// (open rejects frames over MAX_RECORD as Corrupt). It must be refused at write
+    /// time, and the log must stay usable afterwards.
+    #[test]
+    fn append_rejects_records_over_max() {
+        let p = tmp();
+        let mut s = Store::create(&p, "pw", FAST).unwrap();
+        let huge = Record::Msg {
+            c: "+49".into(),
+            ts: 1,
+            s: "A".into(),
+            x: "x".repeat(MAX_RECORD + 1024),
+            o: false,
+            au: "+49".into(),
+            d: Value::Null,
+        };
+        assert!(matches!(s.append(&huge), Err(StoreError::TooLarge(_))));
+        assert!(matches!(s.rewrite(&[huge]), Err(StoreError::TooLarge(_))));
+        s.append(&msg(1)).unwrap();
+        drop(s);
+        let (_, recs) = Store::open(&p, "pw").unwrap();
+        assert_eq!(recs, vec![msg(1)]);
     }
 
     #[test]

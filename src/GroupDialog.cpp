@@ -393,7 +393,8 @@ void GroupDialog::buildSettingsUi()
     };
     memberAction(m_removeButton, [this](const QString &id, int category, bool) {
         const QString text = category == CatPending ? tr("Withdraw the invitation for %1?") : tr("Remove %1 from the group?");
-        if (QMessageBox::question(this, tr("Remove"), text.arg(labelFor(id))) != QMessageBox::Yes) return;
+        // Member names are remote data and the static message box would render rich text.
+        if (QMessageBox::question(this, tr("Remove"), text.arg(labelFor(id).toHtmlEscaped())) != QMessageBox::Yes) return;
         run(GroupInfo::memberParams(QStringLiteral("removeMember"), {id}), tr("Could not remove the member: %1"));
     });
     memberAction(m_adminButton, [this](const QString &id, int, bool admin) {
@@ -402,7 +403,7 @@ void GroupDialog::buildSettingsUi()
     });
     memberAction(m_banButton, [this](const QString &id, int, bool) {
         if (QMessageBox::question(this, tr("Ban"),
-                                  tr("Remove %1 from the group and ban them from rejoining?").arg(labelFor(id)))
+                                  tr("Remove %1 from the group and ban them from rejoining?").arg(labelFor(id).toHtmlEscaped()))
             != QMessageBox::Yes)
             return;
         run(GroupInfo::memberParams(QStringLiteral("ban"), {id}), tr("Could not ban the member: %1"));
@@ -605,7 +606,8 @@ void GroupDialog::addMembers()
 void GroupDialog::leave()
 {
     if (!m_loaded || m_busy || !m_info.isMember) return;
-    if (QMessageBox::question(this, tr("Leave group"), tr("Leave “%1”? You will stop receiving its messages.").arg(m_info.name))
+    if (QMessageBox::question(this, tr("Leave group"),
+                              tr("Leave “%1”? You will stop receiving its messages.").arg(m_info.name.toHtmlEscaped()))
         != QMessageBox::Yes)
         return;
 

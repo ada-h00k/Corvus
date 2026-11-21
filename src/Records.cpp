@@ -117,8 +117,24 @@ static LinkPreview linkPreviewFromJson(const QJsonObject &o)
 
 static QJsonArray attachmentsToJson(const QList<Attachment> &list)
 {
+    // One record carries the thumbnails of all of a message's attachments. A
+    // thumbnail of a noisy RGBA image is a PNG of up to ~1.2 MB once base64
+    // encoded, so a message with many images can exceed the store's 16 MiB
+    // record limit; such a record could be written but then never be read back
+    // (the history file would fail to open). Cap the thumbnails per record well
+    // below the limit: the first attachments keep theirs, later ones are
+    // persisted without a preview.
+    constexpr qsizetype kMaxThumbBase64PerRecord = 8 * 1024 * 1024;
     QJsonArray arr;
-    for (const Attachment &a : list) arr.append(attachmentToJson(a));
+    qsizetype thumbBytes = 0;
+    for (const Attachment &a : list) {
+        QJsonObject o = attachmentToJson(a);
+        if (o.contains(QStringLiteral("th"))) {
+            thumbBytes += o[QStringLiteral("th")].toString().size();
+            if (thumbBytes > kMaxThumbBase64PerRecord) o.remove(QStringLiteral("th"));
+        }
+        arr.append(o);
+    }
     return arr;
 }
 

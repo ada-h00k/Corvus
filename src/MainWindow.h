@@ -127,6 +127,10 @@ private:
     void loadHistory(const QJsonArray &records);
     QJsonArray allRecords() const;
     void persist(const QJsonObject &record);
+    // A failed history write is never cosmetic: a rewrite that fails means a deletion
+    // or disappearing-message expiry left the old ciphertext in the history file,
+    // and a failed append loses the record entirely. Logs and warns the user.
+    void handleHistoryWriteError(int rc);
     void learnName(const QString &key, const QString &name);
     void setNickname(const QString &key, const QString &nickname);
     void deleteConversation(const QString &key);
@@ -273,6 +277,10 @@ private:
     void refreshLinkPreviewBar();
     void requestLinkPreviewPage(const QString &url, int redirects, quint64 generation);
     void requestLinkPreviewImage(const QString &url, const QString &previewUrl, int redirects, quint64 generation);
+    // Resolves the host first and only fetches when every address is public
+    // (link previews must not be pointed at loopback/private/link-local hosts).
+    void requestPreviewUrlResolved(const QString &url, int redirects, quint64 generation,
+                                   bool image, const QString &previewUrl);
     void fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const QString &author, int attempt = 0);
     void fetchContactAvatar(const QString &key, qint64 ts, const QString &author, int attempt = 0);
     void finishPendingLinkPreviewSend();

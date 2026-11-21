@@ -3,10 +3,21 @@
 
 /*
  * Encrypted chat-history store (Rust, XChaCha20-Poly1305 + Argon2id).
- * All records are JSON objects:
- *   {"t":"m","c":<conversation key>,"ts":<ms>,"s":<sender>,"x":<text>,"o":<outgoing bool>}
- *   {"t":"n","c":<conversation key>,"n":<display name>}
- *   {"t":"d","c":<conversation key>}
+ * All records are JSON objects identified by their "t" tag (the store knows
+ * exactly these; an unknown tag is an error):
+ *   {"t":"m","c":<conv>,"ts":<ms>,"s":<sender>,"x":<text>,"o":<outgoing>,"au":<author>,"d":{...}}
+ *   {"t":"n","c":<conv>,"n":<display name>}          learnt profile name
+ *   {"t":"p","c":<conv>,"n":<nickname>}              local nickname
+ *   {"t":"d","c":<conv>}                             conversation deleted
+ *   {"t":"u","c":<conv>,"ts":<ms>,"au":<author>,"d":{...}}   message extras update
+ *   {"t":"r","c":<conv>,"ts":<ms>,"au":<author>,"by":<key>,"e":<emoji>}   reaction
+ *   {"t":"a","c":<conv>,"v":<archived>,"s":<signal-cli archived>}
+ *   {"t":"k","c":<conv>,"v":<muted>}
+ *   {"t":"e","c":<conv>,"v":<seconds>}               disappearing-message timer
+ *   {"t":"pv","c":<conv>,"ts":<ms>,"au":<author>,"by":<key>,"oi":[<option>],"vc":<n>,"vt":<ms>}   poll vote
+ *   {"t":"pi","c":<conv>,"ts":<ms>,"au":<author>,"by":<key>,"at":<ms>,"d":<sec>,"rm":<unpin>}     pin
+ *   {"t":"b","c":<conv>,"v":<blocked>}
+ *   {"t":"j","c":<conv>}                             message request declined
  * Use a handle from one thread at a time.
  */
 

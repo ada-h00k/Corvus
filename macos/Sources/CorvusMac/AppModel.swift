@@ -540,7 +540,11 @@ final class AppModel {
                     return false
                 }
             } else {
-                let secret = HistoryKeychain.generateSecret()
+                let secret: String
+                do { secret = try HistoryKeychain.generateSecret() } catch {
+                    await Dialogs.error("Chat history", "Could not generate the history key:\n\(error.localizedDescription)")
+                    return false
+                }
                 do { try HistoryKeychain.save(secret) } catch {
                     await Dialogs.error("Chat history", "Could not save the history key in the keychain:\n\(error.localizedDescription)")
                     return false
@@ -620,7 +624,11 @@ final class AppModel {
             var error = ""
             while true {
                 guard let old = await Dialogs.passphrase(.unlock, error: error) else { return }
-                let newSecret = HistoryKeychain.generateSecret()
+                let newSecret: String
+                do { newSecret = try HistoryKeychain.generateSecret() } catch {
+                    await Dialogs.error("Chat history", "Could not generate the history key:\n\(error.localizedDescription)")
+                    return
+                }
                 do { try HistoryKeychain.save(newSecret) } catch {
                     await Dialogs.error("Chat history", error.localizedDescription)
                     return

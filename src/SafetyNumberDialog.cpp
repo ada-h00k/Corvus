@@ -207,7 +207,7 @@ void SafetyNumberDialog::showQrCode()
     if (!qr.isNull()) {
         m_qr->setPixmap(qr);
         m_qr->setToolTip(tr("Scan this code with Signal on %1's phone (conversation → View safety number → Scan).")
-                             .arg(m_name));
+                             .arg(m_name.toHtmlEscaped())); // tooltips render rich text
     } else {
         m_qr->setText(error);
     }
@@ -244,7 +244,7 @@ void SafetyNumberDialog::verify()
     if (SafetyNumber::digitsOnly(m_compare->text()).isEmpty()) {
         const auto answer = QMessageBox::question(
             this, tr("Mark as verified"),
-            tr("Did you compare this safety number with the one on %1's device, and do both match?").arg(m_name),
+            tr("Did you compare this safety number with the one on %1's device, and do both match?").arg(m_name.toHtmlEscaped()),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer != QMessageBox::Yes) return;
     }
