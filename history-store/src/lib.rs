@@ -34,6 +34,10 @@ fn code(e: &StoreError) -> c_int {
         StoreError::AlreadyExists => SC_ERR_EXISTS,
         StoreError::Io(_) => SC_ERR_IO,
         StoreError::Crypto(_) => SC_ERR_CRYPTO,
+        // An oversized record is a rejected argument, not a broken store. The
+        // append-batch fallback in HistoryStore retries records one by one on
+        // SC_ERR_ARG, so only the oversized record is lost, not its neighbours.
+        StoreError::TooLarge(_) => SC_ERR_ARG,
     }
 }
 

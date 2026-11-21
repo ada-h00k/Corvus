@@ -64,6 +64,10 @@ pub enum StoreError {
     AlreadyExists,
     Io(io::Error),
     Crypto(String),
+    /// A single record exceeded `MAX_RECORD` and was refused before being written.
+    /// (open() rejects such frames as Corrupt: writing them would make the file
+    /// unreadable on the next start.)
+    TooLarge(String),
 }
 
 impl fmt::Display for StoreError {
@@ -74,6 +78,7 @@ impl fmt::Display for StoreError {
             StoreError::AlreadyExists => write!(f, "history file already exists"),
             StoreError::Io(e) => write!(f, "I/O error: {e}"),
             StoreError::Crypto(m) => write!(f, "crypto error: {m}"),
+            StoreError::TooLarge(m) => write!(f, "record too large: {m}"),
         }
     }
 }
@@ -448,6 +453,12 @@ fn record_aad(seq: u64) -> [u8; 16] {
 
 fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
     let json = Zeroizing::new(rec.to_json().into_bytes());
+    // Writing must never produce a record that open() would reject as Corrupt:
+    // one oversized record (e.g. a message whose record carries all its
+    // attachment thumbnails) used to make the whole history fail to open.
+    if json.len() > MAX_RECORD {
+        return Err(StoreError::TooLarge(format!("{} bytes (limit {MAX_RECORD})", json.len())));
+    }
     let mut nonce = [0u8; NONCE_LEN];
     rng::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
     let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
@@ -857,6 +868,30 @@ mod tests {
         drop(s);
         let (_, back) = Store::open(&p, "pw").unwrap();
         assert_eq!(back, recs);
+    }
+
+    /// One oversized record used to be written and then made the file fail to open
+    /// (open rejects frames over MAX_RECORD as Corrupt). It must be refused at write
+    /// time, and the log must stay usable afterwards.
+    #[test]
+    fn append_rejects_records_over_max() {
+        let p = tmp();
+        let mut s = Store::create(&p, "pw", FAST).unwrap();
+        let huge = Record::Msg {
+            c: "+49".into(),
+            ts: 1,
+            s: "A".into(),
+            x: "x".repeat(MAX_RECORD + 1024),
+            o: false,
+            au: "+49".into(),
+            d: Value::Null,
+        };
+        assert!(matches!(s.append(&huge), Err(StoreError::TooLarge(_))));
+        assert!(matches!(s.rewrite(&[huge]), Err(StoreError::TooLarge(_))));
+        s.append(&msg(1)).unwrap();
+        drop(s);
+        let (_, recs) = Store::open(&p, "pw").unwrap();
+        assert_eq!(recs, vec![msg(1)]);
     }
 
     #[test]

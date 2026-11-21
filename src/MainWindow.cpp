@@ -6351,8 +6351,11 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
                        Attachment &at = mm.attachments[a];
                        at.width = img.width();
                        at.height = img.height();
+                       // Never fall back to the raw attachment here: a record storing it
+                       // (up to 30 MB) would exceed the history store's 16 MiB record
+                       // limit and make the whole history file fail to open. A missing
+                       // thumbnail only means no preview until the image is opened.
                        at.thumb = AttachmentUtil::makeThumbnail(img);
-                       if (at.thumb.isEmpty()) at.thumb = data;
                        persist(Records::attachmentsUpdate(key, mm));
                        if (key == m_current) showConversation(true);
                    });
