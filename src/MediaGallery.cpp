@@ -1015,7 +1015,8 @@ void MediaGalleryDialog::activateFile(int id)
             QMessageBox::warning(self, tr("Attachment"), tr("No temporary directory available."));
             return;
         }
-        QString name = QFileInfo(item.att.filename).fileName();
+        // Normalized: no NTFS stream separator, trailing dots/spaces or bidi controls.
+        QString name = AttachmentUtil::normalizedFileName(item.att.filename);
         if (name.isEmpty()) name = AttachmentUtil::displayFileName(item.att, item.time);
         const QString folder = dir + QLatin1String("/gallery-") + QString::number(++self->m_tempCounter);
         QDir().mkpath(folder);

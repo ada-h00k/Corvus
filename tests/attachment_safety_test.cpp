@@ -28,6 +28,7 @@ class AttachmentSafetyTest : public QObject
 private slots:
     void normalizationStripsTrailingDotsAndSpaces();
     void normalizationDropsNtfsStream();
+    void normalizationStripsBidiControls();
     void allowlistBlocksExecutableDisguisedAsImage();
     void allowlistPassesAppRenderedTypes();
     void allowlistPassesPlainDocuments();
@@ -50,6 +51,19 @@ void AttachmentSafetyTest::normalizationDropsNtfsStream()
     QCOMPARE(AttachmentUtil::normalizedFileName(QStringLiteral("invoice.exe:hidden")),
              QStringLiteral("invoice.exe"));
     QCOMPARE(AttachmentUtil::normalizedSuffix(QStringLiteral("invoice.exe:hidden")), QStringLiteral("exe"));
+}
+
+void AttachmentSafetyTest::normalizationStripsBidiControls()
+{
+    // U+202E (RIGHT-TO-LEFT OVERRIDE) before "gpj" makes "invoicegpj.exe" display
+    // as "invoiceexe.jpg" — an executable that reads like a JPEG.
+    const QString bidi = QStringLiteral("invoice") + QChar(0x202E) + QStringLiteral("gpj.exe");
+    QCOMPARE(AttachmentUtil::normalizedFileName(bidi), QStringLiteral("invoicegpj.exe"));
+    QCOMPARE(AttachmentUtil::displayFileName(attachment(QStringLiteral("application/octet-stream"), bidi),
+                                            QDateTime()),
+             QStringLiteral("invoicegpj.exe"));
+    // The suffix check must see the real suffix, not the bidi-reordered one.
+    QCOMPARE(AttachmentUtil::normalizedSuffix(bidi), QStringLiteral("exe"));
 }
 
 void AttachmentSafetyTest::allowlistBlocksExecutableDisguisedAsImage()

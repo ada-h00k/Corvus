@@ -61,9 +61,29 @@ QString genericFileName(const QString &contentType, const QString &originalName,
     return name;
 }
 
+// Bidi override/isolate controls (U+202A..U+202E, U+2066..U+2069, U+200E, U+200F,
+// U+061C) make the surrounding text render in reversed or isolated order:
+// "invoice\u202Egpj.exe" (U+202E before "gpj") displays as "invoiceexe.jpg".
+// They are meaningless in a file name, so they are dropped before the name is
+// shown or written anywhere.
+static QString stripBidiControls(const QString &name)
+{
+    QString out;
+    out.reserve(name.size());
+    bool stripped = false;
+    for (const QChar &c : name) {
+        const char16_t u = c.unicode();
+        const bool control = (u >= 0x202A && u <= 0x202E) || (u >= 0x2066 && u <= 0x2069) ||
+                             u == 0x200E || u == 0x200F || u == 0x061C;
+        if (control) stripped = true;
+        else out.append(c);
+    }
+    return stripped ? out : name;
+}
+
 QString displayFileName(const Attachment &att, const QDateTime &time)
 {
-    const QString original = QFileInfo(att.filename).fileName();
+    const QString original = stripBidiControls(QFileInfo(att.filename).fileName());
     if (!original.isEmpty()) return original; // the name the sender gave wins
     if (!time.isValid()) return original;
     return genericFileName(att.contentType, original, time);
@@ -81,7 +101,7 @@ QString normalizedFileName(const QString &name)
     // Windows drops trailing dots and spaces when saving, which would turn
     // "evil.exe." into "evil.exe" after the check saw an empty suffix.
     while (out.endsWith(QLatin1Char('.')) || out.endsWith(QLatin1Char(' '))) out.chop(1);
-    return out;
+    return stripBidiControls(out);
 }
 
 QString normalizedSuffix(const QString &name)

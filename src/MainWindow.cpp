@@ -6680,7 +6680,8 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
             return;
         }
         static int counter = 0;
-        QString name = QFileInfo(att.filename).fileName();
+        // Normalized: no NTFS stream separator, trailing dots/spaces or bidi controls.
+        QString name = AttachmentUtil::normalizedFileName(att.filename);
         if (name.isEmpty()) name = QStringLiteral("attachment") + QLatin1Char('.') + QMimeDatabase().mimeTypeForName(att.contentType).preferredSuffix();
         const QString dir = m_tmp.path() + QLatin1Char('/') + QString::number(++counter);
         QDir().mkpath(dir);
