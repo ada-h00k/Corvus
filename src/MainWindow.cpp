@@ -510,6 +510,8 @@ MainWindow::MainWindow()
     auto *right = new QWidget;
     auto *v = new QVBoxLayout(right);
     m_title = new QLabel(tr("No conversation selected"));
+    // Profile and group names come from the network: never interpret them as rich text.
+    m_title->setTextFormat(Qt::PlainText);
     QFont f = m_title->font();
     f.setBold(true);
     f.setPointSize(f.pointSize() + 2);
@@ -4879,6 +4881,7 @@ void MainWindow::showMessageDetails(int idx)
     } else {
         auto *received = new QLabel(tr("Received from: %1").arg(message.sender.isEmpty()
             ? displayName(message.authorKey) : message.sender), &dialog);
+        received->setTextFormat(Qt::PlainText); // sender and profile names are remote data
         received->setTextInteractionFlags(Qt::TextSelectableByMouse);
         layout->addWidget(received);
     }
@@ -6088,6 +6091,7 @@ void MainWindow::showPollVotes(int idx)
     auto *lay = new QVBoxLayout(&dialog);
 
     auto *question = new QLabel(m.poll.question, &dialog);
+    question->setTextFormat(Qt::PlainText); // the question comes from any group member
     question->setWordWrap(true);
     QFont bold = question->font();
     bold.setBold(true);
@@ -6557,7 +6561,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
     if (!AttachmentUtil::isSafeToOpen(att)) {
         QMessageBox::information(this, tr("Attachment"),
                                  tr("For safety, “%1” is not opened directly. Use “Save …” from the message menu instead.")
-                                     .arg(AttachmentUtil::displayFileName(att, selectedMessage.time)));
+                                     .arg(AttachmentUtil::displayFileName(att, selectedMessage.time).toHtmlEscaped()));
         return;
     }
 
@@ -6591,7 +6595,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
             // in disguise, and the OS would run its default handler for the name.
             QMessageBox::warning(this, tr("Attachment"),
                                  tr("“%1” cannot be displayed as an image. Use “Save …” from the message menu to store it.")
-                                     .arg(viewerName));
+                                     .arg(viewerName.toHtmlEscaped()));
             return;
         }
         if (!m_tmp.isValid()) {

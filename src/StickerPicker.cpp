@@ -337,6 +337,8 @@ void StickerPicker::appendStickerBatch(quint64 generation)
         auto *heading = new QLabel(m_gridWidget);
         QString headingText = pack.title;
         if (!pack.author.isEmpty()) headingText += QStringLiteral(" · ") + pack.author;
+        // Pack titles and authors are third-party sticker metadata: plain text only.
+        heading->setTextFormat(Qt::PlainText);
         heading->setText(headingText);
         QFont headingFont = heading->font();
         headingFont.setBold(true);
@@ -352,7 +354,7 @@ void StickerPicker::appendStickerBatch(quint64 generation)
         category->setAutoRaise(true);
         category->setCheckable(true);
         category->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        category->setToolTip(headingText);
+        category->setToolTip(headingText.toHtmlEscaped()); // tooltips render rich text
         category->setAccessibleName(headingText);
         category->setProperty("stickerPackId", pack.id);
         category->setStyleSheet(QStringLiteral(
@@ -402,7 +404,7 @@ void StickerPicker::appendStickerBatch(quint64 generation)
         button->setIconSize(QSize(56, 56));
         button->setFlat(true);
         button->setCursor(Qt::PointingHandCursor);
-        button->setToolTip(sticker.emoji.isEmpty() ? pack.title : sticker.emoji);
+        button->setToolTip(sticker.emoji.isEmpty() ? pack.title.toHtmlEscaped() : sticker.emoji);
         if (!sticker.emoji.isEmpty()) button->setText(sticker.emoji);
         button->setProperty("stickerPackId", pack.id);
         button->setProperty("stickerId", sticker.id);

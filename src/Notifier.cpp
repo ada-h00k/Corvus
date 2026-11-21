@@ -242,8 +242,11 @@ Notifier::Delivery Notifier::notify(const QString &key, const QString &title, co
 #ifdef HAVE_QT_DBUS
     if (ensurePortal()) {
         QVariantMap notification;
-        notification.insert(QStringLiteral("title"), title);
-        notification.insert(QStringLiteral("body"), body); // plain text: the portal escapes it itself
+        // Sender names, group names and message bodies are remote data. Portal
+        // backends differ in whether they treat these strings as plain text or
+        // markup: escape so no implementation renders attacker-controlled HTML.
+        notification.insert(QStringLiteral("title"), title.toHtmlEscaped());
+        notification.insert(QStringLiteral("body"), body.toHtmlEscaped());
         notification.insert(QStringLiteral("category"), QStringLiteral("im.received"));
         notification.insert(QStringLiteral("default-action"), QStringLiteral("open"));
         notification.insert(QStringLiteral("icon"), portalIcon(icon));
@@ -269,9 +272,10 @@ Notifier::Delivery Notifier::notify(const QString &key, const QString &title, co
         hints.insert(QStringLiteral("category"), QStringLiteral("im.received"));
         if (!icon.isNull()) hints.insert(QStringLiteral("image-data"), imageHint(icon)); // preferred over app_icon
         const QString text = m_markup ? body.toHtmlEscaped() : body; // servers with markup would eat "<"
+        const QString shownTitle = m_markup ? title.toHtmlEscaped() : title; // some servers render the summary too
         const QDBusMessage reply = m_iface->call(QStringLiteral("Notify"), QStringLiteral("Corvus"),
                                                  QVariant::fromValue<uint>(m_idForKey.value(key, 0)),
-                                                 themedIconName(), title, text,
+                                                 themedIconName(), shownTitle, text,
                                                  QStringList{QStringLiteral("default"), tr("Open")}, hints, -1);
         if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
             const uint id = reply.arguments().first().toUInt();
@@ -290,10 +294,13 @@ Notifier::Delivery Notifier::notify(const QString &key, const QString &title, co
     if (QSystemTrayIcon *tray = trayForMessages(&temporary)) {
         connectTray(tray);
         m_lastTrayKey = key;
+        // The tray message reaches the platform notification service as raw text;
+        // on Linux it goes through org.freedesktop.Notifications, where markup-capable
+        // servers would render remote names and message bodies as rich text.
         if (icon.isNull())
-            tray->showMessage(title, body, QSystemTrayIcon::NoIcon, 8000);
+            tray->showMessage(title.toHtmlEscaped(), body.toHtmlEscaped(), QSystemTrayIcon::NoIcon, 8000);
         else
-            tray->showMessage(title, body, QIcon(icon), 8000);
+            tray->showMessage(title.toHtmlEscaped(), body.toHtmlEscaped(), QIcon(icon), 8000);
         return temporary ? Delivery::TemporaryTray : Delivery::Tray;
     }
     return Delivery::None;

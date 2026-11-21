@@ -48,6 +48,7 @@ MessageRequestsDialog::MessageRequestsDialog(SignalCli &cli, const RequestList &
         auto *rowLayout = new QHBoxLayout(row);
         rowLayout->setContentsMargins(8, 2, 4, 2);
         auto *name = new QLabel(title, row);
+        name->setTextFormat(Qt::PlainText); // a stranger's profile name: never rich text
         name->setToolTip(key);
         rowLayout->addWidget(name, 1);
 

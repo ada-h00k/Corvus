@@ -998,7 +998,7 @@ void MediaGalleryDialog::activateFile(int id)
     if (!AttachmentUtil::isSafeToOpen(item.att)) {
         QMessageBox::information(this, tr("Attachment"),
                                  tr("For safety, “%1” is not opened directly. Use “Save as …” from the right-click menu instead.")
-                                     .arg(AttachmentUtil::displayFileName(item.att, item.time)));
+                                     .arg(AttachmentUtil::displayFileName(item.att, item.time).toHtmlEscaped()));
         return;
     }
     showStatus(tr("Loading …"));
