@@ -59,6 +59,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHostAddress>
+#include <QHostInfo>
 #include <QIconEngine>
 #include <QInputDialog>
 #include <QBuffer>
@@ -143,6 +144,40 @@ static bool safeHttpsPreviewUrl(const QUrl &url)
         host.endsWith(QLatin1String(".test")) || !host.contains(QLatin1Char('.'))) return false;
     QHostAddress address;
     if (address.setAddress(host)) return false; // never fetch an IP literal (local/private or otherwise)
+    return true;
+}
+
+// True when every address the host resolves to is public. safeHttpsPreviewUrl only
+// looks at the name: "127.0.0.1.nip.io" or a DNS-rebinding server would pass it and
+// could still point a preview fetch at this machine or the local network.
+static bool isPublicPreviewAddress(const QHostAddress &a)
+{
+    QHostAddress addr = a;
+    // IPv4-mapped IPv6 (::ffff:10.0.0.1): classify by the embedded IPv4 address.
+    if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
+        bool mapped = false;
+        const quint32 v4 = addr.toIPv4Address(&mapped);
+        if (mapped) addr = QHostAddress(v4);
+    }
+    if (addr.isNull() || addr.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol) return false;
+    if (addr == QHostAddress(QHostAddress::Any) || addr == QHostAddress(QHostAddress::AnyIPv4))
+        return false; // the unspecified addresses ("::" and 0.0.0.0)
+    if (addr.isLoopback() || addr.isLinkLocal() || addr.isMulticast()) return false;
+    if (addr.protocol() == QAbstractSocket::IPv4Protocol) {
+        // RFC 1918 private ranges, the shared (carrier NAT) range 100.64/10 and 0/8.
+        // Checked on the bytes so no Qt version's address-classification API matters.
+        bool ok = false;
+        const quint32 v4 = addr.toIPv4Address(&ok);
+        const quint8 b0 = static_cast<quint8>(v4 >> 24), b1 = static_cast<quint8>(v4 >> 16);
+        if (b0 == 0 || b0 == 10 || b0 == 127 || (b0 == 169 && b1 == 254) ||
+            (b0 == 172 && (b1 & 0xF0) == 16) || (b0 == 192 && b1 == 168) ||
+            (b0 == 100 && (b1 & 0xC0) == 64))
+            return false;
+    } else {
+        // IPv6 unique-local fc00::/7.
+        const Q_IPV6ADDR v6 = addr.toIPv6Address();
+        if (v6.c[0] == 0xFC || v6.c[0] == 0xFD) return false;
+    }
     return true;
 }
 
@@ -4129,7 +4164,45 @@ void MainWindow::updateDraftLinkPreview()
         finishPendingLinkPreviewSend();
         return;
     }
-    requestLinkPreviewPage(url, 0, m_linkPreviewGeneration);
+    // The name check passed; now make sure the name does not resolve into the
+    // local network before anything is fetched (see requestPreviewUrlResolved).
+    requestPreviewUrlResolved(url, 0, m_linkPreviewGeneration, false, {});
+}
+
+// Resolves the host of a preview URL and only starts the fetch when every address
+// is public (see isPublicPreviewAddress). The lookup runs asynchronously so slow
+// DNS never blocks the GUI; a result for a superseded preview (generation changed)
+// is dropped. Everything else about the fetch keeps the established behaviour.
+void MainWindow::requestPreviewUrlResolved(const QString &url, int redirects, quint64 generation,
+                                           bool image, const QString &previewUrl)
+{
+    const QUrl parsed(url, QUrl::StrictMode);
+    if (generation != m_linkPreviewGeneration || !safeHttpsPreviewUrl(parsed)) {
+        if (generation == m_linkPreviewGeneration) {
+            if (!image) m_draftLinkPreview = LinkPreview();
+            m_linkPreviewLoading = false;
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+        }
+        return;
+    }
+    QHostInfo::lookupHost(parsed.host(), this,
+                          [this, url, redirects, generation, image, previewUrl](const QHostInfo &info) {
+        if (generation != m_linkPreviewGeneration) return;
+        const bool safe = info.error() == QHostInfo::NoError && !info.addresses().isEmpty() &&
+                          std::all_of(info.addresses().cbegin(), info.addresses().cend(), isPublicPreviewAddress);
+        if (!safe) {
+            if (!image) m_draftLinkPreview = LinkPreview();
+            m_linkPreviewLoading = false;
+            refreshLinkPreviewBar();
+            finishPendingLinkPreviewSend();
+            return;
+        }
+        if (image)
+            requestLinkPreviewImage(url, previewUrl, redirects, generation);
+        else
+            requestLinkPreviewPage(url, redirects, generation);
+    });
 }
 
 void MainWindow::requestLinkPreviewPage(const QString &url, int redirects, quint64 generation)
@@ -4168,7 +4241,7 @@ void MainWindow::requestLinkPreviewPage(const QString &url, int redirects, quint
         if (redirect.isValid()) {
             const QUrl next = QUrl(url).resolved(redirect);
             if (redirects < 5 && safeHttpsPreviewUrl(next)) {
-                requestLinkPreviewPage(next.toString(QUrl::FullyEncoded), redirects + 1, generation);
+                requestPreviewUrlResolved(next.toString(QUrl::FullyEncoded), redirects + 1, generation, false, {});
                 return;
             }
             m_linkPreviewLoading = false;
@@ -4208,7 +4281,8 @@ void MainWindow::requestLinkPreviewPage(const QString &url, int redirects, quint
                 // If the user presses Send while metadata is loading, wait for the image too
                 // so it can be included in the signal-cli preview payload.
                 m_linkPreviewLoading = true;
-                requestLinkPreviewImage(imageUrl.toString(QUrl::FullyEncoded), m_draftLinkPreview.url, 0, generation);
+                requestPreviewUrlResolved(imageUrl.toString(QUrl::FullyEncoded), 0, generation, true,
+                                          m_draftLinkPreview.url);
                 return;
             }
         }
@@ -4247,7 +4321,7 @@ void MainWindow::requestLinkPreviewImage(const QString &url, const QString &prev
         if (redirect.isValid()) {
             const QUrl next = QUrl(url).resolved(redirect);
             if (redirects < 5 && safeHttpsPreviewUrl(next)) {
-                requestLinkPreviewImage(next.toString(QUrl::FullyEncoded), previewUrl, redirects + 1, generation);
+                requestPreviewUrlResolved(next.toString(QUrl::FullyEncoded), redirects + 1, generation, true, previewUrl);
                 return;
             }
             m_linkPreviewLoading = false;

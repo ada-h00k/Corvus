@@ -16,7 +16,8 @@ enum LinkPreviewFetcher {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
             let n: Int = lock.withLock { count += 1; return count }
-            guard n <= LinkPreviewRules.maxRedirects, LinkPreviewRules.isSafeToFetch(request.url) else { return nil }
+            guard n <= LinkPreviewRules.maxRedirects, LinkPreviewRules.isSafeToFetch(request.url),
+                  let host = request.url?.host, LinkPreviewRules.resolvesPublicly(host) else { return nil }
             return request
         }
     }
@@ -33,7 +34,7 @@ enum LinkPreviewFetcher {
 
     /// GETs `url`; nil unless the answer is 2xx, of an accepted type and within `limit` bytes.
     private static func get(_ url: URL, accept: String, limit: Int) async -> (data: Data, type: String, finalURL: URL)? {
-        guard LinkPreviewRules.isSafeToFetch(url) else { return nil }
+        guard LinkPreviewRules.isSafeToFetch(url), LinkPreviewRules.resolvesPublicly(url.host ?? "") else { return nil }
         let guardian = RedirectGuard()
         let s = session(guardian)
         defer { s.finishTasksAndInvalidate() }

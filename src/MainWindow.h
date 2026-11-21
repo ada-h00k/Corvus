@@ -277,6 +277,10 @@ private:
     void refreshLinkPreviewBar();
     void requestLinkPreviewPage(const QString &url, int redirects, quint64 generation);
     void requestLinkPreviewImage(const QString &url, const QString &previewUrl, int redirects, quint64 generation);
+    // Resolves the host first and only fetches when every address is public
+    // (link previews must not be pointed at loopback/private/link-local hosts).
+    void requestPreviewUrlResolved(const QString &url, int redirects, quint64 generation,
+                                   bool image, const QString &previewUrl);
     void fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const QString &author, int attempt = 0);
     void fetchContactAvatar(const QString &key, qint64 ts, const QString &author, int attempt = 0);
     void finishPendingLinkPreviewSend();
