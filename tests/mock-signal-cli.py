@@ -226,6 +226,9 @@ own_given, own_family = "Old", "Name"
 account_index = args.index("-a") + 1 if "-a" in args else -1
 self_account = args[account_index] if account_index > 0 else ""
 sent = 0
+# Attachments the backend parked (F4): getAttachment fails for ids starting with "parked"
+# until downloadAttachment fetched them.
+downloaded = set()
 log = os.environ.get("MOCK_LOG")
 
 
@@ -554,7 +557,22 @@ for line in sys.stdin:
                 continue
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}
+    elif m == "downloadAttachment":
+        aid = str(p.get("id", ""))
+        if not aid.startswith("parked"):
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find attachment"}})
+            continue
+        downloaded.add(aid)
+        payload = STICKER_WEBP_STATIC if aid.startswith("parked-sticker") else png()
+        res = {"data": base64.b64encode(payload).decode()}
     elif m == "getAttachment":
+        if str(p.get("id", "")).startswith("parked") and p.get("id") not in downloaded:
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find attachment"}})
+            continue
+        if str(p.get("id", "")).startswith("parked-sticker"):
+            res = {"data": base64.b64encode(STICKER_WEBP_STATIC).decode()}
+            emit({"jsonrpc": "2.0", "id": rid, "result": res})
+            continue
         if p.get("id") == "missing":
             emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "Could not find attachment"}})
             continue

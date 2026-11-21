@@ -307,6 +307,10 @@ private:
     void fetchThumbnails(const QString &key, qint64 ts, const QString &author, int attempt = 0);
     void onAttachmentDownloaded(const QString &id);
     void fetchRequestAttachments(const QString &key);
+    // Asks the backend to download an attachment it parked (F4) — only for chats that are not
+    // an open message request; those wait for the explicit accept (fetchRequestAttachments).
+    void downloadParkedAttachment(const QString &key, const QString &id,
+                                  std::function<void(const QJsonValue &, const QString &)> cb);
     void deleteAttachmentFiles(const QList<Attachment> &attachments);
     void loadAnimatedAttachment(int messageIndex, int attachmentIndex);
     void fetchAttachmentData(const QString &key, const Attachment &att,

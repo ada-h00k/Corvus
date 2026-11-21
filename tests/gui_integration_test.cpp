@@ -1396,6 +1396,30 @@ int main(int argc, char **argv)
             if (apng->isRunning()) stickerPlaying = true;
         CHECK(stickerPlaying);
 
+        // A sticker of a pack that is not installed, from an established chat, whose image the
+        // backend parked (F4: a sender it does not count as accepted). getAttachment fails, the
+        // installed packs cannot serve it — the client must ask for the parked download.
+        const qint64 parkedTs = stickerTs + 1;
+        inject(injectFile, QJsonObject{
+            {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+            {"timestamp", parkedTs},
+            {"dataMessage", QJsonObject{{"timestamp", parkedTs},
+                                        {"sticker", QJsonObject{{"packId", "0123456789abcdef0123456789abcdef"},
+                                                                {"stickerId", 3},
+                                                                {"attachmentId", "parked-sticker1"}}}}}});
+        CHECK(waitFor([&] { return view->messageCount() == 7; }));
+        CHECK(waitFor([&] {
+            for (const QJsonObject &request : readLog(logFile))
+                if (request["method"].toString() == QStringLiteral("downloadAttachment") &&
+                    request["params"].toObject()["id"].toString() == QStringLiteral("parked-sticker1"))
+                    return true;
+            return false;
+        }, 5000));
+        CHECK(loggedAttachmentFetch(logFile, QStringLiteral("parked-sticker1")));
+        CHECK(waitFor([&] {
+            return html(view).contains("[image: signal-sticker:0123456789abcdef0123456789abcdef:3.webp]");
+        }, 5000));
+
         CHECK(chooseChatNickname(w, list, "Bob", "Bobby"));
         CHECK(listHas(list, "Bobby"));
 
@@ -1405,7 +1429,7 @@ int main(int argc, char **argv)
         // --- View Once: send one image with the protocol flag, then receive and open one.
         // Run this after the other Alice assertions so it does not change their fixture counts.
         selectItem(list, "Alice");
-        CHECK(waitFor([&] { return view->messageCount() == 6; }));
+        CHECK(waitFor([&] { return view->messageCount() == 7; }));
         // Disable the five-minute timer configured above so the mock CLI's intentionally old
         // send timestamps cannot immediately expire this View Once regression fixture.
         CHECK(chooseChatExpiration(w, list, "Alice", 0));
@@ -1437,7 +1461,7 @@ int main(int argc, char **argv)
         CHECK(viewOnceSend["viewOnce"].toBool());
         CHECK(viewOnceSend["message"].toString().isEmpty());
         CHECK(viewOnceSend["quoteTimestamp"].isUndefined());
-        CHECK(waitFor([&] { return view->messageCount() == 7 && html(view).contains("View Once photo sent"); }));
+        CHECK(waitFor([&] { return view->messageCount() == 8 && html(view).contains("View Once photo sent"); }));
 
         const qint64 oneTimeTs = QDateTime::currentMSecsSinceEpoch();
         inject(injectFile, QJsonObject{
@@ -1447,7 +1471,7 @@ int main(int argc, char **argv)
                                          {"viewOnce", true}, {"attachments", QJsonArray{
                 QJsonObject{{"id", "view-once-photo"}, {"contentType", "image/png"},
                             {"filename", "one-time.png"}, {"size", 128}}}}}}});
-        CHECK(waitFor([&] { return view->messageCount() == 8 && html(view).contains("View Once photo"); }));
+        CHECK(waitFor([&] { return view->messageCount() == 9 && html(view).contains("View Once photo"); }));
         CHECK(!html(view).contains("should not be shown"));
         CHECK(!loggedAttachmentFetch(logFile, QStringLiteral("view-once-photo"))); // never thumbnail-prefetched
         view->scrollToMessage(7);
@@ -1483,7 +1507,7 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return listHas(list, "Bobby"); }));
         CHECK(waitFor([&] { return w.findChild<QLabel *>() != nullptr; }));
         selectItem(list, "Alice");
-        CHECK(waitFor([&] { return view->messageCount() == 8; })); // incl. Alice's animated sticker + View Once pair
+        CHECK(waitFor([&] { return view->messageCount() == 9; })); // incl. Alice's two stickers + View Once pair
         const QString h = html(view);
         CHECK(h.contains("look at this"));
         CHECK(h.contains("earlier question"));

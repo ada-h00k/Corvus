@@ -2150,10 +2150,13 @@ final class AppModel {
                         data = Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
                     }
                 } catch {
-                    // The image may not be stored under the id (a sticker sent from another
-                    // device has no local copy): an installed pack serves it. Otherwise the
+                    // The backend may have parked the file (F4: a sender it does not count as
+                    // accepted): ask it to download it. A sticker without a pointer here (sent
+                    // from another device) is served by an installed pack. Otherwise the
                     // backend may still be downloading it: retry a few times.
-                    if att.isSticker && att.isValidSticker, let d = try? await fetchSticker(att.stickerPackId, att.stickerId) {
+                    if attempt == 0, !att.id.isEmpty, let d = try? await downloadParked(att.id) {
+                        data = d
+                    } else if att.isSticker && att.isValidSticker, let d = try? await fetchSticker(att.stickerPackId, att.stickerId) {
                         data = d
                     } else {
                         if attempt < 3 {
@@ -2193,11 +2196,25 @@ final class AppModel {
             let res = try await cli.call("getAttachment", p)
             return Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
         } catch {
-            // The image may not be stored under the id (a sticker sent from another device
-            // has no local copy, or it was swept): an installed pack serves it instead.
+            // The backend may have parked the file (F4): ask it to download it first.
+            if let d = try? await downloadParked(att.id) { return d }
+            // A sticker without a pointer here (sent from another device, or swept): an
+            // installed pack serves it instead.
             if att.isSticker && att.isValidSticker { return try await fetchSticker(att.stickerPackId, att.stickerId) }
             throw error
         }
+    }
+
+    /// The backend parks the attachments (and sticker images) of senders it does not count as
+    /// accepted (F4), and its contact sets can miss long-standing chat partners: nothing else
+    /// would ever fetch those pointers. This app shows no message requests (hidden contacts
+    /// are skipped), so every chat it fetches for is an established one.
+    private func downloadParked(_ id: String) async throws -> Data {
+        let res = try await cli.call("downloadAttachment", ["id": id])
+        guard let d = Data(base64Encoded: jsonString(jsonObject(res)["data"])), !d.isEmpty else {
+            throw RpcError("The attachment is no longer available.")
+        }
+        return d
     }
 
     /// Animated GIFs and stickers: the stored preview is a still image, so the original is fetched on demand.

@@ -6452,16 +6452,27 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
             if (key == m_current) showConversation(true);
         };
         m_cli.call(method, p,
-                   [this, key, ts, author, a, attempt, token, packFallback, apply](const QJsonValue &res, const QString &err) {
+                   [this, key, ts, author, a, attempt, token, method, id = att.id, packFallback, apply](const QJsonValue &res, const QString &err) {
                        m_thumbPending.remove(token);
                        if (!err.isEmpty()) {
-                           // The image may not be stored under the id (a sticker sent from
-                           // another device has no local copy): an installed pack serves it.
-                           if (!packFallback.isEmpty() && attempt == 0)
-                               m_cli.call(QStringLiteral("getSticker"), packFallback,
-                                          [apply](const QJsonValue &res2, const QString &err2) {
-                                              if (err2.isEmpty()) apply(res2);
-                                          });
+                           if (attempt == 0 && method == QLatin1String("getAttachment")) {
+                               // The backend may have parked the file (F4: a sender it does
+                               // not count as accepted): ask it to download it. When that
+                               // fails too (a sticker sent from another device has no
+                               // pointer here), an installed pack serves it.
+                               downloadParkedAttachment(key, id,
+                                   [this, packFallback, apply](const QJsonValue &res2, const QString &err2) {
+                                       if (err2.isEmpty()) {
+                                           apply(res2);
+                                           return;
+                                       }
+                                       if (packFallback.isEmpty()) return;
+                                       m_cli.call(QStringLiteral("getSticker"), packFallback,
+                                                  [apply](const QJsonValue &res3, const QString &err3) {
+                                                      if (err3.isEmpty()) apply(res3);
+                                                  });
+                                   });
+                           }
                            // the backend may still be downloading the image: retry a few times
                            if (attempt < 3)
                                QTimer::singleShot(2000 * (attempt + 1), this,
@@ -6608,21 +6619,43 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
                                    {QStringLiteral("stickerId"), att.stickerId()}};
     }
     m_cli.call(QStringLiteral("getAttachment"), p,
-               [this, decode, cb, packFallback](const QJsonValue &res, const QString &err) {
+               [this, key, id = att.id, decode, cb, packFallback](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
-            if (!packFallback.isEmpty()) {
-                m_cli.call(QStringLiteral("getSticker"), packFallback,
-                           [decode, cb](const QJsonValue &res2, const QString &err2) {
-                               if (err2.isEmpty()) decode(res2);
-                               else cb({}, err2);
-                           });
-                return;
-            }
-            cb({}, err);
+            // The backend may have parked the file (F4): ask it to download it first.
+            downloadParkedAttachment(key, id,
+                [this, err, decode, cb, packFallback](const QJsonValue &res2, const QString &err2) {
+                    if (err2.isEmpty()) {
+                        decode(res2);
+                        return;
+                    }
+                    if (!packFallback.isEmpty()) {
+                        m_cli.call(QStringLiteral("getSticker"), packFallback,
+                                   [decode, cb](const QJsonValue &res3, const QString &err3) {
+                                       if (err3.isEmpty()) decode(res3);
+                                       else cb({}, err3);
+                                   });
+                        return;
+                    }
+                    cb({}, err);
+                });
             return;
         }
         decode(res);
     });
+}
+
+// The backend parks the attachments (and sticker images) of senders it does not count as
+// accepted (F4), and its contact sets can miss long-standing chat partners: in an established
+// chat nothing else would ever fetch those pointers. An open message request is left alone —
+// accepting it fetches its attachments (fetchRequestAttachments).
+void MainWindow::downloadParkedAttachment(const QString &key, const QString &id,
+                                          std::function<void(const QJsonValue &, const QString &)> cb)
+{
+    if (id.isEmpty() || m_hiddenContacts.contains(key)) {
+        cb({}, tr("The attachment is no longer available."));
+        return;
+    }
+    m_cli.call(QStringLiteral("downloadAttachment"), QJsonObject{{QStringLiteral("id"), id}}, cb);
 }
 
 void MainWindow::consumeViewOnce(const QString &key, qint64 timestamp, const QString &author, bool expired)
