@@ -249,6 +249,13 @@ static void parseBody(const QJsonObject &dm, ParsedEnvelope &out, qint64 envelop
             Attachment a;
             a.contentType = QStringLiteral("image/webp");
             a.filename = QStringLiteral("signal-sticker:%1:%2.webp").arg(packId).arg(stickerId);
+            // corvus-cli 1.6 stores the image of a received sticker under the attachment's id
+            // and reports that id here (F5): getAttachment serves exactly what this message's
+            // sender sent, so one sender cannot decide what a popular pack looks like in every
+            // chat. Backends without the id (older corvus-cli, signal-cli) leave it empty and
+            // keep the pack-reference path.
+            a.id = sticker["attachmentId"].toString();
+            if (a.id.isEmpty()) a.id = sticker["attachment_id"].toString();
             out.msg.attachments.append(a);
         }
     }

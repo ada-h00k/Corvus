@@ -627,8 +627,9 @@ final class StickerTests: XCTestCase {
     let key = String(repeating: "ab", count: 32)
 
     func testIncomingSticker() {
+        // corvus-cli 1.6 reports where a received sticker's image is stored (attachmentId, F5).
         let pe = parseEnvelope(["sourceNumber": "+1", "dataMessage": [
-            "timestamp": 5, "sticker": ["packId": pack, "stickerId": 3] as JSON,
+            "timestamp": 5, "sticker": ["packId": pack, "stickerId": 3, "attachmentId": "att-1"] as JSON,
         ] as JSON])
         XCTAssertEqual(pe.kind, .message) // a sticker alone is a message
         XCTAssertEqual(pe.msg.attachments.count, 1)
@@ -637,6 +638,7 @@ final class StickerTests: XCTestCase {
         XCTAssertTrue(a.isImage)
         XCTAssertEqual(a.stickerPackId, pack)
         XCTAssertEqual(a.stickerId, 3)
+        XCTAssertEqual(a.id, "att-1") // fetched with getAttachment; getSticker serves installed packs only
         XCTAssertEqual(a.filename, "signal-sticker:\(pack):3.webp") // same convention as the Qt app
 
         // Other spellings signal-cli has used, and a string id.
@@ -644,6 +646,8 @@ final class StickerTests: XCTestCase {
             "timestamp": 6, "sticker": ["pack_id": "p", "sticker_id": "7"] as JSON,
         ] as JSON])
         XCTAssertEqual(alt.msg.attachments.first?.stickerId, 7)
+        // No attachmentId reported: the pack-reference path stays, the id stays empty.
+        XCTAssertTrue(alt.msg.attachments.first?.id.isEmpty ?? false)
         // Broken references are dropped.
         XCTAssertEqual(parseEnvelope(["sourceNumber": "+1", "dataMessage": [
             "timestamp": 7, "sticker": ["packId": "", "stickerId": 1] as JSON,

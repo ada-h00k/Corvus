@@ -2094,7 +2094,9 @@ final class AppModel {
         let m = c.msgs[mi]
         for (a, att) in m.attachments.enumerated() {
             if !att.isImage || !att.thumb.isEmpty || att.size > Media.maxThumbSource { continue }
-            if att.isSticker ? !att.isValidSticker : att.id.isEmpty { continue }
+            // A sticker is fetched by attachment id (corvus-cli 1.6 reports it, F5) or, when the
+            // backend reports none, by its pack reference — something fetchable must exist.
+            if att.id.isEmpty && (!att.isSticker || !att.isValidSticker) { continue }
             let token = "\(key)|\(ts)|\(author)|\(a)"
             if thumbPending.contains(token) { continue }
             thumbPending.insert(token)
@@ -2104,20 +2106,26 @@ final class AppModel {
                 defer { thumbPending.remove(token) }
                 let data: Data
                 do {
-                    if att.isSticker {
+                    if att.isSticker && att.id.isEmpty {
                         data = try await fetchSticker(att.stickerPackId, att.stickerId)
                     } else {
                         let res = try await cli.call("getAttachment", p)
                         data = Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
                     }
                 } catch {
-                    // signal-cli may still be downloading it: retry a few times
-                    if attempt < 3 {
-                        try? await Task.sleep(for: .seconds(2 * (attempt + 1)))
-                        thumbPending.remove(token)
-                        fetchThumbnails(key, ts: ts, author: author, attempt: attempt + 1)
+                    // The image may not be stored under the id (a sticker sent from another
+                    // device has no local copy): an installed pack serves it. Otherwise the
+                    // backend may still be downloading it: retry a few times.
+                    if att.isSticker && att.isValidSticker, let d = try? await fetchSticker(att.stickerPackId, att.stickerId) {
+                        data = d
+                    } else {
+                        if attempt < 3 {
+                            try? await Task.sleep(for: .seconds(2 * (attempt + 1)))
+                            thumbPending.remove(token)
+                            fetchThumbnails(key, ts: ts, author: author, attempt: attempt + 1)
+                        }
+                        return
                     }
-                    return
                 }
                 let thumb = Media.makeThumbnail(data)
                 guard !thumb.isEmpty, let c2 = chats.convs[key], let i = chats.findMessage(c2, ts: ts, authors: [author]),
@@ -2134,12 +2142,25 @@ final class AppModel {
 
     func fetchAttachmentData(_ key: String, _ att: Attachment) async throws -> Data {
         if !att.path.isEmpty, let d = FileManager.default.contents(atPath: att.path) { return d }
-        if att.isValidSticker { return try await fetchSticker(att.stickerPackId, att.stickerId) }
+        // A received sticker with an attachment id (corvus-cli 1.6, F5) is fetched like any
+        // other attachment: getAttachment serves exactly the image the sender sent. getSticker
+        // only knows installed packs; it stays the path for backends that report no id.
+        if att.isSticker && att.id.isEmpty {
+            guard att.isValidSticker else { throw RpcError("This sticker reference is invalid.") }
+            return try await fetchSticker(att.stickerPackId, att.stickerId)
+        }
         guard !att.id.isEmpty, let c = chats.convs[key] else { throw RpcError("The attachment is no longer available.") }
         var p: JSON = ["id": att.id]
         addRecipient(&p, c)
-        let res = try await cli.call("getAttachment", p)
-        return Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
+        do {
+            let res = try await cli.call("getAttachment", p)
+            return Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
+        } catch {
+            // The image may not be stored under the id (a sticker sent from another device
+            // has no local copy, or it was swept): an installed pack serves it instead.
+            if att.isSticker && att.isValidSticker { return try await fetchSticker(att.stickerPackId, att.stickerId) }
+            throw error
+        }
     }
 
     /// Animated GIFs and stickers: the stored preview is a still image, so the original is fetched on demand.

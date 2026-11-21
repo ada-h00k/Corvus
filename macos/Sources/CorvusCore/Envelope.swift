@@ -82,7 +82,8 @@ private func parseAttachments(_ dm: JSON) -> [Attachment] {
     }
 }
 
-/// {"sticker": {"packId": "…", "stickerId": 3}} (signal-cli spells the keys in several ways).
+/// {"sticker": {"packId": "…", "stickerId": 3, "attachmentId": "…"}} (signal-cli spells the keys
+/// in several ways; corvus-cli 1.6 reports the attachmentId of a received sticker, F5).
 private func parseSticker(_ dm: JSON) -> Attachment? {
     let o = jsonObject(dm["sticker"])
     if o.isEmpty { return nil }
@@ -90,8 +91,9 @@ private func parseSticker(_ dm: JSON) -> Attachment? {
     guard let raw = ["stickerId", "sticker_id", "id"].lazy.compactMap({ o[$0] }).first else { return nil }
     let id: Int
     if let n = raw as? NSNumber { id = n.intValue } else if let s = raw as? String, let n = Int(s) { id = n } else { return nil }
+    let attachmentId = ["attachmentId", "attachment_id"].lazy.map { jsonString(o[$0]) }.first { !$0.isEmpty } ?? ""
     guard !packId.isEmpty, id >= 0 else { return nil }
-    return Attachment.sticker(packId: packId, stickerId: id)
+    return Attachment.sticker(packId: packId, stickerId: id, attachmentId: attachmentId)
 }
 
 /// The first valid entry of {"previews": [{"url", "title", "description", "image": {"id", "contentType", …}}]}.

@@ -6391,15 +6391,18 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
 
     for (int a = 0; a < m.attachments.size(); ++a) {
         const Attachment &att = m.attachments[a];
-        if (!att.isImage() || !att.thumb.isEmpty() || (!att.isSticker() && att.id.isEmpty()) || att.size > kMaxThumbSource) continue;
-        if (att.isSticker() && (att.stickerPackId().isEmpty() || att.stickerId() < 0)) continue;
+        if (!att.isImage() || !att.thumb.isEmpty() || att.size > kMaxThumbSource) continue;
+        // A sticker is fetched by attachment id (corvus-cli 1.6 reports it, F5) or, when the
+        // backend reports none, by its pack reference — something fetchable must exist.
+        if (att.id.isEmpty() && (!att.isSticker() || att.stickerPackId().isEmpty() || att.stickerId() < 0)) continue;
         const QString token = QStringLiteral("%1|%2|%3|%4").arg(key).arg(ts).arg(author).arg(a);
         if (m_thumbPending.contains(token)) continue;
         m_thumbPending.insert(token);
 
         QJsonObject p;
+        QJsonObject packFallback; // getSticker params, when an installed pack can serve instead
         QString method;
-        if (att.isSticker()) {
+        if (att.isSticker() && att.id.isEmpty()) {
             p = QJsonObject{{QStringLiteral("packId"), att.stickerPackId()},
                             {QStringLiteral("stickerId"), att.stickerId()}};
             method = QStringLiteral("getSticker");
@@ -6407,38 +6410,52 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
             p = QJsonObject{{QStringLiteral("id"), att.id}};
             addRecipient(p, c);
             method = QStringLiteral("getAttachment");
+            if (att.isSticker() && !att.stickerPackId().isEmpty() && att.stickerId() >= 0) {
+                packFallback = QJsonObject{{QStringLiteral("packId"), att.stickerPackId()},
+                                           {QStringLiteral("stickerId"), att.stickerId()}};
+            }
         }
+        auto apply = [this, key, ts, author, a](const QJsonValue &res) {
+            const QJsonObject object = res.toObject();
+            QString encoded = object.value(QStringLiteral("data")).toString();
+            if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
+            if (encoded.isEmpty() && res.isString()) encoded = res.toString();
+            const QByteArray data = QByteArray::fromBase64(encoded.toLatin1());
+            const QImage img = AttachmentUtil::imageFromData(data);
+            auto cit = m_convs.find(key);
+            if (img.isNull() || cit == m_convs.end()) return;
+            const int i = findMessage(cit.value(), ts, QStringList{author});
+            if (i < 0 || a >= cit.value().msgs[i].attachments.size()) return;
+            Message &mm = cit.value().msgs[i];
+            Attachment &at = mm.attachments[a];
+            at.width = img.width();
+            at.height = img.height();
+            // Never fall back to the raw attachment here: a record storing it
+            // (up to 30 MB) would exceed the history store's 16 MiB record
+            // limit and make the whole history file fail to open. A missing
+            // thumbnail only means no preview until the image is opened.
+            at.thumb = AttachmentUtil::makeThumbnail(img);
+            persist(Records::attachmentsUpdate(key, mm));
+            if (key == m_current) showConversation(true);
+        };
         m_cli.call(method, p,
-                   [this, key, ts, author, a, attempt, token](const QJsonValue &res, const QString &err) {
+                   [this, key, ts, author, a, attempt, token, packFallback, apply](const QJsonValue &res, const QString &err) {
                        m_thumbPending.remove(token);
                        if (!err.isEmpty()) {
-                           // signal-cli may still be downloading the image or sticker: retry a few times
+                           // The image may not be stored under the id (a sticker sent from
+                           // another device has no local copy): an installed pack serves it.
+                           if (!packFallback.isEmpty() && attempt == 0)
+                               m_cli.call(QStringLiteral("getSticker"), packFallback,
+                                          [apply](const QJsonValue &res2, const QString &err2) {
+                                              if (err2.isEmpty()) apply(res2);
+                                          });
+                           // the backend may still be downloading the image: retry a few times
                            if (attempt < 3)
                                QTimer::singleShot(2000 * (attempt + 1), this,
                                                   [this, key, ts, author, attempt] { fetchThumbnails(key, ts, author, attempt + 1); });
                            return;
                        }
-                       const QJsonObject object = res.toObject();
-                       QString encoded = object.value(QStringLiteral("data")).toString();
-                       if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
-                       if (encoded.isEmpty() && res.isString()) encoded = res.toString();
-                       const QByteArray data = QByteArray::fromBase64(encoded.toLatin1());
-                       const QImage img = AttachmentUtil::imageFromData(data);
-                       auto cit = m_convs.find(key);
-                       if (img.isNull() || cit == m_convs.end()) return;
-                       const int i = findMessage(cit.value(), ts, QStringList{author});
-                       if (i < 0 || a >= cit.value().msgs[i].attachments.size()) return;
-                       Message &mm = cit.value().msgs[i];
-                       Attachment &at = mm.attachments[a];
-                       at.width = img.width();
-                       at.height = img.height();
-                       // Never fall back to the raw attachment here: a record storing it
-                       // (up to 30 MB) would exceed the history store's 16 MiB record
-                       // limit and make the whole history file fail to open. A missing
-                       // thumbnail only means no preview until the image is opened.
-                       at.thumb = AttachmentUtil::makeThumbnail(img);
-                       persist(Records::attachmentsUpdate(key, mm));
-                       if (key == m_current) showConversation(true);
+                       apply(res);
                    });
     }
 }
@@ -6482,23 +6499,29 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
             return;
         }
     }
-    if (att.isSticker()) {
+    auto decode = [cb](const QJsonValue &res) {
+        const QJsonObject object = res.toObject();
+        QString encoded = object.value(QStringLiteral("data")).toString();
+        if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
+        if (encoded.isEmpty() && res.isString()) encoded = res.toString();
+        cb(QByteArray::fromBase64(encoded.toLatin1()), QString());
+    };
+    // A received sticker with an attachment id (corvus-cli 1.6, F5) is fetched like any other
+    // attachment: getAttachment serves exactly the image the sender sent. getSticker only
+    // knows installed packs; it stays the path for backends that report no id.
+    if (att.isSticker() && att.id.isEmpty()) {
         if (att.stickerPackId().isEmpty() || att.stickerId() < 0) {
             cb({}, tr("This sticker reference is invalid."));
             return;
         }
         QJsonObject p{{QStringLiteral("packId"), att.stickerPackId()},
                       {QStringLiteral("stickerId"), att.stickerId()}};
-        m_cli.call(QStringLiteral("getSticker"), p, [cb](const QJsonValue &res, const QString &err) {
+        m_cli.call(QStringLiteral("getSticker"), p, [decode, cb](const QJsonValue &res, const QString &err) {
             if (!err.isEmpty()) {
                 cb({}, err);
                 return;
             }
-            const QJsonObject object = res.toObject();
-            QString encoded = object.value(QStringLiteral("data")).toString();
-            if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
-            if (encoded.isEmpty() && res.isString()) encoded = res.toString();
-            cb(QByteArray::fromBase64(encoded.toLatin1()), QString());
+            decode(res);
         });
         return;
     }
@@ -6508,16 +6531,28 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
     }
     QJsonObject p{{QStringLiteral("id"), att.id}};
     addRecipient(p, m_convs[key]);
-    m_cli.call(QStringLiteral("getAttachment"), p, [cb](const QJsonValue &res, const QString &err) {
+    // The image may not be stored under the id (a sticker sent from another device has no
+    // local copy, or it was swept): an installed pack serves it instead.
+    QJsonObject packFallback;
+    if (att.isSticker() && !att.stickerPackId().isEmpty() && att.stickerId() >= 0) {
+        packFallback = QJsonObject{{QStringLiteral("packId"), att.stickerPackId()},
+                                   {QStringLiteral("stickerId"), att.stickerId()}};
+    }
+    m_cli.call(QStringLiteral("getAttachment"), p,
+               [this, decode, cb, packFallback](const QJsonValue &res, const QString &err) {
         if (!err.isEmpty()) {
+            if (!packFallback.isEmpty()) {
+                m_cli.call(QStringLiteral("getSticker"), packFallback,
+                           [decode, cb](const QJsonValue &res2, const QString &err2) {
+                               if (err2.isEmpty()) decode(res2);
+                               else cb({}, err2);
+                           });
+                return;
+            }
             cb({}, err);
             return;
         }
-        const QJsonObject object = res.toObject();
-        QString encoded = object.value(QStringLiteral("data")).toString();
-        if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
-        if (encoded.isEmpty() && res.isString()) encoded = res.toString();
-        cb(QByteArray::fromBase64(encoded.toLatin1()), QString());
+        decode(res);
     });
 }
 

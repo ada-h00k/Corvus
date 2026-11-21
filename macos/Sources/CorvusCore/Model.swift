@@ -49,13 +49,16 @@ public struct Attachment: Equatable, Hashable {
     }
 
     /// Signal stickers are kept as an attachment named "signal-sticker:<packId>:<stickerId>.webp"
-    /// (same convention as the Qt app); their image comes from signal-cli's "getSticker".
+    /// (same convention as the Qt app). corvus-cli 1.6 stores the image of a received sticker
+    /// under the attachment id it reports in the envelope (attachmentId) and serves it through
+    /// "getAttachment"; "getSticker" serves installed packs only.
     public static let stickerPrefix = "signal-sticker:"
 
-    public static func sticker(packId: String, stickerId: Int) -> Attachment {
+    public static func sticker(packId: String, stickerId: Int, attachmentId: String = "") -> Attachment {
         var a = Attachment()
         a.contentType = "image/webp"
         a.filename = "\(stickerPrefix)\(packId):\(stickerId).webp"
+        a.id = attachmentId
         return a
     }
 
