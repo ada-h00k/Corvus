@@ -185,6 +185,7 @@ final class AppModel {
 
     init() {
         cli.onEnvelope = { [weak self] env in self?.onEnvelope(env) }
+        cli.onAttachmentDownloaded = { [weak self] id in self?.onAttachmentDownloaded(id) }
         cli.onStopped = { [weak self] reason in self?.setConnected(false, info: reason) }
         cli.onLogLine = { [weak self] line in self?.showFlash(line, seconds: 5) }
         notifier.onActivate = { [weak self] key in self?.activateConversation(key) }
@@ -769,6 +770,8 @@ final class AppModel {
                                     ok: "Delete", destructive: true) else { return }
         if key == editKey { cancelEdit() }
         if key == typingKey { stopTyping() }
+        // The chat is gone: the backend's stored copies of its attachments go too (F1).
+        chats.convs[key]?.msgs.forEach { deleteAttachmentFiles($0.attachments) }
         chats.convs.removeValue(forKey: key)
         drafts.removeValue(forKey: key)
         unsentReads.removeValue(forKey: key)
@@ -864,7 +867,10 @@ final class AppModel {
 
     private func expireMessages() {
         let now = nowMs()
-        guard historyReady, chats.hasExpiredMessages(now: now), chats.expireMessages(now: now) else { return }
+        guard historyReady, chats.hasExpiredMessages(now: now) else { return }
+        let removed = chats.expireMessages(now: now)
+        if removed.isEmpty { return }
+        deleteAttachmentFiles(removed.flatMap(\.attachments)) // the backend's stored copies too (F1)
         rewriteHistory("remove expired messages")
         if let key = current, chats.convs[key] != nil { updateSearch() }
     }
@@ -1173,6 +1179,12 @@ final class AppModel {
         let srcKey = chats.resolveKey(pe.src)
         let key = group ? "g:" + pe.groupId : (pe.outgoing ? chats.resolveKey(pe.destination) : srcKey)
         if key.isEmpty { return }
+
+        // corvus-cli saw an identity key it could not verify (L6): a warning until the
+        // contact is checked (listIdentities / trust) or the flash times out.
+        if pe.untrustedIdentity && !pe.outgoing && pe.kind == .message {
+            showFlash("The safety number with \(displayName(key)) changed and is not verified. Check it before you rely on this chat.", seconds: 15)
+        }
 
         switch pe.kind {
         case .expirationUpdate:
@@ -1987,6 +1999,7 @@ final class AppModel {
                                   style: .warning, cancel: true, destructive: forEveryone ? [0, 1] : [0])
         let key = c.key, ts = m.ts
         if r == 0 {
+            deleteAttachmentFiles(m.attachments) // deleted for me: the backend's copy goes too (F1)
             removeMessage(key, ts: ts)
             return
         }
@@ -2087,6 +2100,30 @@ final class AppModel {
     }
 
     func attachmentToken(_ m: Message, _ i: Int) -> String { "\(m.id)#\(i)" }
+
+    /// The backend downloaded an attachment in its background worker (F4): the thumbnails
+    /// that gave up on it can try again — the file is there now, getAttachment serves it.
+    private func onAttachmentDownloaded(_ id: String) {
+        guard !id.isEmpty else { return }
+        for c in chats.convs.values {
+            for m in c.msgs {
+                if m.attachments.contains(where: { $0.id == id && $0.isImage && $0.thumb.isEmpty }) {
+                    fetchThumbnails(c.key, ts: m.ts, author: m.authorKey)
+                }
+            }
+        }
+    }
+
+    /// The backend's stored copy of an attachment is removed (F1): expired, deleted for me,
+    /// chat deleted. Best-effort, like the local copies the app removes itself; a failure
+    /// only means the file stays.
+    private func deleteAttachmentFiles(_ atts: [Attachment]) {
+        for att in atts where !att.id.isEmpty {
+            Task { [weak self, id = att.id] in
+                _ = try? await self?.cli.call("deleteAttachment", ["id": id])
+            }
+        }
+    }
 
     private func fetchThumbnails(_ key: String, ts: Int64, author: String, attempt: Int = 0) {
         if attempt == 0 { fetchLinkPreviewThumbnail(key, ts: ts, author: author) } // retries on its own

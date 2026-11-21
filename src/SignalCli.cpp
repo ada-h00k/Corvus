@@ -83,6 +83,12 @@ QString SignalCli::maskNumbers(const QString &text)
 QProcessEnvironment SignalCli::childEnvironment(const QProcessEnvironment &base)
 {
     QProcessEnvironment env = base;
+    // corvus-cli sweeps attachment files that nothing asked for after 30 days — a file whose
+    // message is still in the history cannot be fetched again afterwards (F1 follow-up). The
+    // client removes attachments itself with deleteAttachment (expired, deleted for me,
+    // view-once opened, chat deleted), so the sweep is disabled for its backends. Backends
+    // that do not know the variable just ignore it.
+    env.insert(QStringLiteral("CORVUS_SWEEP_DAYS"), QStringLiteral("0"));
     const QString appdir = env.value(QStringLiteral("APPDIR"));
     if (appdir.isEmpty()) return env;
 
@@ -502,6 +508,9 @@ void SignalCli::handleLine(const QByteArray &line)
         const QJsonObject env = envelopeFromNotification(o);
         if (env.isEmpty()) return;
         emit envelopeReceived(env);
+    }
+    if (method == QLatin1String("attachmentDownloaded")) {
+        emit attachmentDownloaded(o.value(QStringLiteral("params")).toObject().value(QStringLiteral("id")).toString());
     }
 }
 

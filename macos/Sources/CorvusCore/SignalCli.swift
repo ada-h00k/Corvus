@@ -86,6 +86,9 @@ public final class SignalCli {
     public var executable = ""
 
     public var onEnvelope: ((JSON) -> Void)?
+    /// corvus-cli finished downloading an attachment in its background worker (F4); the id
+    /// is the name the file is stored under (getAttachment / deleteAttachment).
+    public var onAttachmentDownloaded: ((String) -> Void)?
     public var onStopped: ((String) -> Void)?
     public var onLogLine: ((String) -> Void)?
 
@@ -146,6 +149,11 @@ public final class SignalCli {
     /// (a shell script that starts Java) needs the usual Homebrew locations to find `java`.
     nonisolated public static func childEnvironment(_ base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
         var env = base
+        // corvus-cli sweeps attachment files that nothing asked for after 30 days — a file
+        // whose message is still in the history cannot be fetched again afterwards (F1
+        // follow-up). The client removes attachments itself with deleteAttachment, so the
+        // sweep is disabled for its backends; unknown variables are ignored by older ones.
+        env["CORVUS_SWEEP_DAYS"] = "0"
         var path = (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
         for extra in ["/opt/homebrew/bin", "/usr/local/bin"] where !path.contains(extra) {
             path.append(extra)
@@ -407,6 +415,9 @@ public final class SignalCli {
             var env = jsonObject(params["envelope"])
             if env.isEmpty { env = jsonObject(jsonObject(params["result"])["envelope"]) }
             if !env.isEmpty { onEnvelope?(env) }
+        }
+        if jsonString(o["method"]) == "attachmentDownloaded" {
+            onAttachmentDownloaded?(jsonString(jsonObject(o["params"])["id"]))
         }
     }
 

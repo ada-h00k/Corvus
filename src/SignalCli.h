@@ -90,6 +90,9 @@ signals:
     void started();
     void stopped(const QString &reason);
     void envelopeReceived(const QJsonObject &envelope);
+    // corvus-cli finished downloading an attachment in its background worker (F4): the id
+    // is the name the file is stored under (getAttachment / deleteAttachment).
+    void attachmentDownloaded(const QString &id);
     void logLine(const QString &line);
 
 private:

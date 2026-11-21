@@ -13,6 +13,9 @@ struct ParsedEnvelope {
     QString destination;     // recipient number / UUID (outgoing 1:1)
     QString groupId;         // set for group messages
     int expirationSeconds = 0;
+    // corvus-cli marks an envelope whose sender's identity key changed without being
+    // verified (L6): the chat shows the same warning bar a changed safety number does.
+    bool untrustedIdentity = false;
     Message msg;             // Message_: time, text, attachments, quote (author keys unresolved)
     // Receipt notifications acknowledge timestamps of messages sent by this client.
     bool readReceipt = false;

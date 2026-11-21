@@ -305,6 +305,9 @@ private:
     void sendReaction(int idx, const QString &emoji);
     void addRecipient(QJsonObject &params, const Conversation &c) const;
     void fetchThumbnails(const QString &key, qint64 ts, const QString &author, int attempt = 0);
+    void onAttachmentDownloaded(const QString &id);
+    void fetchRequestAttachments(const QString &key);
+    void deleteAttachmentFiles(const QList<Attachment> &attachments);
     void loadAnimatedAttachment(int messageIndex, int attachmentIndex);
     void fetchAttachmentData(const QString &key, const Attachment &att,
                              std::function<void(const QByteArray &, const QString &)> cb);

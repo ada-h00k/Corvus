@@ -240,15 +240,18 @@ public struct ChatState {
         convs.values.contains { c in c.msgs.contains { ChatState.isExpired($0, now: now) } }
     }
 
-    /// Removes expired messages; true if anything was removed (the history must be compacted then).
-    public mutating func expireMessages(now: Int64) -> Bool {
-        var changed = false
+    /// Removes expired messages and returns them (the client deletes their stored attachment
+    /// copies on the backend, F1); empty when nothing expired.
+    @discardableResult
+    public mutating func expireMessages(now: Int64) -> [Message] {
+        var removed: [Message] = []
         for key in convs.keys {
-            let before = convs[key]!.msgs.count
+            let expired = convs[key]!.msgs.filter { ChatState.isExpired($0, now: now) }
+            guard !expired.isEmpty else { continue }
+            removed.append(contentsOf: expired)
             convs[key]!.msgs.removeAll { ChatState.isExpired($0, now: now) }
-            if convs[key]!.msgs.count != before { changed = true }
         }
-        return changed
+        return removed
     }
 
     // MARK: - Pending sends

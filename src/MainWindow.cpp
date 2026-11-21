@@ -1177,6 +1177,7 @@ MainWindow::MainWindow()
 
     // signal-cli
     connect(&m_cli, &SignalCli::envelopeReceived, this, &MainWindow::onEnvelope);
+    connect(&m_cli, &SignalCli::attachmentDownloaded, this, &MainWindow::onAttachmentDownloaded);
     connect(&m_cli, &SignalCli::stopped, this, [this](const QString &reason) {
         m_localTypingTimer.stop();
         m_localTypingKey.clear();
@@ -2660,6 +2661,8 @@ void MainWindow::removeConversation(const QString &key)
 {
     if (!m_convs.contains(key)) return;
     if (key == m_editKey) cancelEdit();
+    // The chat is gone: the backend's stored copies of its attachments go too (F1).
+    for (const Message &m : std::as_const(m_convs[key].msgs)) deleteAttachmentFiles(m.attachments);
     m_convs.remove(key);
     m_drafts.remove(key);
     if (key == m_current) {
@@ -2703,6 +2706,8 @@ void MainWindow::deleteMessage(int idx)
     box.addButton(QMessageBox::Cancel);
     box.exec();
     if (box.clickedButton() == local) {
+        // Deleted only for me: the backend's stored copy of the attachments goes too (F1).
+        deleteAttachmentFiles(message.attachments);
         removeMessage(conversation.key, message.ts());
         return;
     }
@@ -3326,6 +3331,7 @@ void MainWindow::expireMessages()
             if (message.viewOnce && !message.viewOnceViewed && !message.viewOnceExpired &&
                 now - message.ts() >= 45LL * 24 * 60 * 60 * 1000) {
                 message.viewOnceExpired = true;
+                deleteAttachmentFiles(message.attachments); // the backend's stored copies too (F1)
                 message.attachments.clear();
                 message.text.clear();
                 message.textStyles.clear();
@@ -3336,6 +3342,7 @@ void MainWindow::expireMessages()
             }
             if (message.expiresInSeconds <= 0 || message.expirationStartMs <= 0) continue;
             if (now - message.expirationStartMs < static_cast<qint64>(message.expiresInSeconds) * 1000) continue;
+            deleteAttachmentFiles(message.attachments); // expired: the backend's copies go too (F1)
             conversation.msgs.removeAt(i);
             changed = true;
         }
@@ -4583,6 +4590,12 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     const QString srcKey = resolveKey(pe.src);
     const QString key = group ? QStringLiteral("g:") + pe.groupId : (pe.outgoing ? resolveKey(pe.destination) : srcKey);
     if (key.isEmpty()) return;
+
+    // corvus-cli saw an identity key it could not verify (L6): the same warning bar a
+    // changed safety number shows, until the contact is verified or the bar dismissed.
+    if (pe.untrustedIdentity && !pe.outgoing && pe.kind == ParsedEnvelope::Message_) {
+        flagSafetyChange(key, {key, QString(), true});
+    }
 
     // Like signal-cli: messages from blocked contacts are dropped entirely — no chat entry,
     // no notification. Our own outgoing messages are unaffected (the phone may not have blocked).
@@ -6460,6 +6473,62 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
     }
 }
 
+// The backend downloaded an attachment in its background worker (F4): the thumbnails that
+// gave up on it can try again — the file is there now, and getAttachment serves it.
+void MainWindow::onAttachmentDownloaded(const QString &id)
+{
+    if (id.isEmpty()) return;
+    for (auto it = m_convs.constBegin(); it != m_convs.constEnd(); ++it) {
+        const Conversation &c = it.value();
+        for (const Message &m : c.msgs) {
+            bool retry = false;
+            for (const Attachment &att : m.attachments) {
+                if (att.id == id && att.isImage() && att.thumb.isEmpty()) {
+                    retry = true;
+                    break;
+                }
+            }
+            if (retry) fetchThumbnails(it.key(), m.ts(), effectiveAuthor(c, m));
+        }
+    }
+}
+
+// A message request's attachments were parked on the backend (F4): nothing was downloaded
+// for a sender the user had not accepted. Now that the request is accepted, they are fetched
+// for real; downloadAttachment picks up the pointers the backend kept for exactly this.
+void MainWindow::fetchRequestAttachments(const QString &key)
+{
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd()) return;
+    const Conversation &c = it.value();
+    for (const Message &m : c.msgs) {
+        for (const Attachment &att : m.attachments) {
+            if (att.id.isEmpty() || !att.isImage() || !att.thumb.isEmpty()) continue;
+            const QString author = effectiveAuthor(c, m);
+            const qint64 ts = m.ts();
+            m_cli.call(QStringLiteral("downloadAttachment"), QJsonObject{{QStringLiteral("id"), att.id}},
+                       [this, key, ts, author](const QJsonValue &, const QString &err) {
+                           if (!err.isEmpty()) return; // a missing pointer keeps the placeholder
+                           fetchThumbnails(key, ts, author);
+                       });
+        }
+    }
+}
+
+// The backend's stored copy of an attachment is removed (F1): expired, deleted for me,
+// view-once opened, chat deleted. Fire-and-forget — a failure only means the file stays,
+// like the local copies the client used to remove best-effort before.
+void MainWindow::deleteAttachmentFiles(const QList<Attachment> &attachments)
+{
+    for (const Attachment &att : attachments) {
+        if (att.id.isEmpty()) continue;
+        m_cli.call(QStringLiteral("deleteAttachment"), QJsonObject{{QStringLiteral("id"), att.id}},
+                   [this](const QJsonValue &, const QString &err) {
+                       if (!err.isEmpty()) qWarning() << "Could not delete an attachment:" << err;
+                   });
+    }
+}
+
 void MainWindow::loadAnimatedAttachment(int messageIndex, int attachmentIndex)
 {
     if (!m_convs.contains(m_current) || messageIndex < 0 || messageIndex >= m_convs[m_current].msgs.size()) return;
@@ -6569,6 +6638,7 @@ void MainWindow::consumeViewOnce(const QString &key, qint64 timestamp, const QSt
     for (const Attachment &attachment : std::as_const(message.attachments)) {
         if (!attachment.path.isEmpty()) QFile::remove(attachment.path);
     }
+    deleteAttachmentFiles(message.attachments); // the backend's stored copy goes too (F1)
     message.viewOnceViewed = !expired;
     message.viewOnceExpired = expired;
     message.attachments.clear();
@@ -7192,6 +7262,9 @@ void MainWindow::openMessageRequests()
         m_store.rewriteAsync(allRecords(), this, [this](int rc) {
             if (rc != SC_OK) handleHistoryWriteError(rc);
         });
+        // The request's attachments were parked on the backend (F4); now that the sender is
+        // accepted, they are fetched for real.
+        fetchRequestAttachments(key);
         if (m_convs.contains(key)) {
             m_showArchived = false;
             switchConversation(key);

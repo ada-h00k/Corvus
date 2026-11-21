@@ -298,6 +298,7 @@ ParsedEnvelope parseEnvelope(const QJsonObject &env)
     if (out.src.isEmpty()) out.src = env["sourceUuid"].toString();
     if (out.src.isEmpty()) out.src = env["source"].toString();
     out.srcName = env["sourceName"].toString();
+    out.untrustedIdentity = env["untrustedIdentity"].toBool();
     const qint64 envTs = env["timestamp"].toVariant().toLongLong();
 
     // signal-cli emits receipt and typing events as distinct envelope members. They

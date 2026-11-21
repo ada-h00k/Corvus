@@ -11,6 +11,9 @@ public struct ParsedEnvelope {
     public var destination = ""        // recipient number / UUID (outgoing 1:1)
     public var groupId = ""            // set for group messages
     public var expirationSeconds = 0
+    // corvus-cli marks an envelope whose sender's identity key changed without being
+    // verified (L6): the chat shows a warning until the contact is checked.
+    public var untrustedIdentity = false
     public var msg = Message()         // message: ts, text, attachments, quote (author keys unresolved)
 
     // Reaction
@@ -199,6 +202,7 @@ public func parseEnvelope(_ env: JSON) -> ParsedEnvelope {
     if out.src.isEmpty { out.src = jsonString(env["sourceUuid"]) }
     if out.src.isEmpty { out.src = jsonString(env["source"]) }
     out.srcName = jsonString(env["sourceName"])
+    out.untrustedIdentity = jsonBool(env["untrustedIdentity"])
     let envTs = jsonInt64(env["timestamp"])
 
     // {"receiptMessage": {"isDelivery": true, "isRead": false, "isViewed": false, "timestamps": [...]}}
