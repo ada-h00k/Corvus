@@ -35,9 +35,10 @@ on:
     # Mondays 04:00 UTC
     - cron: "0 4 * * 1"
 
+# Least privilege: read at the workflow level; the checker job grants itself the
+# write access it needs to open update PRs.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: update-flatpak
@@ -46,9 +47,12 @@ concurrency:
 jobs:
   flatpak-external-data-checker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Create placeholder cargo-sources.json
         run: |
@@ -61,7 +65,7 @@ jobs:
           echo '[]' > packaging/flatpak/cargo-sources.json
 
       - name: Check for external data updates
-        uses: docker://ghcr.io/flathub/flatpak-external-data-checker:latest
+        uses: docker://ghcr.io/flathub/flatpak-external-data-checker@sha256:19ee4444c1cae7a300f047a586d9610cf13e8b3443c6fe43cbc70b8157131f78 # was :latest
         env:
           GIT_AUTHOR_NAME: Flatpak External Data Checker
           GIT_COMMITTER_NAME: Flatpak External Data Checker
