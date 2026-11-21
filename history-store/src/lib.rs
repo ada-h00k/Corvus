@@ -160,7 +160,7 @@ pub unsafe extern "C" fn sc_store_rewrite(s: *mut ScStore, records_json: *const 
     })
 }
 
-/// Change the passphrase (re-wraps the data key; records are not re-encrypted).
+/// Change the passphrase (rotates the data key and re-encrypts all records).
 #[no_mangle]
 pub unsafe extern "C" fn sc_store_change_passphrase(s: *mut ScStore, old: *const c_char, new: *const c_char) -> c_int {
     guard(SC_ERR_PANIC, || {

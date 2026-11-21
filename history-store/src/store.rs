@@ -12,7 +12,8 @@
 //!
 //! * A random 32 byte data key (DEK) encrypts all records with XChaCha20-Poly1305.
 //! * The DEK is wrapped with a key derived from the passphrase via Argon2id.
-//!   Changing the passphrase therefore only rewrites the header.
+//!   Changing the passphrase rotates the DEK and re-encrypts every record, so a
+//!   backup taken before the change cannot decrypt data written after it.
 //! * Every record is authenticated together with its sequence number, so
 //!   reordering or removing records in the middle of the file is detected.
 //!   (Removing records at the very end cannot be detected by an append-only log.)
@@ -451,7 +452,7 @@ fn record_aad(seq: u64) -> [u8; 16] {
     a
 }
 
-fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
+fn encrypt_with(cipher: &XChaCha20Poly1305, seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
     let json = Zeroizing::new(rec.to_json().into_bytes());
     // Writing must never produce a record that open() would reject as Corrupt:
     // one oversized record (e.g. a message whose record carries all its
@@ -461,7 +462,6 @@ fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>
     }
     let mut nonce = [0u8; NONCE_LEN];
     rng::fill(&mut nonce).map_err(|e| StoreError::Crypto(e.to_string()))?;
-    let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
     let aad = record_aad(seq);
     let ct = cipher
         .encrypt(nonce_ref(&nonce)?, Payload { msg: &json, aad: &aad })
@@ -471,6 +471,11 @@ fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>
     buf.extend_from_slice(&nonce);
     buf.extend_from_slice(&ct);
     Ok(buf)
+}
+
+fn encrypt_record(dek: &[u8; KEY_LEN], seq: u64, rec: &Record) -> Result<Vec<u8>, StoreError> {
+    let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
+    encrypt_with(&cipher, seq, rec)
 }
 
 fn open_new(path: &Path) -> io::Result<File> {
@@ -627,19 +632,62 @@ impl Store {
         Ok(())
     }
 
-    /// Re-wrap the data key under a new passphrase; records stay untouched.
+    /// Decrypt the records of the current file with the open store's data key.
+    /// A partially written trailing record is dropped, like in `open()`; any other
+    /// failure is an error. Used by the re-keying passphrase change.
+    fn decrypt_all_records(&self) -> Result<Vec<Record>, StoreError> {
+        let raw = fs::read(&self.path)?;
+        if raw.len() < HEADER_LEN || &raw[..4] != MAGIC {
+            return Err(StoreError::Corrupt("not a history file".into()));
+        }
+        let cipher = XChaCha20Poly1305::new(key_ref(&self.dek[..])?);
+        let mut records = Vec::new();
+        let mut pos = HEADER_LEN;
+        let mut seq = 0u64;
+        while pos + 4 <= raw.len() {
+            let len = u32::from_le_bytes(raw[pos..pos + 4].try_into().unwrap()) as usize;
+            if !(NONCE_LEN + TAG_LEN..=MAX_RECORD).contains(&len) {
+                return Err(StoreError::Corrupt(format!("bad length of record {seq}")));
+            }
+            if pos + 4 + len > raw.len() {
+                break; // partial tail
+            }
+            let frame = &raw[pos + 4..pos + 4 + len];
+            let pt = cipher
+                .decrypt(nonce_ref(&frame[..NONCE_LEN])?, Payload { msg: &frame[NONCE_LEN..], aad: &record_aad(seq) })
+                .map_err(|_| StoreError::Corrupt(format!("record {seq} failed authentication")))?;
+            records.push(Record::from_slice(&pt).map_err(|e| StoreError::Corrupt(format!("record {seq}: {e}")))?);
+            pos += 4 + len;
+            seq += 1;
+        }
+        Ok(records)
+    }
+
+    /// Change the passphrase and rotate the data key at the same time: all records
+    /// are decrypted with the old key and re-encrypted with a fresh one, wrapped
+    /// under the new passphrase. An old backup plus the old passphrase therefore no
+    /// longer decrypts anything written after the change. The file is replaced
+    /// atomically; on failure the old file is untouched.
     pub fn change_passphrase(&mut self, old: &str, new: &str, params: KdfParams) -> Result<(), StoreError> {
         let check = self.header.unwrap_dek(old)?;
         if check[..] != self.dek[..] {
             return Err(StoreError::Corrupt("key mismatch".into()));
         }
-        let header = Header::wrap_new(new, &self.dek, params)?;
-        let current = fs::read(&self.path)?;
+        let records = self.decrypt_all_records()?;
+
+        let mut dek = Zeroizing::new([0u8; KEY_LEN]);
+        rng::fill(&mut dek[..]).map_err(|e| StoreError::Crypto(e.to_string()))?;
+        let header = Header::wrap_new(new, &dek, params)?;
+        let cipher = XChaCha20Poly1305::new(key_ref(&dek[..])?);
         let mut data = header.to_bytes();
-        data.extend_from_slice(&current[HEADER_LEN..]);
+        for (i, rec) in records.iter().enumerate() {
+            data.extend_from_slice(&encrypt_with(&cipher, i as u64, rec)?);
+        }
         write_atomic(&self.path, &data)?;
         self.file = open_append(&self.path)?;
+        self.dek = dek;
         self.header = header;
+        self.seq = records.len() as u64;
         self.len = data.len() as u64;
         Ok(())
     }
@@ -809,6 +857,36 @@ mod tests {
         assert!(matches!(Store::open(&p, "old"), Err(StoreError::WrongPassphrase)));
         let (_, recs) = Store::open(&p, "new").unwrap();
         assert_eq!(recs, vec![msg(1), msg(2)]);
+    }
+
+    /// The change rotates the data key: a backup taken before the change cannot
+    /// decrypt the re-encrypted records, even though it still opens with the old
+    /// passphrase.
+    #[test]
+    fn change_passphrase_rotates_the_data_key() {
+        let p = tmp();
+        let mut s = Store::create(&p, "old", FAST).unwrap();
+        s.append(&msg(1)).unwrap();
+        s.append(&msg(2)).unwrap();
+        let backup = p.parent().unwrap().join("backup.corvus");
+        fs::copy(&p, &backup).unwrap();
+
+        s.change_passphrase("old", "new", FAST).unwrap();
+        s.append(&msg(3)).unwrap(); // written under the new key
+        drop(s);
+
+        // The backup still opens with the old passphrase and holds the same records...
+        let (_, backup_recs) = Store::open(&backup, "old").unwrap();
+        assert_eq!(backup_recs, vec![msg(1), msg(2)]);
+        // ...but the current file is rejected with the old passphrase and re-encrypted
+        // with the new key (every record's ciphertext changed, not just the header).
+        assert!(matches!(Store::open(&p, "old"), Err(StoreError::WrongPassphrase)));
+        let (_, recs) = Store::open(&p, "new").unwrap();
+        assert_eq!(recs, vec![msg(1), msg(2), msg(3)]);
+        let backup_raw = fs::read(&backup).unwrap();
+        let current_raw = fs::read(&p).unwrap();
+        assert!(current_raw.len() > backup_raw.len());
+        assert_ne!(backup_raw[HEADER_LEN..], current_raw[HEADER_LEN..backup_raw.len()]);
     }
 
     #[test]
