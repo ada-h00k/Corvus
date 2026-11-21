@@ -62,10 +62,16 @@ public enum HistoryKeychain {
         try Keychain.clear(service: service, account: account)
     }
 
-    /// 256 random bits as 64 hex characters.
-    public static func generateSecret() -> String {
+    /// 256 random bits as 64 hex characters. Fails closed: an RNG failure must never
+    /// yield an all-zero (or otherwise predictable) history encryption key.
+    public static func generateSecret() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status),
+                          userInfo: [NSLocalizedDescriptionKey:
+                                     "SecRandomCopyBytes failed (OSStatus \(status))"])
+        }
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 }
