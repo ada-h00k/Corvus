@@ -4586,8 +4586,15 @@ void MainWindow::onEnvelope(const QJsonObject &env)
 
     // Like signal-cli: messages from blocked contacts are dropped entirely — no chat entry,
     // no notification. Our own outgoing messages are unaffected (the phone may not have blocked).
-    const auto blockedIt = m_convs.find(key);
-    if (!pe.outgoing && !group && blockedIt != m_convs.end() && blockedIt->blocked) return;
+    if (!pe.outgoing) {
+        const auto blockedIt = m_convs.find(key);
+        if (!group && blockedIt != m_convs.end() && blockedIt->blocked) return;
+        // In a group the sender is a member: their messages (and receipts/typing state)
+        // are dropped too when that member is blocked. The block state of a member lives
+        // in their direct conversation; without one there is nothing to check.
+        const auto senderIt = m_convs.find(srcKey);
+        if (senderIt != m_convs.end() && !senderIt->isGroup && senderIt->blocked) return;
+    }
 
     // A dataMessage straight from our own number is a note to ourselves: like the official
     // client we treat it as our own send (no unread badge, no notification for it).
