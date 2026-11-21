@@ -69,16 +69,34 @@ QString displayFileName(const Attachment &att, const QDateTime &time)
     return genericFileName(att.contentType, original, time);
 }
 
-bool isRiskyFileName(const QString &name)
+QString normalizedFileName(const QString &name)
 {
-    static const QStringList ext = {QStringLiteral("exe"),  QStringLiteral("bat"), QStringLiteral("cmd"),
-                                    QStringLiteral("com"),  QStringLiteral("scr"), QStringLiteral("msi"),
-                                    QStringLiteral("ps1"),  QStringLiteral("vbs"), QStringLiteral("js"),
-                                    QStringLiteral("jar"),  QStringLiteral("sh"),  QStringLiteral("desktop"),
-                                    QStringLiteral("appimage"), QStringLiteral("run"), QStringLiteral("lnk"),
-                                    QStringLiteral("reg"),  QStringLiteral("dll"), QStringLiteral("app"),
-                                    QStringLiteral("deb"),  QStringLiteral("rpm"), QStringLiteral("apk")};
-    return ext.contains(QFileInfo(name).suffix().toLower());
+    // Only the last path component is ever shown or written (callers use
+    // QFileInfo::fileName()), so directory separators cannot escape here.
+    QString out = QFileInfo(name).fileName();
+    // An NTFS alternate data stream ("name.exe:stream") must not hide the real
+    // suffix: everything from the first ":" onwards is not part of the file name.
+    const int stream = out.indexOf(QLatin1Char(':'));
+    if (stream >= 0) out.truncate(stream);
+    // Windows drops trailing dots and spaces when saving, which would turn
+    // "evil.exe." into "evil.exe" after the check saw an empty suffix.
+    while (out.endsWith(QLatin1Char('.')) || out.endsWith(QLatin1Char(' '))) out.chop(1);
+    return out;
+}
+
+QString normalizedSuffix(const QString &name)
+{
+    return QFileInfo(normalizedFileName(name)).suffix().toLower();
+}
+
+bool isSafeToOpen(const Attachment &att)
+{
+    // Images, audio and video are decoded and played inside Corvus and never fall
+    // through to the system "open" handler, so the sender's claim is acceptable here.
+    if (att.isImage() || att.isAudio() || att.isVideo()) return true;
+    // Anything handed to the OS default handler must be a harmless document type.
+    static const QStringList openable = {QStringLiteral("pdf"), QStringLiteral("txt")};
+    return openable.contains(normalizedSuffix(att.filename));
 }
 
 } // namespace AttachmentUtil

@@ -353,6 +353,14 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(attachment_safety_test tests/attachment_safety_test.cpp)
+    target_link_libraries(attachment_safety_test PRIVATE app_core Qt6::Test)
+    add_test(NAME attachment_safety COMMAND attachment_safety_test)
+    set_tests_properties(attachment_safety PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 60
+    )
+
     add_executable(emoji_gif_test tests/emoji_gif_test.cpp)
     target_link_libraries(emoji_gif_test PRIVATE app_core Qt6::Test)
     add_test(NAME emoji_gif COMMAND emoji_gif_test)

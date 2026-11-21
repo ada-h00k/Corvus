@@ -993,10 +993,12 @@ void MediaGalleryDialog::activateFile(int id)
 {
     if (id < 0 || id >= m_col.files.size() || !m_host.fetch) return;
     const MediaItem item = m_col.files[id];
-    if (AttachmentUtil::isRiskyFileName(item.att.filename)) {
+    // Allowlist, whatever the sender claims the content type to be: the gallery only
+    // opens files that are safe to hand to the system "open" handler.
+    if (!AttachmentUtil::isSafeToOpen(item.att)) {
         QMessageBox::information(this, tr("Attachment"),
                                  tr("For safety, “%1” is not opened directly. Use “Save as …” from the right-click menu instead.")
-                                     .arg(item.att.filename));
+                                     .arg(AttachmentUtil::displayFileName(item.att, item.time)));
         return;
     }
     showStatus(tr("Loading …"));

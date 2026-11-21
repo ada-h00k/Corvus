@@ -6413,8 +6413,6 @@ void MainWindow::fetchAttachmentData(const QString &key, const Attachment &att,
     });
 }
 
-static bool isRiskyFile(const QString &name) { return AttachmentUtil::isRiskyFileName(name); }
-
 void MainWindow::consumeViewOnce(const QString &key, qint64 timestamp, const QString &author, bool expired)
 {
     auto conversation = m_convs.find(key);
@@ -6534,10 +6532,12 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
         return;
     }
 
-    if (!att.isImage() && isRiskyFile(att.filename)) {
+    // Allowlist, whatever the sender claims the content type to be: an executable
+    // disguised as "image/png" must not pass because of the claimed type.
+    if (!AttachmentUtil::isSafeToOpen(att)) {
         QMessageBox::information(this, tr("Attachment"),
                                  tr("For safety, “%1” is not opened directly. Use “Save …” from the message menu instead.")
-                                     .arg(att.filename));
+                                     .arg(AttachmentUtil::displayFileName(att, selectedMessage.time)));
         return;
     }
 
@@ -6566,6 +6566,13 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
                 return;
             }
             delete viewer;
+            // A file the sender claimed is an image but that no decoder accepts must
+            // never fall through to the system "open" handler: it can be an executable
+            // in disguise, and the OS would run its default handler for the name.
+            QMessageBox::warning(this, tr("Attachment"),
+                                 tr("“%1” cannot be displayed as an image. Use “Save …” from the message menu to store it.")
+                                     .arg(viewerName));
+            return;
         }
         if (!m_tmp.isValid()) {
             QMessageBox::warning(this, tr("Attachment"), tr("No temporary directory available."));
