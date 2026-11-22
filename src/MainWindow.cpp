@@ -1809,8 +1809,10 @@ void MainWindow::linkDevice()
     // Signal Desktop client: the chat history and everything the current link stored locally
     // is deleted. corvus-cli does the same on its side when `link` runs. Say so plainly
     // before anything is removed.
-    const bool hasHistory = HistoryStore::exists(historyPath());
-    if (hasHistory || !m_account.isEmpty() || !m_convs.isEmpty()) {
+    // The encrypted history file already exists on a fresh install — the unlock creates it
+    // before the first link (unlockHistory). So its existence proves nothing about a link;
+    // a remembered account or a conversation from the loaded history does.
+    if (!m_account.isEmpty() || !m_convs.isEmpty()) {
         QMessageBox box(this);
         box.setIcon(QMessageBox::Warning);
         box.setWindowTitle(tr("Link again"));

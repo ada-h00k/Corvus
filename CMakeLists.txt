@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Stable local/default version; release builds take their version from the vX.Y.Z Git tag.
-set(CORVUS_VERSION "1.7.0")
+set(CORVUS_VERSION "1.7.1")
 if(DEFINED ENV{GITHUB_REF_TYPE} AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag")
     set(CORVUS_TAG "$ENV{GITHUB_REF_NAME}")
     if(NOT CORVUS_TAG MATCHES "^v([0-9]+\\.[0-9]+\\.[0-9]+)$")
