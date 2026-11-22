@@ -6,6 +6,7 @@ class QLabel;
 class QLineEdit;
 class QProcess;
 class QPushButton;
+class QWidget;
 
 // Links corvus-cli as an additional device to an existing Signal account
 // ("corvus-cli link -n <name>") and shows the link URI / QR code.
@@ -28,6 +29,8 @@ private slots:
 
 private:
     void showUri(const QString &uri);
+    void offerHistoryTransfer();
+    void answerTransfer(bool transfer);
     void killProcess();
 
     QString m_exe;
@@ -39,4 +42,8 @@ private:
     QLabel *m_qr;
     QLineEdit *m_uri;
     QLabel *m_status;
+    // The transfer offer the phone made after scanning the QR code (synchronized start),
+    // and the widget holding the answer buttons while it is open.
+    QWidget *m_transferChoice = nullptr;
+    bool m_transferAnswered = false;
 };
