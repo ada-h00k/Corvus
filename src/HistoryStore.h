@@ -34,6 +34,14 @@ public:
     static bool exists(const QString &path);
     static QString errorText(int code);
 
+    // Hands memory that was freed during a large load / compaction back to the OS.
+    // Opening or rewriting the history builds temporary copies of every record (thumbnails
+    // included); glibc keeps most of that memory in its heap after it was freed, so the
+    // resident size stays far above what the application actually uses. Only does something
+    // with glibc (Linux); a no-op elsewhere. Safe to call from any thread; never changes
+    // any data, only returns unused pages (they are faulted in again on demand).
+    static void releaseFreeMemory();
+
     // All return SC_OK (0) or an SC_ERR_* code.
     int create(const QString &path, const QString &passphrase);
     int open(const QString &path, const QString &passphrase, QJsonArray *records);

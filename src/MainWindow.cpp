@@ -2425,6 +2425,10 @@ void MainWindow::loadHistory(const QJsonArray &records)
     }
     pruneExpiredPins(); // a pin whose duration ran out while Corvus was closed is not restored
     refreshList();
+    // The caller still holds the decoded JSON of the whole history (several times the size of
+    // the messages themselves). Give the freed memory back once it has released it, i.e. when
+    // control returns to the event loop.
+    QTimer::singleShot(0, this, [] { HistoryStore::releaseFreeMemory(); });
 }
 
 QJsonArray MainWindow::allRecords() const

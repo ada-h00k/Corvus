@@ -6,6 +6,10 @@
 
 #include <cstring>
 
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+
 namespace {
 // Passphrase bytes are wiped after use (best effort).
 struct Secret {
@@ -19,6 +23,13 @@ struct Secret {
 bool HistoryStore::exists(const QString &path)
 {
     return sc_store_exists(path.toUtf8().constData()) == 1;
+}
+
+void HistoryStore::releaseFreeMemory()
+{
+#ifdef __GLIBC__
+    malloc_trim(0);
+#endif
 }
 
 QString HistoryStore::errorText(int code)
@@ -160,34 +171,41 @@ void HistoryStore::notify(const QPointer<QObject> &context, const std::function<
 void HistoryStore::workerLoop()
 {
     for (;;) {
-        std::deque<Task> batch;
+        bool rewrote = false;
         {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            m_wake.wait(lock, [this] { return m_stop || !m_queue.empty(); });
-            if (m_queue.empty()) break; // m_stop and nothing left to write
-            batch.swap(m_queue);
-            m_busy = true;
-        }
-
-        // Consecutive appends go out as one batch; a rewrite is a barrier between batches.
-        size_t i = 0;
-        while (i < batch.size()) {
-            if (batch[i].isRewrite) {
-                writeRewrite(batch[i]);
-                ++i;
-                continue;
+            std::deque<Task> batch;
+            {
+                std::unique_lock<std::mutex> lock(m_mutex);
+                m_wake.wait(lock, [this] { return m_stop || !m_queue.empty(); });
+                if (m_queue.empty()) break; // m_stop and nothing left to write
+                batch.swap(m_queue);
+                m_busy = true;
             }
-            size_t j = i;
-            while (j < batch.size() && !batch[j].isRewrite) ++j;
-            writeAppends(batch, i, j);
-            i = j;
-        }
 
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_busy = false;
-        }
-        m_idle.notify_all();
+            // Consecutive appends go out as one batch; a rewrite is a barrier between batches.
+            size_t i = 0;
+            while (i < batch.size()) {
+                if (batch[i].isRewrite) {
+                    writeRewrite(batch[i]);
+                    rewrote = true;
+                    ++i;
+                    continue;
+                }
+                size_t j = i;
+                while (j < batch.size() && !batch[j].isRewrite) ++j;
+                writeAppends(batch, i, j);
+                i = j;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_busy = false;
+            }
+            m_idle.notify_all();
+        } // the batch (a rewrite carries a copy of the whole history) is released here
+        // A rewrite serialises and encrypts the entire history, which leaves a lot of freed
+        // but still resident heap behind. Plain appends are tiny and are not worth it.
+        if (rewrote) releaseFreeMemory();
     }
     m_idle.notify_all();
 }
