@@ -53,6 +53,7 @@ class QListWidget;
 class QListWidgetItem;
 class QPushButton;
 class QToolButton;
+class QProgressBar;
 class QWidget;
 
 class MainWindow : public QMainWindow
@@ -97,6 +98,7 @@ private slots:
     void forwardMessage(int idx);
     void newConversation();
     void linkDevice();
+    bool resetForFreshStart(); // after a re-link: old history file and account state go, an empty history is created
     void reconnect();
     void chooseExecutable();
     void checkForUpdates();
@@ -119,6 +121,17 @@ private:
     void showUnsupportedBackend(const QString &reportedVersion);
     void connectAccount();
     void loadContactsAndGroups();
+    // Chat history the phone transferred while linking (synchronized start): replayed into
+    // the local store once, silently (no unread counters, notifications or receipts). While
+    // it runs a modal progress screen covers the window — like the official client — and
+    // the chats appear only once the import finished.
+    void startHistoryImportReplay();
+    void showImportScreen();
+    void closeImportScreen();
+    void finishHistoryImport();
+    void fetchHistoryBatch(qint64 cursor);
+    void onHistoryEnvelope(const QJsonObject &env);
+    void addHistoryMessage(const QString &key, Message m, const QString &title, bool group);
     void setConnected(bool connected);
 
     // --- encrypted history (Rust store)
@@ -429,6 +442,18 @@ private:
     bool m_audioLoading = false;
     qint64 m_audioPositionMs = 0;
     qint64 m_audioDurationMs = 0;
+
+    // The modal progress screen shown while the transferred history is replayed (like the
+    // official client's loading screen: no chat is usable before it finished).
+    QDialog *m_importScreen = nullptr;
+    QLabel *m_importText = nullptr;
+    QProgressBar *m_importBar = nullptr;
+    bool m_importActive = false;
+    qint64 m_importTotal = 0;
+    qint64 m_importDone = 0;
+    // During the replay the O(n) findMessage scan per message would make the import O(n²);
+    // this set answers the "already in the local history?" check in constant time.
+    QHash<QString, QHash<qint64, QStringList>> m_importSeen;
 
     struct Draft {
         QString text;

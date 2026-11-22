@@ -44,6 +44,7 @@
 #include <QDialog>
 #include <QFrame>
 #include <QProcess>
+#include <QProgressBar>
 #ifdef HAVE_QT_DBUS
 #include <QDBusConnection>
 #include <QDBusInterface>
@@ -99,6 +100,7 @@
 #include <QVBoxLayout>
 #include <QVersionNumber>
 #include <algorithm>
+#include <limits>
 
 static const QString kFolderKey = QStringLiteral("::archived");
 static const QString kBackKey = QStringLiteral("::back");
@@ -1744,9 +1746,14 @@ void MainWindow::connectAccount()
             if (gen != m_connectGen) return; // reconnect requested while a dialog was open
 
             m_view->setSelfKey(m_account);
+            // A reconnect while an import was running invalidates the old replay chain.
+            m_importActive = false;
+            m_importSeen.clear();
+            closeImportScreen();
             m_cli.start(m_account);
             setConnected(true);
             loadContactsAndGroups();
+            startHistoryImportReplay();
         });
     });
 }
@@ -1798,14 +1805,115 @@ void MainWindow::reconnect()
 void MainWindow::linkDevice()
 {
     if (m_cli.executable().isEmpty() && !ensureExecutable()) return;
+    // Re-linking a linked computer starts from scratch, like re-registering in the official
+    // Signal Desktop client: the chat history and everything the current link stored locally
+    // is deleted. corvus-cli does the same on its side when `link` runs. Say so plainly
+    // before anything is removed.
+    const bool hasHistory = HistoryStore::exists(historyPath());
+    if (hasHistory || !m_account.isEmpty() || !m_convs.isEmpty()) {
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(tr("Link again"));
+        box.setText(tr("This computer is already linked with a Signal account."));
+        box.setInformativeText(tr("Linking again deletes the chat history on this computer and "
+                                  "all data of the current link, and starts from scratch — the "
+                                  "same fresh start the official Signal Desktop client makes "
+                                  "when it registers again."));
+        QPushButton *fresh = box.addButton(tr("Delete and link anew"), QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if (box.clickedButton() != fresh) return;
+    }
     m_cli.stop();
     setConnected(false);
     LinkDialog dlg(m_cli.executable(), this);
     dlg.setSecret(m_historySecret);
-    if (dlg.exec() == QDialog::Accepted) {
-        QSettings().remove(QStringLiteral("account"));
-        connectAccount();
+    if (dlg.exec() != QDialog::Accepted) return;
+    if (!resetForFreshStart()) return;
+    connectAccount();
+}
+
+// After a successful re-link the old account is gone. Its chat history file goes too, and
+// everything remembered about the old account is dropped so the UI starts from zero. The
+// fresh history is created with the same unlock: the backend's new keyring was wrapped with
+// this secret while linking (LinkDialog passes it), and every corvus-cli process gets it,
+// so backend and history stay in sync.
+bool MainWindow::resetForFreshStart()
+{
+    if (m_recorder && m_recorder->isRecording()) stopVoiceRecording(false);
+    stopLocalTyping();
+    m_store.close();
+    QFile::remove(historyPath());
+
+    m_convs.clear();
+    m_groupMembers.clear();
+    m_knownSafety.clear();
+    m_knownSafetyAccount.clear();
+    m_safetyChanged.clear();
+    m_identityCheckedMs.clear();
+    m_invitations.clear();
+    m_pendingSends.clear();
+    m_alias.clear();
+    m_contactNames.clear();
+    m_contacts.clear();
+    m_hiddenContacts.clear();
+    m_declined.clear(); // persisted as history records; the fresh store starts without any
+    m_drafts.clear();
+    m_pendingReadReceipts.clear();
+    m_typingUntil.clear();
+    m_voiceFiles.clear();
+    m_importSeen.clear();
+    m_importActive = false;
+    m_importTotal = 0;
+    m_importDone = 0;
+    closeImportScreen();
+    if (m_audioPlayer) {
+        m_audioPlayer->stop();
+        m_audioPlayer->setSource(QUrl());
     }
+    m_audioKey.clear();
+    m_audioMessageTs = 0;
+    m_audioAttachmentIndex = -1;
+    m_audioLoading = false;
+    m_audioPositionMs = 0;
+    m_audioDurationMs = 0;
+    m_replyQuote = Quote();
+    updateReplyBar();
+    m_draftLinkPreview = LinkPreview();
+    m_previewRequestedUrl.clear();
+    m_previewRequestedText.clear();
+    m_dismissedPreviewUrl.clear();
+    m_pendingPreviewSendText.clear();
+    m_linkPreviewGeneration++;
+    m_linkPreviewLoading = false;
+    m_sendAfterLinkPreview = false;
+    m_contactSearch->clear();
+    m_searchEdit->clear();
+    m_showArchived = false;
+    m_current.clear();
+    m_trayUnread = -1; // force an icon refresh
+    updateTray();
+
+    // Safety numbers accepted for the old account mean nothing for the new one, and the
+    // account choice starts over.
+    QSettings settings;
+    if (!m_account.isEmpty())
+        settings.remove(QStringLiteral("knownSafetyNumbers/") + m_account);
+    else
+        settings.remove(QStringLiteral("knownSafetyNumbers"));
+    settings.remove(QStringLiteral("account"));
+    m_account.clear();
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const int rc = m_store.create(historyPath(), m_historySecret);
+    QApplication::restoreOverrideCursor();
+    if (rc != SC_OK) {
+        QMessageBox::critical(this, tr("Chat history"), HistoryStore::errorText(rc));
+        return false;
+    }
+    refreshList();
+    showConversation();
+    return true;
 }
 
 void MainWindow::setConnected(bool connected)
@@ -2810,6 +2918,220 @@ int MainWindow::findMessage(const Conversation &c, qint64 ts, const QStringList 
         if (nonEmpty.isEmpty() || authorMatches(c, c.msgs[i], nonEmpty)) return i;
     }
     return -1;
+}
+
+// --- chat history transferred from the phone while linking -----------------------------
+
+// Corvus-cli imported the archive the phone uploaded when this device was linked (the
+// "Transfer message history" choice, Signal's synchronized start). The transferred history
+// is served as envelope JSONs exactly like live receive notifications; it is replayed into
+// the local store once and cleared in the backend afterwards. Unlike a live message, the
+// replay is silent: no unread counters, notifications, receipts or typing state, and
+// messages are ordered by their original timestamps. Like the official client, the replay
+// runs behind a modal progress screen — no chat is usable until it finished.
+void MainWindow::startHistoryImportReplay()
+{
+    if (!m_cli.isRunning()) return;
+    m_cli.call(QStringLiteral("listHistoryImport"), {}, [this](const QJsonValue &result, const QString &error) {
+        if (!error.isEmpty()) return;
+        const QJsonObject object = result.toObject();
+        if (!object.value(QStringLiteral("available")).toBool()) return;
+        m_importActive = true;
+        m_importDone = 0;
+        m_importTotal = object.value(QStringLiteral("count")).toDouble();
+        m_importSeen.clear();
+        showImportScreen();
+        fetchHistoryBatch(0);
+    });
+}
+
+// The modal screen the import runs behind: the window stays covered and the chats appear
+// only when the import finished, like the official client's loading step after linking.
+void MainWindow::showImportScreen()
+{
+    closeImportScreen();
+    m_importScreen = new QDialog(this);
+    m_importScreen->setModal(true);
+    m_importScreen->setWindowTitle(tr("Chat history"));
+    auto *lay = new QVBoxLayout(m_importScreen);
+    m_importText = new QLabel(m_importTotal > 0
+                                  ? tr("Importing the transferred chat history … (%1 of %2 messages)")
+                                        .arg(m_importDone).arg(m_importTotal)
+                                  : tr("Importing the transferred chat history …"));
+    m_importText->setWordWrap(true);
+    lay->addWidget(m_importText);
+    m_importBar = new QProgressBar(m_importScreen);
+    m_importBar->setRange(0, m_importTotal > 0 ? int(std::min<qint64>(m_importTotal, std::numeric_limits<int>::max())) : 0);
+    m_importBar->setTextVisible(false);
+    lay->addWidget(m_importBar);
+    m_importScreen->show();
+}
+
+void MainWindow::closeImportScreen()
+{
+    if (!m_importScreen) return;
+    m_importScreen->close();
+    m_importScreen->deleteLater();
+    m_importScreen = nullptr;
+    m_importText = nullptr;
+    m_importBar = nullptr;
+}
+
+void MainWindow::finishHistoryImport()
+{
+    m_importActive = false;
+    m_importSeen.clear();
+    closeImportScreen();
+    m_cli.call(QStringLiteral("clearHistoryImport"), {}, {});
+    // The chats were hidden behind the import screen until now; this is the moment they
+    // appear, complete with the transferred history.
+    refreshList();
+    if (!m_current.isEmpty()) showConversation(true);
+}
+
+void MainWindow::fetchHistoryBatch(qint64 cursor)
+{
+    if (!m_cli.isRunning()) {
+        closeImportScreen();
+        m_importActive = false;
+        return;
+    }
+    const QJsonObject params{{QStringLiteral("cursor"), static_cast<double>(cursor)},
+                             {QStringLiteral("limit"), 2000}};
+    m_cli.call(QStringLiteral("fetchHistoryImport"), params, [this](const QJsonValue &result, const QString &error) {
+        if (!error.isEmpty()) {
+            // The source stays in place: the next start replays whatever is still pending.
+            m_importActive = false;
+            m_importSeen.clear();
+            closeImportScreen();
+            return;
+        }
+        const QJsonObject page = result.toObject();
+        const QJsonArray messages = page.value(QStringLiteral("messages")).toArray();
+        for (const QJsonValue &v : messages)
+            onHistoryEnvelope(v.toObject());
+        m_importDone += messages.size();
+        if (m_importBar && m_importTotal > 0)
+            m_importBar->setValue(int(std::min<qint64>(m_importDone, m_importTotal)));
+        if (m_importText && m_importTotal > 0)
+            m_importText->setText(tr("Importing the transferred chat history … (%1 of %2 messages)")
+                                      .arg(m_importDone).arg(m_importTotal));
+        const QJsonValue next = page.value(QStringLiteral("nextCursor"));
+        if (next.isDouble())
+            fetchHistoryBatch(static_cast<qint64>(next.toDouble()));
+        else
+            finishHistoryImport();
+    });
+}
+
+void MainWindow::onHistoryEnvelope(const QJsonObject &env)
+{
+    ParsedEnvelope pe = parseEnvelope(env);
+    if (pe.kind == ParsedEnvelope::None) return;
+
+    const bool group = !pe.groupId.isEmpty();
+    const QString srcKey = resolveKey(pe.src);
+    const QString key = group ? QStringLiteral("g:") + pe.groupId : (pe.outgoing ? resolveKey(pe.destination) : srcKey);
+    if (key.isEmpty()) return;
+
+    // A dataMessage from our own number is the "Note to Self" chat: our own send.
+    if (!pe.outgoing && !group && isNoteToSelf(srcKey)) pe.outgoing = true;
+
+    switch (pe.kind) {
+    case ParsedEnvelope::Message_: {
+        Message m = pe.msg;
+        m.outgoing = pe.outgoing;
+        m.authorKey = pe.outgoing ? m_account : srcKey;
+        if (m.viewOnce) {
+            // Like the official clients: only the photo, no caption, quote or own media.
+            m.text.clear();
+            m.textStyles.clear();
+            m.mentions.clear();
+            m.quote = Quote();
+            m.linkPreview = LinkPreview();
+            if (m.outgoing) m.attachments.clear();
+        }
+        if (m.quote.valid) m.quote.authorKey = resolveKey(m.quote.authorKey);
+        // Disappearing messages start their timer when they were sent or received; the
+        // phone already left the long-expired ones out of the transfer.
+        if (m.expiresInSeconds > 0) m.expirationStartMs = m.ts();
+        const QString title = group ? tr("Group") : (pe.outgoing ? key : srcKey);
+        addHistoryMessage(key, m, title, group);
+        return;
+    }
+    case ParsedEnvelope::Reaction: {
+        const QString gid = env.value(QStringLiteral("dataMessage")).toObject().value(QStringLiteral("groupInfo")).toObject()
+                                .value(QStringLiteral("groupId")).toString();
+        const QString rkey = !gid.isEmpty() ? QStringLiteral("g:") + gid : key;
+        const QString reactor = pe.outgoing ? m_account : srcKey;
+        applyReaction(rkey, pe.targetTs, {pe.targetNumber, pe.targetUuid}, reactor, pe.remove ? QString() : pe.emoji);
+        return;
+    }
+    case ParsedEnvelope::Edit: {
+        const QString author = pe.outgoing ? m_account : srcKey;
+        applyEdit(key, pe.targetTs, {author}, pe.msg.text, pe.msg.ts(), pe.msg.textStyles, pe.msg.mentions);
+        return;
+    }
+    case ParsedEnvelope::Delete: {
+        const QString author = pe.outgoing ? m_account : srcKey;
+        applyDelete(key, pe.targetTs, {author});
+        return;
+    }
+    case ParsedEnvelope::ExpirationUpdate: {
+        auto conversation = m_convs.find(key);
+        if (conversation != m_convs.end() && conversation->expirationSeconds != pe.expirationSeconds) {
+            conversation->expirationSeconds = pe.expirationSeconds;
+            persist(Records::expiration(key, pe.expirationSeconds));
+        }
+        return;
+    }
+    default:
+        return; // receipts, typing, pins and polls are not part of the transfer
+    }
+}
+
+// Like addMessage, but for the transferred history: the original timestamps order the chat
+// (not "now", like a live message), nothing is marked unread, nothing alerts, and a message
+// that is already in the local history (re-linking the same account) is not inserted twice.
+void MainWindow::addHistoryMessage(const QString &key, Message m, const QString &title, bool group)
+{
+    Conversation &c = conv(key, title, group);
+    const QString author = effectiveAuthor(c, m);
+    if (m_importActive) {
+        // Constant-time duplicate check: the backward findMessage scan per message made the
+        // replay O(n²), noticeably slower than the official client on large histories.
+        auto &seen = m_importSeen[key];
+        auto at = seen.find(m.ts());
+        if (at != seen.end()) {
+            if (at->contains(author)) return; // duplicate
+            at->append(author);
+        } else {
+            seen.insert(m.ts(), QStringList{author});
+        }
+    } else if (findMessage(c, m.ts(), QStringList{author}) >= 0) {
+        return; // duplicate
+    }
+    const qint64 previousOrder = c.msgs.isEmpty() ? 0 : c.msgs.last().sortTs();
+    m.orderTs = std::max({m.ts(), previousOrder + 1});
+
+    int at = c.msgs.size();
+    while (at > 0 && c.msgs[at - 1].sortTs() > m.sortTs()) --at;
+    c.msgs.insert(at, m);
+    persist(Records::message(key, m));
+
+    // Like the official client: activity brings an archived chat back.
+    if (c.archived) {
+        c.archived = false;
+        persist(Records::archive(key, false, c.sigArchived));
+    }
+    // While the import runs, the window is covered by the progress screen and the list is
+    // refreshed once when it finished — no per-message view updates.
+    if (!m_importActive && key == m_current) {
+        if (at == c.msgs.size() - 1)
+            m_view->appendMessage(m);
+        else
+            showConversation(true);
+    }
 }
 
 bool MainWindow::addMessage(const QString &key, Message m, const QString &title, bool group)

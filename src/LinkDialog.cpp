@@ -70,6 +70,11 @@ void LinkDialog::startLinking()
     m_buf.clear();
     m_qr->clear();
     m_uri->clear();
+    if (m_transferChoice) {
+        m_transferChoice->deleteLater();
+        m_transferChoice = nullptr;
+    }
+    m_transferAnswered = false;
     m_status->setText(tr("Waiting for corvus-cli …"));
     m_start->setEnabled(false);
     m_name->setEnabled(false);
@@ -91,13 +96,74 @@ void LinkDialog::startLinking()
 void LinkDialog::onStdout()
 {
     m_buf += m_proc->readAllStandardOutput();
-    for (const QByteArray &line : m_buf.split('\n')) {
-        const QString s = QString::fromUtf8(line).trimmed();
-        if (s.startsWith(QLatin1String("sgnl://")) || s.startsWith(QLatin1String("tsdevice:"))) {
+    // Process complete lines only; keep the trailing partial one in the buffer.
+    int nl;
+    while ((nl = m_buf.indexOf('\n')) >= 0) {
+        const QString s = QString::fromUtf8(m_buf.left(nl)).trimmed();
+        m_buf.remove(0, nl + 1);
+        if (s.isEmpty()) continue;
+        // corvus-cli reports the phone's transfer offer and the import progress here, after
+        // the QR code was scanned and confirmed (Signal's synchronized start).
+        if (s == QLatin1String("history-offered")) {
+            offerHistoryTransfer();
+        } else if (s.startsWith(QLatin1String("history-progress "))) {
+            m_status->setText(tr("Importing chat history … (%1 messages)").arg(s.mid(17)));
+        } else if (s.startsWith(QLatin1String("history-done"))) {
+            const QString count = s.mid(13).trimmed();
+            m_status->setText(count.isEmpty() ? tr("Chat history transferred.")
+                                              : tr("Chat history transferred (%1 messages).").arg(count));
+        } else if (s == QLatin1String("history-skip")) {
+            m_status->setText(tr("Linked without chat history."));
+        } else if (s.startsWith(QLatin1String("history-error "))) {
+            m_status->setText(tr("The chat history transfer failed, linking continues without it:\n%1")
+                                  .arg(s.mid(14)));
+        } else if (s.startsWith(QLatin1String("sgnl://")) || s.startsWith(QLatin1String("tsdevice:"))) {
             showUri(s);
-            break;
         }
     }
+}
+
+// The phone offers to transfer the recent chat history when linking ("Transfer message
+// history" / "Don't transfer" on the phone). corvus-cli surfaces that offer here; the answer
+// decides whether the archive is downloaded and imported.
+void LinkDialog::offerHistoryTransfer()
+{
+    if (m_transferChoice) return;
+    m_transferAnswered = false;
+
+    m_transferChoice = new QWidget(this);
+    auto *lay = new QVBoxLayout(m_transferChoice);
+    lay->setContentsMargins(0, 0, 0, 0);
+    auto *label = new QLabel(tr("Your phone offers to transfer the recent chat history "
+                                "(last 45 days) to this computer."));
+    label->setWordWrap(true);
+    lay->addWidget(label);
+    auto *row = new QHBoxLayout;
+    auto *yes = new QPushButton(tr("Transfer history"));
+    auto *no = new QPushButton(tr("Continue without"));
+    row->addWidget(yes, 1);
+    row->addWidget(no, 1);
+    lay->addLayout(row);
+    qobject_cast<QVBoxLayout *>(layout())->insertWidget(layout()->count() - 1, m_transferChoice);
+    m_status->setText(tr("Waiting for your choice …"));
+
+    connect(yes, &QPushButton::clicked, this, [this] { answerTransfer(true); });
+    connect(no, &QPushButton::clicked, this, [this] { answerTransfer(false); });
+}
+
+void LinkDialog::answerTransfer(bool transfer)
+{
+    if (m_transferAnswered || !m_proc) return;
+    m_transferAnswered = true;
+    if (m_transferChoice) {
+        m_transferChoice->deleteLater();
+        m_transferChoice = nullptr;
+    }
+    m_status->setText(transfer ? tr("Transferring chat history …")
+                               : tr("Linked without chat history."));
+    m_proc->write((transfer ? QStringLiteral("transfer") : QStringLiteral("skip"))
+                      .toUtf8()
+                  + '\n');
 }
 
 void LinkDialog::showUri(const QString &uri)
