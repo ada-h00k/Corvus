@@ -221,8 +221,8 @@ modules:
     sources:
       - type: git
         url: https://github.com/ada-h00k/corvus-cli.git
-        tag: v1.8.0
-        commit: 64d527ba2051feb9213dae4ca0cc0be323374976
+        tag: v1.8.1
+        commit: 4f85662021196060294cc7352ae2709774678902
         x-checker-data:
           type: git
           tag-pattern: ^v(\d+\.\d+\.\d+)$
@@ -247,7 +247,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/ada-h00k/Corvus.git
-        tag: v1.7.2
+        tag: v1.7.3
         commit: 379ed63930a0852eda6cadcf916e252d75fee282
         x-checker-data:
           type: git

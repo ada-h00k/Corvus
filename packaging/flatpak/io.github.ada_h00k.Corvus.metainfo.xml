@@ -57,10 +57,10 @@
   </content_rating>
 
   <releases>
-    <release version="1.7.2" date="2026-11-15">
-      <url type="details">https://github.com/ada-h00k/Corvus/releases/tag/v1.1.0</url>
+    <release version="1.7.3" date="2026-11-15">
+      <url type="details">https://github.com/ada-h00k/Corvus/releases/tag/v1.7.3</url>
       <description>
-        <p>Release 1.7.2.</p>
+        <p>Release 1.7.3.</p>
       </description>
     </release>
   </releases>
