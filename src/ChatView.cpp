@@ -425,6 +425,7 @@ void ChatView::cacheCurrentConversation()
     if (m_conversationKey.isEmpty()) return;
 
     stopVideoPlayback();
+    clearSelection();
     CachedConversation cached;
     cached.items = std::move(m_items);
     cached.pins = m_pins;
@@ -633,13 +634,13 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll, const Q
         }
     }
 
+    clearSelection();
     disposeItemResources(m_items);
     m_msgs = msgs;
     m_items = QList<Item>(msgs.size());
     m_conversationKey = conversationKey;
     m_renderFirst = m_renderLast = -1;
     m_layoutWidth = -1;
-    clearSelection();
     relayoutAll();
     verticalScrollBar()->setValue((bottom || !keepScroll) ? verticalScrollBar()->maximum() : old);
     if (!keepScroll) m_missed = 0; // another conversation: nothing is "new" here
@@ -670,12 +671,14 @@ void ChatView::replaceLastMessage(const Message &m)
     const int oldScroll = verticalScrollBar()->value();
     const int i = m_msgs.size() - 1;
 
+    clearSelection();
     for (QMovie *movie : m_items[i].movies)
         delete movie;
     for (ApngMovie *movie : m_items[i].apngMovies)
         delete movie;
     m_items[i] = Item();
     m_msgs[i] = m;
+    m_flash = -1;
     const int y = i > 0 ? m_items[i - 1].y + m_items[i - 1].height : m_bannerOffset;
     layoutItem(i, y);
 
