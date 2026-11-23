@@ -352,8 +352,16 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     m_resizeTimer->setSingleShot(true);
     m_resizeTimer->setInterval(70);
     connect(m_resizeTimer, &QTimer::timeout, this, [this] {
-        relayoutAll();
+        relayoutAll(true);
         verticalScrollBar()->setValue(m_resizeAtBottom ? verticalScrollBar()->maximum() : m_resizeScrollValue);
+    });
+    // Keep parsed text documents available across short pauses while the user drags
+    // the window edge. The normal renderer still releases off-screen paint resources.
+    m_resizeCleanupTimer = new QTimer(this);
+    m_resizeCleanupTimer->setSingleShot(true);
+    m_resizeCleanupTimer->setInterval(300);
+    connect(m_resizeCleanupTimer, &QTimer::timeout, this, [this] {
+        for (Item &item : m_items) item.measureDoc.reset();
     });
     m_autoScrollTimer = new QTimer(this);
     m_autoScrollTimer->setInterval(16);
@@ -372,6 +380,11 @@ void ChatView::setNameResolver(std::function<QString(const QString &)> fn)
 {
     invalidateAllCachedConversations();
     m_nameOf = std::move(fn);
+    for (Item &item : m_items) {
+        item.doc.reset();
+        item.measureDoc.reset();
+        item.renderResourcesBuilt = false;
+    }
 }
 
 void ChatView::disposeItemResources(QList<Item> &items)
@@ -391,6 +404,7 @@ void ChatView::disposeItemResources(QList<Item> &items)
         // Keep the measured geometry, but drop heavyweight paint resources. They are
         // recreated only for messages near the viewport when this chat is shown again.
         item.doc.reset();
+        item.measureDoc.reset();
         item.pix.clear();
         item.linkPreviewPixmap = QPixmap();
         item.contactAvatarPixmap = QPixmap();
@@ -1096,7 +1110,10 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
     if (it.renderResourcesBuilt) return;
 
     const Message &m = m_msgs[i];
-    if (m.deleted) {
+    // A resize measurement document may already contain the parsed HTML. Reuse it
+    // when painting instead of parsing the same message a second time.
+    if (!it.doc && it.measureDoc) it.doc = it.measureDoc;
+    if (!it.doc && m.deleted) {
         // "This message was deleted." / "You deleted this message." in a muted italic style
         const QColor fg = m.outgoing ? m_ap.outText : m_ap.inText;
         const QColor bg = m.outgoing ? m_ap.outBg : m_ap.inBg;
@@ -1107,7 +1124,7 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
         it.doc->setDefaultFont(font());
         it.doc->setHtml(QStringLiteral("<i style=\"color: %1\">%2</i>").arg(muted.name(), deletedText(m).toHtmlEscaped()));
         if (it.textRect.width() > 0) it.doc->setTextWidth(it.textRect.width());
-    } else if (!m.text.isEmpty()) {
+    } else if (!it.doc && !m.text.isEmpty()) {
         const QColor fg = m.outgoing ? m_ap.outText : m_ap.inText;
         it.doc = std::make_shared<QTextDocument>();
         it.doc->setDocumentMargin(0);
@@ -1171,7 +1188,7 @@ size_t ChatView::textMeasureKey(const Message &m, int innerMax) const
     return h ? h : 1;
 }
 
-void ChatView::layoutItem(int i, int y)
+void ChatView::layoutItem(int i, int y, bool cacheMeasureDoc)
 {
     buildItem(i);
     // The text document is only built when the size is not cached (see below).
@@ -1294,6 +1311,7 @@ void ChatView::layoutItem(int i, int y)
                 m_textSizeCache.insert(cacheKey, textSz);
             }
         }
+        if (cacheMeasureDoc && it.doc) it.measureDoc = it.doc;
         contentW = qMax(contentW, textSz.width());
     }
 
@@ -1469,12 +1487,12 @@ void ChatView::layoutItem(int i, int y)
     releaseItemRenderResources(i);
 }
 
-void ChatView::relayoutAll()
+void ChatView::relayoutAll(bool cacheMeasureDocs)
 {
     m_layoutWidth = viewport()->width();
     int y = m_bannerOffset; // room for the pinned-message banner above the first bubble
     for (int i = 0; i < m_items.size(); ++i) {
-        layoutItem(i, y);
+        layoutItem(i, y, cacheMeasureDocs);
         y += m_items[i].height;
     }
     updateScrollRange();
@@ -1499,6 +1517,7 @@ void ChatView::resizeEvent(QResizeEvent *e)
         updateScrollRange();
         verticalScrollBar()->setValue(m_resizeAtBottom ? verticalScrollBar()->maximum() : m_resizeScrollValue);
         m_resizeTimer->start();
+        m_resizeCleanupTimer->start();
     } else {
         const bool bottom = atBottom();
         const int old = verticalScrollBar()->value();
