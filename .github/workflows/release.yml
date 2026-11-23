@@ -550,6 +550,11 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/flatpak-cargo-generator.py" \
             "https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/${CARGO_GENERATOR_REF}/cargo/flatpak-cargo-generator.py"
 
+          # Keep multiple Git refs from one repository in separate Cargo sources.
+          # Also avoid copying read-only .git metadata from Flatpak's source checkout.
+          patch --batch --forward "$RUNNER_TEMP/flatpak-cargo-generator.py" \
+            < packaging/flatpak/flatpak-cargo-generator.patch
+
           "$RUNNER_TEMP/cargo-gen/bin/python" "$RUNNER_TEMP/flatpak-cargo-generator.py" \
             history-store/Cargo.lock \
             -o packaging/flatpak/cargo-sources.json
@@ -587,7 +592,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .flatpak-builder/downloads
-          key: flatpak-sources-${{ hashFiles('packaging/flatpak/*.yml', 'history-store/Cargo.lock') }}
+          key: flatpak-sources-${{ hashFiles('packaging/flatpak/*.yml', 'packaging/flatpak/*.patch', 'packaging/flatpak/corvus-cli-Cargo.lock', 'history-store/Cargo.lock') }}
           restore-keys: |
             flatpak-sources-
 
