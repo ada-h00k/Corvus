@@ -178,13 +178,28 @@ int main(int argc, char **argv)
     {
         const int oldWidth = view.viewport()->width();
         const int oldLeft = view.bubbleRect(1).left();
+        const int oldTextLeft = view.textRect(1).left();
         view.resize(view.width() + 80, view.height());
-        const int newWidth = view.viewport()->width();
-        CHECK(newWidth > oldWidth);
-        CHECK(view.bubbleRect(1).right() == newWidth - 13);
-        CHECK(view.bubbleRect(1).left() == oldLeft + newWidth - oldWidth);
+        const int expandedWidth = view.viewport()->width();
+        const int expandDelta = expandedWidth - oldWidth;
+        CHECK(expandedWidth > oldWidth);
+        CHECK(view.bubbleRect(1).right() == expandedWidth - 13);
+        CHECK(view.bubbleRect(1).left() == oldLeft + expandDelta);
+        CHECK(view.textRect(1).left() == oldTextLeft + expandDelta);
         pump();
-        CHECK(view.bubbleRect(1).right() == newWidth - 13);
+        CHECK(view.bubbleRect(1).right() == expandedWidth - 13);
+
+        const int expandedLeft = view.bubbleRect(1).left();
+        const int expandedTextLeft = view.textRect(1).left();
+        view.resize(view.width() - 40, view.height());
+        const int narrowedWidth = view.viewport()->width();
+        const int shrinkDelta = narrowedWidth - expandedWidth;
+        CHECK(narrowedWidth < expandedWidth);
+        CHECK(view.bubbleRect(1).right() == narrowedWidth - 13);
+        CHECK(view.bubbleRect(1).left() == expandedLeft + shrinkDelta);
+        CHECK(view.textRect(1).left() == expandedTextLeft + shrinkDelta);
+        pump();
+        CHECK(view.bubbleRect(1).right() == narrowedWidth - 13);
     }
 
     // colours are configurable
