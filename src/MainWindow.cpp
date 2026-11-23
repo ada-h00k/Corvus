@@ -3335,6 +3335,7 @@ bool MainWindow::applyReaction(const QString &key, qint64 ts, const QStringList 
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (m.deleted) return false; // nothing to react to any more
+    if (key != m_current) m_view->invalidateConversation(key);
     if (emoji.isEmpty()) m.reactions.remove(reactor); else m.reactions[reactor] = emoji;
     persist(Records::reaction(key, m.ts(), effectiveAuthor(c, m), reactor, emoji)); // original ts = stable identity
     if (key == m_current) showConversation(true);
@@ -3351,6 +3352,7 @@ bool MainWindow::applyPin(const QString &key, qint64 targetTs, const QStringList
     if (i < 0) return false; // unknown message: the banner needs the message content
     const Message &m = c.msgs[i];
     if (m.deleted) return false;
+    if (key != m_current) m_view->invalidateConversation(key);
     const QString author = effectiveAuthor(c, m);
     // Re-pinning the same message replaces the old pin instead of showing it twice.
     c.pins.erase(std::remove_if(c.pins.begin(), c.pins.end(),
@@ -3391,6 +3393,7 @@ void MainWindow::applyUnpin(const QString &key, qint64 targetTs, const QStringLi
         return true;
     };
     if (std::none_of(c.pins.cbegin(), c.pins.cend(), match)) return;
+    if (key != m_current) m_view->invalidateConversation(key);
     c.pins.erase(std::remove_if(c.pins.begin(), c.pins.end(), match), c.pins.end());
     persist(Records::pin(key, targetTs, QString(), QString(), 0, -1, true));
     if (key == m_current) showConversation(true);
@@ -3407,6 +3410,7 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (m.deleted) return false; // redelivery
+    if (key != m_current) m_view->invalidateConversation(key);
     if (m_editKey == key && m_editTs == m.ts()) cancelEdit();
     m.deleted = true;
     m.text.clear();
@@ -3458,6 +3462,7 @@ bool MainWindow::applyEdit(const QString &key, qint64 targetTs, const QStringLis
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (newTs <= m.latestTs()) return false; // already applied / outdated revision
+    if (key != m_current) m_view->invalidateConversation(key);
     m.text = text;
     m.textStyles = textStyles;
     m.mentions = mentions;
@@ -4817,6 +4822,7 @@ void MainWindow::fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const 
         const int i = findMessage(it.value(), ts, QStringList{author});
         if (i < 0 || it.value().msgs[i].linkPreview.url != previewUrl) return;
         Message &m = it.value().msgs[i];
+        if (key != m_current) m_view->invalidateConversation(key);
         m.linkPreview.imageThumb = AttachmentUtil::makeThumbnail(image);
         if (m.linkPreview.imageThumb.isEmpty()) m.linkPreview.imageThumb = data;
         persist(Records::linkPreviewUpdate(key, m));
@@ -4860,6 +4866,7 @@ void MainWindow::fetchContactAvatar(const QString &key, qint64 ts, const QString
         const int i = findMessage(it.value(), ts, QStringList{author});
         if (i < 0 || !it.value().msgs[i].hasContact) return;
         Message &m = it.value().msgs[i];
+        if (key != m_current) m_view->invalidateConversation(key);
         m.contactAvatar = QString::fromLatin1(AttachmentUtil::makeThumbnail(image).toBase64());
         if (key == m_current) showConversation(true);
     });
@@ -6660,6 +6667,7 @@ bool MainWindow::applyPollVote(const QString &key, qint64 targetTs, const QStrin
     const bool newer = voteCount > existing.voteCount ||
                        (voteCount == existing.voteCount && voteTs >= existing.voteTs);
     if (!newer) return false;
+    if (key != m_current) m_view->invalidateConversation(key);
 
     PollVote vote;
     vote.optionIndexes = indexes;
@@ -6692,6 +6700,7 @@ bool MainWindow::applyPollTerminate(const QString &key, qint64 targetTs, const Q
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (m.deleted || !m.hasPoll || m.poll.terminated) return false;
+    if (key != m_current) m_view->invalidateConversation(key);
     // findMessage already matched the poll author: a terminate from someone else's
     // number/UUID never finds the message and is dropped, like the official clients.
     m.poll.terminated = true;
@@ -6857,6 +6866,7 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
             const int i = findMessage(cit.value(), ts, QStringList{author});
             if (i < 0 || a >= cit.value().msgs[i].attachments.size()) return;
             Message &mm = cit.value().msgs[i];
+            if (key != m_current) m_view->invalidateConversation(key);
             Attachment &at = mm.attachments[a];
             at.width = img.width();
             at.height = img.height();
