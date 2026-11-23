@@ -3133,6 +3133,7 @@ void MainWindow::onHistoryEnvelope(const QJsonObject &env)
 // that is already in the local history (re-linking the same account) is not inserted twice.
 void MainWindow::addHistoryMessage(const QString &key, Message m, const QString &title, bool group)
 {
+    if (key != m_current) m_view->invalidateConversation(key);
     Conversation &c = conv(key, title, group);
     const QString author = effectiveAuthor(c, m);
     if (m_importActive) {
@@ -3174,6 +3175,7 @@ void MainWindow::addHistoryMessage(const QString &key, Message m, const QString 
 
 bool MainWindow::addMessage(const QString &key, Message m, const QString &title, bool group)
 {
+    if (key != m_current) m_view->invalidateConversation(key);
     Conversation &c = conv(key, title, group);
     if (findMessage(c, m.ts(), QStringList{effectiveAuthor(c, m)}) >= 0) return false; // duplicate
     const qint64 previousOrder = c.msgs.isEmpty() ? 0 : c.msgs.last().sortTs();
@@ -3212,6 +3214,8 @@ void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const 
     if (pendingIt == m_pendingSends.end()) return;
 
     const PendingSend pending = pendingIt.value();
+    if (pending.conversationKey != m_current)
+        m_view->invalidateConversation(pending.conversationKey);
     if (timestamp <= 0) timestamp = QDateTime::currentMSecsSinceEpoch();
 
     Message confirmed = pending.message;
@@ -3293,7 +3297,12 @@ void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const 
     else
         m_pendingSends.erase(pendingIt);
 
-    if (pending.conversationKey == m_current) showConversation(true);
+    if (pending.conversationKey == m_current) {
+        if (duplicateIndex < 0 && previewIndex == conversation.msgs.size() - 1)
+            m_view->replaceLastMessage(confirmed);
+        else
+            showConversation(true);
+    }
     refreshList();
 }
 
@@ -3326,6 +3335,7 @@ bool MainWindow::applyReaction(const QString &key, qint64 ts, const QStringList 
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (m.deleted) return false; // nothing to react to any more
+    if (key != m_current) m_view->invalidateConversation(key);
     if (emoji.isEmpty()) m.reactions.remove(reactor); else m.reactions[reactor] = emoji;
     persist(Records::reaction(key, m.ts(), effectiveAuthor(c, m), reactor, emoji)); // original ts = stable identity
     if (key == m_current) showConversation(true);
@@ -3342,6 +3352,7 @@ bool MainWindow::applyPin(const QString &key, qint64 targetTs, const QStringList
     if (i < 0) return false; // unknown message: the banner needs the message content
     const Message &m = c.msgs[i];
     if (m.deleted) return false;
+    if (key != m_current) m_view->invalidateConversation(key);
     const QString author = effectiveAuthor(c, m);
     // Re-pinning the same message replaces the old pin instead of showing it twice.
     c.pins.erase(std::remove_if(c.pins.begin(), c.pins.end(),
@@ -3382,6 +3393,7 @@ void MainWindow::applyUnpin(const QString &key, qint64 targetTs, const QStringLi
         return true;
     };
     if (std::none_of(c.pins.cbegin(), c.pins.cend(), match)) return;
+    if (key != m_current) m_view->invalidateConversation(key);
     c.pins.erase(std::remove_if(c.pins.begin(), c.pins.end(), match), c.pins.end());
     persist(Records::pin(key, targetTs, QString(), QString(), 0, -1, true));
     if (key == m_current) showConversation(true);
@@ -3398,6 +3410,7 @@ bool MainWindow::applyDelete(const QString &key, qint64 targetTs, const QStringL
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (m.deleted) return false; // redelivery
+    if (key != m_current) m_view->invalidateConversation(key);
     if (m_editKey == key && m_editTs == m.ts()) cancelEdit();
     m.deleted = true;
     m.text.clear();
@@ -3449,6 +3462,7 @@ bool MainWindow::applyEdit(const QString &key, qint64 targetTs, const QStringLis
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (newTs <= m.latestTs()) return false; // already applied / outdated revision
+    if (key != m_current) m_view->invalidateConversation(key);
     m.text = text;
     m.textStyles = textStyles;
     m.mentions = mentions;
@@ -3695,6 +3709,7 @@ void MainWindow::expireMessages()
             if (message.viewOnce && !message.viewOnceViewed && !message.viewOnceExpired &&
                 now - message.ts() >= 45LL * 24 * 60 * 60 * 1000) {
                 message.viewOnceExpired = true;
+                if (conversation.key != m_current) m_view->invalidateConversation(conversation.key);
                 deleteAttachmentFiles(message.attachments); // the backend's stored copies too (F1)
                 message.attachments.clear();
                 message.text.clear();
@@ -3706,6 +3721,7 @@ void MainWindow::expireMessages()
             }
             if (message.expiresInSeconds <= 0 || message.expirationStartMs <= 0) continue;
             if (now - message.expirationStartMs < static_cast<qint64>(message.expiresInSeconds) * 1000) continue;
+            if (conversation.key != m_current) m_view->invalidateConversation(conversation.key);
             deleteAttachmentFiles(message.attachments); // expired: the backend's copies go too (F1)
             conversation.msgs.removeAt(i);
             changed = true;
@@ -3761,6 +3777,46 @@ static QPixmap noteToSelfAvatar(int size = 64)
                    QPointF(paper.right() - paper.width() * 0.16, y));
     }
     return out;
+}
+
+void MainWindow::updateConversationRow(const QString &key)
+{
+    const auto conversation = m_convs.constFind(key);
+    if (conversation == m_convs.cend()) return;
+
+    bool found = false;
+    for (int i = 0; i < m_list->count(); ++i) {
+        QListWidgetItem *item = m_list->item(i);
+        if (item->data(Qt::UserRole).toString() != key) continue;
+
+        found = true;
+        const Conversation &c = conversation.value();
+        QString text;
+        if (isNoteToSelf(key) && !m_showArchived) {
+            text = (c.muted ? QStringLiteral("🔕 ") : QString()) + c.title;
+        } else {
+            text = (m_safetyChanged.contains(key) ? QStringLiteral("⚠ ") : QString()) +
+                   (c.blocked ? QStringLiteral("🚫 ") : QString()) +
+                   (c.muted ? QStringLiteral("🔕 ") : QString()) +
+                   (c.isGroup ? QStringLiteral("👥 ") + c.title : c.title);
+        }
+        if (c.unread > 0) text += QStringLiteral(" (%1)").arg(c.unread);
+
+        item->setText(text);
+        QFont font = item->font();
+        font.setBold(c.unread > 0);
+        item->setFont(font);
+        item->setToolTip(c.blocked ? tr("Blocked contact") : QString());
+        break;
+    }
+
+    // A contact-book hit may become a real chat on first open. It is still stored
+    // under "contact:<key>" in the list, so a targeted row update cannot find it.
+    if (!found) {
+        refreshList();
+        return;
+    }
+    updateTray();
 }
 
 void MainWindow::refreshList()
@@ -4139,12 +4195,17 @@ void MainWindow::openConversation(const QString &key)
     if (!m_convs.contains(key)) return;
     switchConversation(key); // stashes the old chat's draft, restores this chat's draft
     m_convs[m_current].unread = 0;
-    flushPendingReadReceipts(key);
-    startIncomingExpirationTimers(key);
     showConversation();
-    refreshList();
+    updateConversationRow(key);
     m_notifier->close(key); // the notification for this chat is obsolete now
-    checkIdentities(key);
+
+    // These operations may walk large histories or issue backend requests. Let the new
+    // conversation paint first; none of them is needed to display the selected chat.
+    QTimer::singleShot(0, this, [this, key] {
+        flushPendingReadReceipts(key);
+        startIncomingExpirationTimers(key);
+        checkIdentities(key);
+    });
     focusComposer();
 }
 
@@ -4182,9 +4243,7 @@ void MainWindow::showConversation(bool keepScroll)
     updateTypingIndicator();
     updateSafetyBar();
     updateGroupActions();
-    m_view->setGroupMode(c.isGroup);
-    m_view->setPins(activePins(c));
-    m_view->showMessages(c.msgs, keepScroll);
+    m_view->showMessages(c.msgs, keepScroll, m_current, c.isGroup, activePins(c));
     updateMessageSearch();
     updateAudioPlaybackView();
 }
@@ -4772,6 +4831,7 @@ void MainWindow::fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const 
         const int i = findMessage(it.value(), ts, QStringList{author});
         if (i < 0 || it.value().msgs[i].linkPreview.url != previewUrl) return;
         Message &m = it.value().msgs[i];
+        if (key != m_current) m_view->invalidateConversation(key);
         m.linkPreview.imageThumb = AttachmentUtil::makeThumbnail(image);
         if (m.linkPreview.imageThumb.isEmpty()) m.linkPreview.imageThumb = data;
         persist(Records::linkPreviewUpdate(key, m));
@@ -4815,6 +4875,7 @@ void MainWindow::fetchContactAvatar(const QString &key, qint64 ts, const QString
         const int i = findMessage(it.value(), ts, QStringList{author});
         if (i < 0 || !it.value().msgs[i].hasContact) return;
         Message &m = it.value().msgs[i];
+        if (key != m_current) m_view->invalidateConversation(key);
         m.contactAvatar = QString::fromLatin1(AttachmentUtil::makeThumbnail(image).toBase64());
         if (key == m_current) showConversation(true);
     });
@@ -5232,6 +5293,7 @@ void MainWindow::applyReceipt(const QString &key, qint64 timestamp, int status,
             if (status == 2 && receipt.readAtMs <= 0) receipt.readAtMs = receiptTimeMs;
             if (oldStatus == receipt.status && oldDeliveredAt == receipt.deliveredAtMs && oldReadAt == receipt.readAtMs)
                 continue;
+            if (conversationKey != m_current) m_view->invalidateConversation(conversationKey);
             message.recipientReceipts.insert(recipient, receipt);
             const int previousAggregate = message.receiptStatus;
             message.receiptStatus = previousAggregate;
@@ -5956,7 +6018,14 @@ void MainWindow::sendMessage()
     m_replyQuote = Quote();
     updateAttachBar();
     updateReplyBar();
-    if (key == m_current) showConversation(true);
+    if (key == m_current) {
+        // The new local echo is always ordered at the end. Append just that item instead
+        // of rebuilding the whole chat history after a single outgoing message.
+        if (at == target.msgs.size() - 1 && m_view->messageCount() == at)
+            m_view->appendMessage(preview);
+        else
+            showConversation(true);
+    }
 
     m_cli.call(QStringLiteral("send"), p,
                [this, pendingId, key, text, rawText, rawRichText, rawCursor, rawMentionRanges, textStyles, files, quote, viewOnce, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
@@ -6607,6 +6676,7 @@ bool MainWindow::applyPollVote(const QString &key, qint64 targetTs, const QStrin
     const bool newer = voteCount > existing.voteCount ||
                        (voteCount == existing.voteCount && voteTs >= existing.voteTs);
     if (!newer) return false;
+    if (key != m_current) m_view->invalidateConversation(key);
 
     PollVote vote;
     vote.optionIndexes = indexes;
@@ -6639,6 +6709,7 @@ bool MainWindow::applyPollTerminate(const QString &key, qint64 targetTs, const Q
     if (i < 0) return false;
     Message &m = c.msgs[i];
     if (m.deleted || !m.hasPoll || m.poll.terminated) return false;
+    if (key != m_current) m_view->invalidateConversation(key);
     // findMessage already matched the poll author: a terminate from someone else's
     // number/UUID never finds the message and is dropped, like the official clients.
     m.poll.terminated = true;
@@ -6804,6 +6875,7 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
             const int i = findMessage(cit.value(), ts, QStringList{author});
             if (i < 0 || a >= cit.value().msgs[i].attachments.size()) return;
             Message &mm = cit.value().msgs[i];
+            if (key != m_current) m_view->invalidateConversation(key);
             Attachment &at = mm.attachments[a];
             at.width = img.width();
             at.height = img.height();
@@ -7030,6 +7102,7 @@ void MainWindow::consumeViewOnce(const QString &key, qint64 timestamp, const QSt
     if (index < 0) return;
     Message &message = conversation->msgs[index];
     if (!message.viewOnce || message.viewOnceViewed || message.viewOnceExpired) return;
+    if (key != m_current) m_view->invalidateConversation(key);
 
     // Remove signal-cli's downloaded copy as best-effort, then persist only the consumed state.
     for (const Attachment &attachment : std::as_const(message.attachments)) {

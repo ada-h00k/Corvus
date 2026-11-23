@@ -253,6 +253,7 @@ private:
 
     // --- list / view
     void refreshList();
+    void updateConversationRow(const QString &key);
     // Avatars in the chat list (signal-cli getAvatar, cached in memory only).
     QIcon avatarIcon(const Conversation &c) const;
     void fetchMissingAvatars();
