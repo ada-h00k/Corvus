@@ -209,6 +209,41 @@ int main(int argc, char **argv)
     view.setAppearance(ap);
     pump();
 
+    std::printf("conversation layout cache & local echo updates\n");
+    {
+        const QList<Message> firstChat = sample(false);
+        view.showMessages(firstChat, false, "cache-chat-a", false, {});
+        pump();
+        const QRect originalBubble = view.bubbleRect(0);
+
+        Message other;
+        other.time = QDateTime::currentDateTime();
+        other.sender = "Bob";
+        other.text = "A different conversation";
+        view.showMessages({other}, false, "cache-chat-b", false, {});
+        pump();
+
+        view.showMessages(firstChat, false, "cache-chat-a", false, {});
+        CHECK(view.messageCount() == firstChat.size());
+        CHECK(view.bubbleRect(0) == originalBubble);
+
+        Message pending;
+        pending.time = QDateTime::currentDateTime();
+        pending.outgoing = true;
+        pending.authorKey = "+491234567";
+        pending.text = "pending local echo";
+        view.appendMessage(pending);
+        CHECK(view.messageCount() == firstChat.size() + 1);
+        CHECK(view.plainText().contains("pending local echo"));
+
+        pending.text = "confirmed local echo";
+        view.replaceLastMessage(pending);
+        CHECK(view.messageCount() == firstChat.size() + 1);
+        CHECK(view.plainText().contains("confirmed local echo"));
+    }
+    view.showMessages(sample(false));
+    pump();
+
     std::printf("interaction\n");
     CHECK(view.messageAt(b1.center()) == 1);
     CHECK(view.messageAt(QPoint(1, 1)) == -1);
