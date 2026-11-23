@@ -5015,7 +5015,6 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     const QString srcKey = resolveKey(pe.src);
     const QString key = group ? QStringLiteral("g:") + pe.groupId : (pe.outgoing ? resolveKey(pe.destination) : srcKey);
     if (key.isEmpty()) return;
-    if (key != m_current) m_view->invalidateConversation(key);
 
     // corvus-cli saw an identity key it could not verify (L6): the same warning bar a
     // changed safety number shows, until the contact is verified or the bar dismissed.
@@ -5294,6 +5293,7 @@ void MainWindow::applyReceipt(const QString &key, qint64 timestamp, int status,
             if (status == 2 && receipt.readAtMs <= 0) receipt.readAtMs = receiptTimeMs;
             if (oldStatus == receipt.status && oldDeliveredAt == receipt.deliveredAtMs && oldReadAt == receipt.readAtMs)
                 continue;
+            if (conversationKey != m_current) m_view->invalidateConversation(conversationKey);
             message.recipientReceipts.insert(recipient, receipt);
             const int previousAggregate = message.receiptStatus;
             message.receiptStatus = previousAggregate;
@@ -7102,6 +7102,7 @@ void MainWindow::consumeViewOnce(const QString &key, qint64 timestamp, const QSt
     if (index < 0) return;
     Message &message = conversation->msgs[index];
     if (!message.viewOnce || message.viewOnceViewed || message.viewOnceExpired) return;
+    if (key != m_current) m_view->invalidateConversation(key);
 
     // Remove signal-cli's downloaded copy as best-effort, then persist only the consumed state.
     for (const Attachment &attachment : std::as_const(message.attachments)) {
