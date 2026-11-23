@@ -30,9 +30,7 @@ static void bringToFront(MainWindow &w)
         modal->activateWindow();
         return;
     }
-    w.showNormal();
-    w.raise();
-    w.activateWindow();
+    w.showAndActivate();
 }
 
 int main(int argc, char *argv[])
