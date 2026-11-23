@@ -173,6 +173,20 @@ int main(int argc, char **argv)
     CHECK(near(px({b0.left() + 16, b0.top() + 1}), ap.inBg, 40));    // ... while the edge further in is filled
     shot.save(shots + "/chatview_light.png");
 
+    // Right-aligned bubbles follow the new window edge immediately, before the
+    // deferred full text relayout runs.
+    {
+        const int oldWidth = view.viewport()->width();
+        const int oldLeft = view.bubbleRect(1).left();
+        view.resize(view.width() + 80, view.height());
+        const int newWidth = view.viewport()->width();
+        CHECK(newWidth > oldWidth);
+        CHECK(view.bubbleRect(1).right() == newWidth - 13);
+        CHECK(view.bubbleRect(1).left() == oldLeft + newWidth - oldWidth);
+        pump();
+        CHECK(view.bubbleRect(1).right() == newWidth - 13);
+    }
+
     // colours are configurable
     Appearance red = ap;
     red.outBg = QColor("#c0392b");
