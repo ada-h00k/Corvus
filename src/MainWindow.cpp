@@ -3133,6 +3133,7 @@ void MainWindow::onHistoryEnvelope(const QJsonObject &env)
 // that is already in the local history (re-linking the same account) is not inserted twice.
 void MainWindow::addHistoryMessage(const QString &key, Message m, const QString &title, bool group)
 {
+    if (key != m_current) m_view->invalidateConversation(key);
     Conversation &c = conv(key, title, group);
     const QString author = effectiveAuthor(c, m);
     if (m_importActive) {
@@ -3174,6 +3175,7 @@ void MainWindow::addHistoryMessage(const QString &key, Message m, const QString 
 
 bool MainWindow::addMessage(const QString &key, Message m, const QString &title, bool group)
 {
+    if (key != m_current) m_view->invalidateConversation(key);
     Conversation &c = conv(key, title, group);
     if (findMessage(c, m.ts(), QStringList{effectiveAuthor(c, m)}) >= 0) return false; // duplicate
     const qint64 previousOrder = c.msgs.isEmpty() ? 0 : c.msgs.last().sortTs();
@@ -3295,7 +3297,12 @@ void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const 
     else
         m_pendingSends.erase(pendingIt);
 
-    if (pending.conversationKey == m_current) showConversation(true);
+    if (pending.conversationKey == m_current) {
+        if (duplicateIndex < 0 && previewIndex == conversation.msgs.size() - 1)
+            m_view->replaceLastMessage(confirmed);
+        else
+            showConversation(true);
+    }
     refreshList();
 }
 
