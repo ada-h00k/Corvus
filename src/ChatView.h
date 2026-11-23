@@ -185,6 +185,7 @@ private:
     void discardCachedConversation(const QString &key);
     void invalidateAllCachedConversations();
     void layoutItem(int i, int y, bool cacheMeasureDoc = false);
+    void previewResize(int width);
     void relayoutAll(bool cacheMeasureDocs = false);
     void updateScrollRange();
     int totalHeight() const { return m_items.isEmpty() ? 0 : m_items.last().y + m_items.last().height; }
@@ -230,6 +231,7 @@ private:
     bool m_showDeliveryStatus = true;
     Appearance m_ap;
     int m_layoutWidth = -1;
+    int m_resizePreviewWidth = -1;
     int m_renderFirst = -1;
     int m_renderLast = -1;
     int m_resizeScrollValue = 0;
