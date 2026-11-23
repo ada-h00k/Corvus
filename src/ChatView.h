@@ -35,7 +35,7 @@ public:
     ~ChatView() override;
 
     // Maps an author key (number/UUID) to a display name.
-    void setNameResolver(std::function<QString(const QString &)> fn) { m_nameOf = std::move(fn); }
+    void setNameResolver(std::function<QString(const QString &)> fn);
     void setSelfKey(const QString &key) { m_self = key; }
     void setGroupMode(bool group);
     void setReadReceiptsEnabled(bool enabled);
@@ -44,6 +44,11 @@ public:
     Appearance appearance() const { return m_ap; }
 
     void showMessages(const QList<Message> &msgs, bool keepScroll = false); // full rebuild
+    // Switch chats using a small per-conversation layout cache. The cache is invalidated
+    // when a background conversation receives an update.
+    void showMessages(const QList<Message> &msgs, bool keepScroll, const QString &conversationKey,
+                      bool group, const QList<PinInfo> &pins);
+    void invalidateConversation(const QString &key);
     void appendMessage(const Message &m);                                   // fast path
     // Pinned messages shown in the banner above the list (oldest first, at most three).
     void setPins(const QList<PinInfo> &pins);
@@ -156,10 +161,25 @@ private:
         int textPos = -1; // cursor position in the message text
         QString href;
     };
+    struct CachedConversation {
+        QList<Item> items;
+        QList<PinInfo> pins;
+        int messageCount = 0;
+        qint64 lastSortTs = 0;
+        bool group = false;
+        int bannerCycle = 0;
+        int missed = 0;
+        int scrollValue = 0;
+        int layoutWidth = -1;
+    };
 
     void buildItem(int i);
     void ensureItemRenderResources(int i, bool includePixmaps = true);
     void releaseItemRenderResources(int i);
+    void disposeItemResources(QList<Item> &items);
+    void cacheCurrentConversation();
+    void discardCachedConversation(const QString &key);
+    void invalidateAllCachedConversations();
     void layoutItem(int i, int y);
     void relayoutAll();
     void updateScrollRange();
@@ -186,6 +206,9 @@ private:
 
     QList<Message> m_msgs;
     QList<Item> m_items;
+    QString m_conversationKey;
+    QHash<QString, CachedConversation> m_conversationCache;
+    QStringList m_conversationCacheOrder;
     QList<PinInfo> m_pins;   // oldest first; empty = no banner, no content offset
     int m_bannerCycle = 0;   // which pin the banner currently shows
     int m_bannerOffset = 0;  // extra top offset of the message list (kBannerHeight when pinned)
