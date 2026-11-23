@@ -1,0 +1,93 @@
+--- flatpak-cargo-generator.py
++++ flatpak-cargo-generator.py
+@@ -337,51 +337,75 @@ async def get_git_package_sources(
+             "lock": asyncio.Lock(),
+         },
+     )
+     async with git_repo["lock"]:
+         if commit not in git_repo["commits"]:
+             git_repo["commits"][commit] = await get_git_repo_packages(repo_url, commit)
+ 
+-    cargo_vendored_entry: _VendorEntryType = {
+-        repo_url: {
+-            "git": repo_url,
+-            "replace-with": VENDORED_SOURCES,
+-        }
+-    }
+-    rev = parse_qs(urlparse(source).query).get("rev")
+-    tag = parse_qs(urlparse(source).query).get("tag")
+-    branch = parse_qs(urlparse(source).query).get("branch")
++    query = parse_qs(urlparse(source).query)
++    rev = query.get("rev")
++    tag = query.get("tag")
++    branch = query.get("branch")
++    ref_key = None
++    ref_value = None
+     if rev:
+         assert len(rev) == 1
+-        cargo_vendored_entry[repo_url]["rev"] = rev[0]
++        ref_key, ref_value = "rev", rev[0]
+     elif tag:
+         assert len(tag) == 1
+-        cargo_vendored_entry[repo_url]["tag"] = tag[0]
++        ref_key, ref_value = "tag", tag[0]
+     elif branch:
+         assert len(branch) == 1
+-        cargo_vendored_entry[repo_url]["branch"] = branch[0]
++        ref_key, ref_value = "branch", branch[0]
++
++    # Cargo identifies Git sources by URL and Git reference. Keep each reference
++    # in its own source mapping and vendor directory; a URL-only key causes tags
++    # from the same repository to overwrite one another.
++    source_identity = "\0".join((repo_url, ref_key or "", ref_value or ""))
++    source_hash = hashlib.sha256(source_identity.encode("utf-8")).hexdigest()[:16]
++    git_source_name = f"git-{source_hash}"
++    vendor_source_name = f"vendored-git-{source_hash}"
++    vendor_dir = f"{CARGO_HOME}/git-vendor-{source_hash}"
++    git_source: Dict[str, str] = {
++        "git": repo_url,
++        "replace-with": vendor_source_name,
++    }
++    if ref_key is not None and ref_value is not None:
++        git_source[ref_key] = ref_value
++    cargo_vendored_entry: _VendorEntryType = {
++        git_source_name: git_source,
++        vendor_source_name: {"directory": vendor_dir},
++    }
+ 
+     logging.info("Adding package %s from %s", name, repo_url)
+     git_pkg = git_repo["commits"][commit][name]
+     pkg_repo_dir = os.path.join(
+         GIT_CACHE, git_repo_name(repo_url, commit), git_pkg.path
+     )
++    vendor_pkg_dir = os.path.join(vendor_dir, f"{name}-{package['version']}")
++    tarball = os.path.join(
++        CARGO_HOME, f".git-vendor-{source_hash}-{name}-{package['version']}.tar"
++    )
+     git_sources: List[_FlatpakSourceType] = [
+         {
+             "type": "shell",
+             "commands": [
+-                f'cp -r --reflink=auto "{pkg_repo_dir}" "{CARGO_CRATES}/{name}"'
++                f'mkdir -p "{vendor_pkg_dir}" && '
++                f'tar --exclude-vcs -C "{pkg_repo_dir}" -cf "{tarball}" . && '
++                f'tar -C "{vendor_pkg_dir}" -xf "{tarball}" && '
++                f'rm -f "{tarball}" && '
++                f'chmod -R u+rwX "{vendor_pkg_dir}"'
+             ],
+         },
+         {
+             "type": "inline",
+             "contents": tomlkit.dumps(git_pkg.normalized),
+-            "dest": f"{CARGO_CRATES}/{name}",  # -{version}',
++            "dest": vendor_pkg_dir,
+             "dest-filename": "Cargo.toml",
+         },
+         {
+             "type": "inline",
+             "contents": json.dumps({"package": None, "files": {}}),
+-            "dest": f"{CARGO_CRATES}/{name}",  # -{version}',
++            "dest": vendor_pkg_dir,
+             "dest-filename": ".cargo-checksum.json",
+         },
+     ]
