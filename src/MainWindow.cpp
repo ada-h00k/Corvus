@@ -3784,10 +3784,12 @@ void MainWindow::updateConversationRow(const QString &key)
     const auto conversation = m_convs.constFind(key);
     if (conversation == m_convs.cend()) return;
 
+    bool found = false;
     for (int i = 0; i < m_list->count(); ++i) {
         QListWidgetItem *item = m_list->item(i);
         if (item->data(Qt::UserRole).toString() != key) continue;
 
+        found = true;
         const Conversation &c = conversation.value();
         QString text;
         if (isNoteToSelf(key) && !m_showArchived) {
@@ -3806,6 +3808,13 @@ void MainWindow::updateConversationRow(const QString &key)
         item->setFont(font);
         item->setToolTip(c.blocked ? tr("Blocked contact") : QString());
         break;
+    }
+
+    // A contact-book hit may become a real chat on first open. It is still stored
+    // under "contact:<key>" in the list, so a targeted row update cannot find it.
+    if (!found) {
+        refreshList();
+        return;
     }
     updateTray();
 }
