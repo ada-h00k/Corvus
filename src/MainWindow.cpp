@@ -7218,9 +7218,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
     // Allowlist, whatever the sender claims the content type to be: an executable
     // disguised as "image/png" must not pass because of the claimed type.
     if (!AttachmentUtil::isSafeToOpen(att)) {
-        QMessageBox::information(this, tr("Attachment"),
-                                 tr("For safety, “%1” is not opened directly. Use “Save …” from the message menu instead.")
-                                     .arg(AttachmentUtil::displayFileName(att, selectedMessage.time).toHtmlEscaped()));
+        saveAttachment(msgIdx, attIdx);
         return;
     }
 
