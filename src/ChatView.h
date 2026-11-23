@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QPixmap>
 #include <QSize>
+#include <QStringList>
 #include <QTextCursor>
 #include <functional>
 #include <memory>
@@ -50,6 +51,7 @@ public:
                       bool group, const QList<PinInfo> &pins);
     void invalidateConversation(const QString &key);
     void appendMessage(const Message &m);                                   // fast path
+    void replaceLastMessage(const Message &m);
     // Pinned messages shown in the banner above the list (oldest first, at most three).
     void setPins(const QList<PinInfo> &pins);
     void setAudioPlayback(int messageIndex, int attachmentIndex, bool loading, bool playing,
