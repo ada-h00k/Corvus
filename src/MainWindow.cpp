@@ -3212,6 +3212,8 @@ void MainWindow::finalizePendingSend(const QString &id, qint64 timestamp, const 
     if (pendingIt == m_pendingSends.end()) return;
 
     const PendingSend pending = pendingIt.value();
+    if (pending.conversationKey != m_current)
+        m_view->invalidateConversation(pending.conversationKey);
     if (timestamp <= 0) timestamp = QDateTime::currentMSecsSinceEpoch();
 
     Message confirmed = pending.message;
@@ -3695,6 +3697,7 @@ void MainWindow::expireMessages()
             if (message.viewOnce && !message.viewOnceViewed && !message.viewOnceExpired &&
                 now - message.ts() >= 45LL * 24 * 60 * 60 * 1000) {
                 message.viewOnceExpired = true;
+                if (conversation.key != m_current) m_view->invalidateConversation(conversation.key);
                 deleteAttachmentFiles(message.attachments); // the backend's stored copies too (F1)
                 message.attachments.clear();
                 message.text.clear();
@@ -3706,6 +3709,7 @@ void MainWindow::expireMessages()
             }
             if (message.expiresInSeconds <= 0 || message.expirationStartMs <= 0) continue;
             if (now - message.expirationStartMs < static_cast<qint64>(message.expiresInSeconds) * 1000) continue;
+            if (conversation.key != m_current) m_view->invalidateConversation(conversation.key);
             deleteAttachmentFiles(message.attachments); // expired: the backend's copies go too (F1)
             conversation.msgs.removeAt(i);
             changed = true;
@@ -3761,6 +3765,37 @@ static QPixmap noteToSelfAvatar(int size = 64)
                    QPointF(paper.right() - paper.width() * 0.16, y));
     }
     return out;
+}
+
+void MainWindow::updateConversationRow(const QString &key)
+{
+    const auto conversation = m_convs.constFind(key);
+    if (conversation == m_convs.cend()) return;
+
+    for (int i = 0; i < m_list->count(); ++i) {
+        QListWidgetItem *item = m_list->item(i);
+        if (item->data(Qt::UserRole).toString() != key) continue;
+
+        const Conversation &c = conversation.value();
+        QString text;
+        if (isNoteToSelf(key) && !m_showArchived) {
+            text = (c.muted ? QStringLiteral("🔕 ") : QString()) + c.title;
+        } else {
+            text = (m_safetyChanged.contains(key) ? QStringLiteral("⚠ ") : QString()) +
+                   (c.blocked ? QStringLiteral("🚫 ") : QString()) +
+                   (c.muted ? QStringLiteral("🔕 ") : QString()) +
+                   (c.isGroup ? QStringLiteral("👥 ") + c.title : c.title);
+        }
+        if (c.unread > 0) text += QStringLiteral(" (%1)").arg(c.unread);
+
+        item->setText(text);
+        QFont font = item->font();
+        font.setBold(c.unread > 0);
+        item->setFont(font);
+        item->setToolTip(c.blocked ? tr("Blocked contact") : QString());
+        break;
+    }
+    updateTray();
 }
 
 void MainWindow::refreshList()
@@ -4139,12 +4174,17 @@ void MainWindow::openConversation(const QString &key)
     if (!m_convs.contains(key)) return;
     switchConversation(key); // stashes the old chat's draft, restores this chat's draft
     m_convs[m_current].unread = 0;
-    flushPendingReadReceipts(key);
-    startIncomingExpirationTimers(key);
     showConversation();
-    refreshList();
+    updateConversationRow(key);
     m_notifier->close(key); // the notification for this chat is obsolete now
-    checkIdentities(key);
+
+    // These operations may walk large histories or issue backend requests. Let the new
+    // conversation paint first; none of them is needed to display the selected chat.
+    QTimer::singleShot(0, this, [this, key] {
+        flushPendingReadReceipts(key);
+        startIncomingExpirationTimers(key);
+        checkIdentities(key);
+    });
     focusComposer();
 }
 
@@ -4182,9 +4222,7 @@ void MainWindow::showConversation(bool keepScroll)
     updateTypingIndicator();
     updateSafetyBar();
     updateGroupActions();
-    m_view->setGroupMode(c.isGroup);
-    m_view->setPins(activePins(c));
-    m_view->showMessages(c.msgs, keepScroll);
+    m_view->showMessages(c.msgs, keepScroll, m_current, c.isGroup, activePins(c));
     updateMessageSearch();
     updateAudioPlaybackView();
 }
@@ -4954,6 +4992,7 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     const QString srcKey = resolveKey(pe.src);
     const QString key = group ? QStringLiteral("g:") + pe.groupId : (pe.outgoing ? resolveKey(pe.destination) : srcKey);
     if (key.isEmpty()) return;
+    if (key != m_current) m_view->invalidateConversation(key);
 
     // corvus-cli saw an identity key it could not verify (L6): the same warning bar a
     // changed safety number shows, until the contact is verified or the bar dismissed.
@@ -5956,7 +5995,14 @@ void MainWindow::sendMessage()
     m_replyQuote = Quote();
     updateAttachBar();
     updateReplyBar();
-    if (key == m_current) showConversation(true);
+    if (key == m_current) {
+        // The new local echo is always ordered at the end. Append just that item instead
+        // of rebuilding the whole chat history after a single outgoing message.
+        if (at == target.msgs.size() - 1 && m_view->messageCount() == at)
+            m_view->appendMessage(preview);
+        else
+            showConversation(true);
+    }
 
     m_cli.call(QStringLiteral("send"), p,
                [this, pendingId, key, text, rawText, rawRichText, rawCursor, rawMentionRanges, textStyles, files, quote, viewOnce, giphySentAnalyticsUrl, stageDir](const QJsonValue &res, const QString &err) {
