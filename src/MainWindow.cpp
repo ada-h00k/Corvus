@@ -1241,6 +1241,7 @@ MainWindow::MainWindow()
     // Keep the maximized state separately: on Wayland restoring the saved geometry
     // does not always make show() request a maximized surface from the compositor.
     m_restoreMaximized = s.value(QStringLiteral("maximized"), isMaximized()).toBool();
+    m_restoreFullScreen = s.value(QStringLiteral("fullScreen"), isFullScreen()).toBool();
     QTimer::singleShot(0, this, &MainWindow::initialise);
 
     // The window must never resize itself: showing the edit / reply / file bars or expanding the
@@ -1307,8 +1308,10 @@ bool MainWindow::event(QEvent *event)
     const bool result = QMainWindow::event(event);
     // The chat colours follow the palette (and so does the icon with an unknown colour scheme).
     if (event->type() == QEvent::ApplicationPaletteChange) applyTheme();
-    if (event->type() == QEvent::WindowStateChange)
+    if (event->type() == QEvent::WindowStateChange && !isMinimized()) {
         m_restoreMaximized = isMaximized();
+        m_restoreFullScreen = isFullScreen();
+    }
     if (event->type() == QEvent::WindowActivate) {
         m_lastInputMs = QDateTime::currentMSecsSinceEpoch();
         // Messages that arrived in the open chat while the window was covered are read now.
@@ -1556,7 +1559,9 @@ void MainWindow::showAndActivate()
 {
     // Request maximization explicitly instead of relying on show() to infer it from
     // restoreGeometry(); this is important for Qt windows running on Wayland.
-    if (m_restoreMaximized)
+    if (m_restoreFullScreen)
+        showFullScreen();
+    else if (m_restoreMaximized)
         showMaximized();
     else
         showNormal();
@@ -1567,9 +1572,15 @@ void MainWindow::showAndActivate()
 void MainWindow::closeEvent(QCloseEvent *e)
 {
     QSettings settings;
-    m_restoreMaximized = isMaximized();
+    // Keep the last non-minimized state; minimizing a maximized/full-screen window
+    // must not turn the next launch into a normal-sized window.
+    if (!isMinimized()) {
+        m_restoreMaximized = isMaximized();
+        m_restoreFullScreen = isFullScreen();
+    }
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
     settings.setValue(QStringLiteral("maximized"), m_restoreMaximized);
+    settings.setValue(QStringLiteral("fullScreen"), m_restoreFullScreen);
     if (shouldHideOnClose(m_tray && m_tray->isVisible(), m_notify.closeToTray, m_quitting)) {
         // Keep running in the tray. A hidden main window must not quit the app when a
         // dialog closes, so "quit on last window closed" is off while hidden (see showEvent).
