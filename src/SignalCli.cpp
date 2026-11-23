@@ -306,9 +306,9 @@ void SignalCli::stop()
     p->disconnect(this);
     p->closeWriteChannel();
     p->terminate();
-    if (!p->waitForFinished(3000)) {
+    if (!p->waitForFinished(1000)) {
         killTree(p);
-        p->waitForFinished(1000);
+        p->waitForFinished(500);
     }
     p->deleteLater();
     failPending(QStringLiteral("Disconnected"));

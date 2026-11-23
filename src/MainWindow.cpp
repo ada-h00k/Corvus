@@ -1565,8 +1565,15 @@ void MainWindow::closeEvent(QCloseEvent *e)
         }
         return;
     }
-    m_cli.stop();
+    // Really closing: leave immediately. The window and the tray icon disappear right
+    // away and quit() is explicit, so the app ends even if "quit on last window closed"
+    // is off (e.g. after starting minimized in the tray). signal-cli is stopped in the
+    // SignalCli destructor while the event loop is already gone, not while the window
+    // is still on screen.
+    m_quitting = true;
     e->accept();
+    if (m_tray) m_tray->hide();
+    QCoreApplication::quit();
 }
 
 void MainWindow::showEvent(QShowEvent *e)
@@ -1588,8 +1595,8 @@ void MainWindow::quitApplication()
 {
     m_quitting = true;
     if (isVisible()) close(); // closeEvent accepts instead of hiding to the tray
-    m_cli.stop();
-    QCoreApplication::quit();
+    if (m_tray) m_tray->hide();
+    QCoreApplication::quit(); // signal-cli is stopped when MainWindow is destroyed
 }
 
 void MainWindow::toggleWindow()
