@@ -131,6 +131,8 @@ private:
         bool renderResourcesBuilt = false;
         // content (built once)
         std::shared_ptr<QTextDocument> doc;
+        // Reused only while the window is being resized; discarded shortly after.
+        std::shared_ptr<QTextDocument> measureDoc;
         QList<QPixmap> pix;
         QPixmap linkPreviewPixmap;
         QString linkPreviewTitle, linkPreviewDescription, linkPreviewHost;
@@ -182,8 +184,8 @@ private:
     void cacheCurrentConversation();
     void discardCachedConversation(const QString &key);
     void invalidateAllCachedConversations();
-    void layoutItem(int i, int y);
-    void relayoutAll();
+    void layoutItem(int i, int y, bool cacheMeasureDoc = false);
+    void relayoutAll(bool cacheMeasureDocs = false);
     void updateScrollRange();
     int totalHeight() const { return m_items.isEmpty() ? 0 : m_items.last().y + m_items.last().height; }
     int itemAtY(int docY) const;
@@ -261,6 +263,7 @@ private:
     bool m_dblClick = false;     // armed by mouseDoubleClickEvent, consumed by the next release
     QTimer *m_autoScrollTimer = nullptr;
     QTimer *m_resizeTimer = nullptr;
+    QTimer *m_resizeCleanupTimer = nullptr;
     ScrollToLatestButton *m_toLatest = nullptr; // round arrow button at the bottom right
     int m_missed = 0;
     QPoint m_autoScrollAnchor;
