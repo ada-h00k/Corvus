@@ -43,7 +43,7 @@
 +    source_hash = hashlib.sha256(source_identity.encode("utf-8")).hexdigest()[:16]
 +    git_source_name = f"git-{source_hash}"
 +    vendor_source_name = f"vendored-git-{source_hash}"
-+    vendor_dir = f"{CARGO_CRATES}/git-{source_hash}"
++    vendor_dir = f"{CARGO_HOME}/git-vendor-{source_hash}"
 +    git_source: Dict[str, str] = {
 +        "git": repo_url,
 +        "replace-with": vendor_source_name,
@@ -62,7 +62,7 @@
      )
 +    vendor_pkg_dir = os.path.join(vendor_dir, f"{name}-{package['version']}")
 +    tarball = os.path.join(
-+        CARGO_CRATES, f".git-vendor-{source_hash}-{name}-{package['version']}.tar"
++        CARGO_HOME, f".git-vendor-{source_hash}-{name}-{package['version']}.tar"
 +    )
      git_sources: List[_FlatpakSourceType] = [
          {
