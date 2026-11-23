@@ -1,6 +1,6 @@
 --- flatpak-cargo-generator.py
 +++ flatpak-cargo-generator.py
-@@ -341,45 +341,63 @@ async def get_git_package_sources(
+@@ -337,51 +337,75 @@ async def get_git_package_sources(
              "lock": asyncio.Lock(),
          },
      )
