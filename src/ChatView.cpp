@@ -368,6 +368,87 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
 
 ChatView::~ChatView() = default;
 
+void ChatView::setNameResolver(std::function<QString(const QString &)> fn)
+{
+    invalidateAllCachedConversations();
+    m_nameOf = std::move(fn);
+}
+
+void ChatView::disposeItemResources(QList<Item> &items)
+{
+    for (Item &item : items) {
+        for (QMovie *movie : item.movies)
+            delete movie;
+        for (ApngMovie *movie : item.apngMovies)
+            delete movie;
+        for (int i = 0; i < item.movies.size(); ++i)
+            item.movies[i] = nullptr;
+        for (int i = 0; i < item.apngMovies.size(); ++i)
+            item.apngMovies[i] = nullptr;
+        for (int i = 0; i < item.animationRequested.size(); ++i)
+            item.animationRequested[i] = false;
+
+        // Keep the measured geometry, but drop heavyweight paint resources. They are
+        // recreated only for messages near the viewport when this chat is shown again.
+        item.doc.reset();
+        item.pix.clear();
+        item.linkPreviewPixmap = QPixmap();
+        item.contactAvatarPixmap = QPixmap();
+        item.renderResourcesBuilt = false;
+    }
+}
+
+void ChatView::discardCachedConversation(const QString &key)
+{
+    auto it = m_conversationCache.find(key);
+    if (it == m_conversationCache.end()) return;
+    disposeItemResources(it->items);
+    m_conversationCache.erase(it);
+    m_conversationCacheOrder.removeAll(key);
+}
+
+void ChatView::invalidateConversation(const QString &key)
+{
+    if (key.isEmpty() || key == m_conversationKey) return;
+    discardCachedConversation(key);
+}
+
+void ChatView::invalidateAllCachedConversations()
+{
+    const QStringList keys = m_conversationCache.keys();
+    for (const QString &key : keys)
+        discardCachedConversation(key);
+}
+
+void ChatView::cacheCurrentConversation()
+{
+    if (m_conversationKey.isEmpty()) return;
+
+    stopVideoPlayback();
+    CachedConversation cached;
+    cached.items = std::move(m_items);
+    cached.pins = m_pins;
+    cached.messageCount = m_msgs.size();
+    cached.lastSortTs = m_msgs.isEmpty() ? 0 : m_msgs.last().sortTs();
+    cached.group = m_group;
+    cached.bannerCycle = m_bannerCycle;
+    cached.missed = m_missed;
+    cached.scrollValue = verticalScrollBar()->value();
+    cached.layoutWidth = m_layoutWidth;
+    disposeItemResources(cached.items);
+
+    discardCachedConversation(m_conversationKey);
+    m_conversationCache.insert(m_conversationKey, std::move(cached));
+    m_conversationCacheOrder.append(m_conversationKey);
+    while (m_conversationCacheOrder.size() > 4)
+        discardCachedConversation(m_conversationCacheOrder.first());
+
+    m_msgs.clear();
+    m_items.clear();
+    m_renderFirst = m_renderLast = -1;
+    m_layoutWidth = -1;
+}
+
 QString ChatView::nameOf(const QString &key) const
 {
     if (key.isEmpty()) return tr("Unknown");
@@ -407,6 +488,7 @@ void ChatView::setGroupMode(bool group)
 void ChatView::setReadReceiptsEnabled(bool enabled)
 {
     if (m_showReadReceipts == enabled) return;
+    invalidateAllCachedConversations();
     m_showReadReceipts = enabled;
     for (int i = 0; i < m_items.size() && i < m_msgs.size(); ++i)
         m_items[i].statusRead = m_showReadReceipts && m_msgs[i].receiptStatus >= 2;
@@ -416,6 +498,7 @@ void ChatView::setReadReceiptsEnabled(bool enabled)
 void ChatView::setDeliveryStatusVisible(bool visible)
 {
     if (m_showDeliveryStatus == visible) return;
+    invalidateAllCachedConversations();
     m_showDeliveryStatus = visible;
     // This is a local display preference only. Keep receipt processing and stored receipt data
     // intact so enabling the indicators again immediately restores each message's current state.
@@ -429,6 +512,7 @@ void ChatView::setDeliveryStatusVisible(bool visible)
 
 void ChatView::setAppearance(const Appearance &a)
 {
+    invalidateAllCachedConversations();
     m_ap = a;
     for (Item &it : m_items) { // colours of links are baked into the documents
         it.built = false;
@@ -469,12 +553,9 @@ void ChatView::selectWordAt(int msg, int textPos)
 void ChatView::clearView()
 {
     stopVideoPlayback();
-    for (Item &item : m_items) {
-        for (QMovie *movie : item.movies)
-            delete movie;
-        for (ApngMovie *movie : item.apngMovies)
-            delete movie;
-    }
+    disposeItemResources(m_items);
+    invalidateAllCachedConversations();
+    m_conversationKey.clear();
     m_msgs.clear();
     m_items.clear();
     m_pins.clear();
@@ -501,17 +582,63 @@ void ChatView::setPins(const QList<PinInfo> &pins)
 
 void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll)
 {
+    showMessages(msgs, keepScroll, QString(), m_group, m_pins);
+}
+
+void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll, const QString &conversationKey,
+                            bool group, const QList<PinInfo> &pins)
+{
     const bool bottom = atBottom();
     const int old = verticalScrollBar()->value();
-    for (Item &item : m_items) {
-        for (QMovie *movie : item.movies)
-            delete movie;
-        for (ApngMovie *movie : item.apngMovies)
-            delete movie;
+
+    if (!conversationKey.isEmpty() && conversationKey != m_conversationKey)
+        cacheCurrentConversation();
+
+    m_group = group;
+    m_pins = pins;
+    m_bannerOffset = m_pins.isEmpty() ? 0 : kBannerHeight;
+    m_bannerCycle = m_pins.isEmpty() ? 0 : qBound(0, m_bannerCycle, m_pins.size() - 1);
+
+    if (!conversationKey.isEmpty()) {
+        auto cachedIt = m_conversationCache.find(conversationKey);
+        if (cachedIt != m_conversationCache.end()) {
+            CachedConversation cached = std::move(cachedIt.value());
+            m_conversationCache.erase(cachedIt);
+            m_conversationCacheOrder.removeAll(conversationKey);
+
+            const qint64 lastSortTs = msgs.isEmpty() ? 0 : msgs.last().sortTs();
+            const bool valid = cached.messageCount == msgs.size() &&
+                               cached.lastSortTs == lastSortTs &&
+                               cached.group == group &&
+                               cached.pins == pins &&
+                               cached.layoutWidth == viewport()->width();
+            if (valid) {
+                m_msgs = msgs;
+                m_items = std::move(cached.items);
+                m_conversationKey = conversationKey;
+                m_bannerCycle = cached.bannerCycle;
+                m_missed = cached.missed;
+                m_layoutWidth = cached.layoutWidth;
+                m_renderFirst = m_renderLast = -1;
+                m_flash = -1;
+                clearSelection();
+                updateScrollRange();
+                verticalScrollBar()->setValue(cached.scrollValue);
+                updateToLatestButton();
+                updateVideoGeometry();
+                viewport()->update();
+                return;
+            }
+            disposeItemResources(cached.items);
+        }
     }
+
+    disposeItemResources(m_items);
     m_msgs = msgs;
     m_items = QList<Item>(msgs.size());
+    m_conversationKey = conversationKey;
     m_renderFirst = m_renderLast = -1;
+    m_layoutWidth = -1;
     clearSelection();
     relayoutAll();
     verticalScrollBar()->setValue((bottom || !keepScroll) ? verticalScrollBar()->maximum() : old);
