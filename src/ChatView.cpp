@@ -662,6 +662,30 @@ void ChatView::appendMessage(const Message &m)
     viewport()->update();
 }
 
+void ChatView::replaceLastMessage(const Message &m)
+{
+    if (m_msgs.isEmpty() || m_items.size() != m_msgs.size()) return;
+
+    const bool bottom = atBottom();
+    const int oldScroll = verticalScrollBar()->value();
+    const int i = m_msgs.size() - 1;
+
+    for (QMovie *movie : m_items[i].movies)
+        delete movie;
+    for (ApngMovie *movie : m_items[i].apngMovies)
+        delete movie;
+    m_items[i] = Item();
+    m_msgs[i] = m;
+    const int y = i > 0 ? m_items[i - 1].y + m_items[i - 1].height : m_bannerOffset;
+    layoutItem(i, y);
+
+    updateScrollRange();
+    verticalScrollBar()->setValue(bottom ? verticalScrollBar()->maximum() : oldScroll);
+    updateToLatestButton();
+    updateVideoGeometry();
+    viewport()->update();
+}
+
 void ChatView::scrollToMessage(int idx)
 {
     if (idx < 0 || idx >= m_items.size()) return;
