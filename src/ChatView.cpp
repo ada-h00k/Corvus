@@ -1564,8 +1564,11 @@ void ChatView::updateScrollRange()
 void ChatView::resizeEvent(QResizeEvent *e)
 {
     QAbstractScrollArea::resizeEvent(e);
-    if (viewport()->width() != m_layoutWidth) {
-        previewResize(viewport()->width());
+    const int width = viewport()->width();
+    const bool widthChanged = width != m_layoutWidth;
+    const bool previewNeedsReset = m_resizePreviewWidth >= 0 && width != m_resizePreviewWidth;
+    if (widthChanged || previewNeedsReset) {
+        previewResize(width);
         if (!m_resizeTimer->isActive()) {
             m_resizeAtBottom = atBottom();
             m_resizeScrollValue = verticalScrollBar()->value();
