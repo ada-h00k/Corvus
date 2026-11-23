@@ -436,6 +436,7 @@ private:
     QMenu *m_trayMenu = nullptr;
     bool m_quitting = false;
     bool m_restoreMaximized = false;
+    bool m_restoreFullScreen = false;
     qint64 m_lastSoundMs = 0;
     int m_trayUnread = -1;
     QString m_audioKey;
