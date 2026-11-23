@@ -350,7 +350,7 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     m_toLatest->onClicked = [this] { verticalScrollBar()->setValue(verticalScrollBar()->maximum()); };
     m_resizeTimer = new QTimer(this);
     m_resizeTimer->setSingleShot(true);
-    m_resizeTimer->setInterval(70);
+    m_resizeTimer->setInterval(24);
     connect(m_resizeTimer, &QTimer::timeout, this, [this] {
         relayoutAll(true);
         verticalScrollBar()->setValue(m_resizeAtBottom ? verticalScrollBar()->maximum() : m_resizeScrollValue);
@@ -532,6 +532,7 @@ void ChatView::setAppearance(const Appearance &a)
     for (Item &it : m_items) { // colours of links are baked into the documents
         it.built = false;
         it.doc.reset();
+        it.measureDoc.reset();
         it.pix.clear();
         it.renderResourcesBuilt = false;
     }
@@ -1112,7 +1113,10 @@ void ChatView::ensureItemRenderResources(int i, bool includePixmaps)
     const Message &m = m_msgs[i];
     // A resize measurement document may already contain the parsed HTML. Reuse it
     // when painting instead of parsing the same message a second time.
-    if (!it.doc && it.measureDoc) it.doc = it.measureDoc;
+    if (!it.doc && it.measureDoc) {
+        it.doc = it.measureDoc;
+        if (it.textRect.width() > 0) it.doc->setTextWidth(it.textRect.width());
+    }
     if (!it.doc && m.deleted) {
         // "This message was deleted." / "You deleted this message." in a muted italic style
         const QColor fg = m.outgoing ? m_ap.outText : m_ap.inText;
@@ -1490,6 +1494,7 @@ void ChatView::layoutItem(int i, int y, bool cacheMeasureDoc)
 void ChatView::relayoutAll(bool cacheMeasureDocs)
 {
     m_layoutWidth = viewport()->width();
+    m_resizePreviewWidth = m_layoutWidth;
     int y = m_bannerOffset; // room for the pinned-message banner above the first bubble
     for (int i = 0; i < m_items.size(); ++i) {
         layoutItem(i, y, cacheMeasureDocs);
@@ -1498,6 +1503,56 @@ void ChatView::relayoutAll(bool cacheMeasureDocs)
     updateScrollRange();
     viewport()->update();
     updateVideoGeometry();
+}
+
+void ChatView::previewResize(int width)
+{
+    if (m_resizePreviewWidth < 0) m_resizePreviewWidth = m_layoutWidth;
+    if (m_resizePreviewWidth <= 0) {
+        m_resizePreviewWidth = width;
+        return;
+    }
+
+    const int dx = width - m_resizePreviewWidth;
+    if (dx == 0) return;
+
+    const auto shift = [dx](QRect &rect) {
+        if (!rect.isNull()) rect.translate(dx, 0);
+    };
+    for (int i = 0; i < m_items.size(); ++i) {
+        Item &it = m_items[i];
+        if (i < m_msgs.size() && m_msgs[i].outgoing) {
+            // Keep outgoing bubbles attached to the right edge during the drag.
+            shift(it.bubble);
+            shift(it.senderRect);
+            shift(it.quoteBox);
+            shift(it.quoteAuthorRect);
+            shift(it.quoteTextRect);
+            shift(it.textRect);
+            shift(it.timeRect);
+            shift(it.statusRect);
+            shift(it.pillsRect);
+            shift(it.linkPreviewRect);
+            shift(it.linkPreviewImageRect);
+            shift(it.linkPreviewTitleRect);
+            shift(it.linkPreviewDescriptionRect);
+            shift(it.linkPreviewHostRect);
+            shift(it.pollRect);
+            shift(it.pollStatusRect);
+            shift(it.pollQuestionRect);
+            shift(it.pollFooterRect);
+            shift(it.contactRect);
+            shift(it.contactButtonRect);
+            for (QRect &rect : it.attRects) shift(rect);
+            for (QRect &rect : it.pollOptionRects) shift(rect);
+            for (Pill &pill : it.pills) shift(pill.rect);
+        }
+        // Date separators span the complete viewport, regardless of message direction.
+        if (!it.dateRect.isNull()) it.dateRect.setWidth(width);
+    }
+
+    m_resizePreviewWidth = width;
+    viewport()->update();
 }
 
 void ChatView::updateScrollRange()
@@ -1510,6 +1565,7 @@ void ChatView::resizeEvent(QResizeEvent *e)
 {
     QAbstractScrollArea::resizeEvent(e);
     if (viewport()->width() != m_layoutWidth) {
+        previewResize(viewport()->width());
         if (!m_resizeTimer->isActive()) {
             m_resizeAtBottom = atBottom();
             m_resizeScrollValue = verticalScrollBar()->value();
