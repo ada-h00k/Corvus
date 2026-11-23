@@ -76,6 +76,7 @@ public:
     static bool shouldHideOnClose(bool trayVisible, bool closeToTray, bool quitting);
     static bool shouldStartMinimizedInTray(bool trayVisible, bool startMinimizedInTray);
     void showAtStartup();
+    void showAndActivate();
 
 protected:
     void closeEvent(QCloseEvent *e) override;
@@ -434,6 +435,8 @@ private:
     QSystemTrayIcon *m_tray = nullptr;
     QMenu *m_trayMenu = nullptr;
     bool m_quitting = false;
+    bool m_restoreMaximized = false;
+    bool m_restoreFullScreen = false;
     qint64 m_lastSoundMs = 0;
     int m_trayUnread = -1;
     QString m_audioKey;
