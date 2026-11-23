@@ -598,7 +598,7 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll, const Q
     m_group = group;
     m_pins = pins;
     m_bannerOffset = m_pins.isEmpty() ? 0 : kBannerHeight;
-    m_bannerCycle = m_pins.isEmpty() ? 0 : qBound(0, m_bannerCycle, m_pins.size() - 1);
+    m_bannerCycle = 0; // a new conversation starts at its oldest pin; cached views restore their own cycle
 
     if (!conversationKey.isEmpty()) {
         auto cachedIt = m_conversationCache.find(conversationKey);
