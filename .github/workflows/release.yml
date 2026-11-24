@@ -180,20 +180,18 @@ jobs:
           file "$BINARY"
 
       # --------------------------------------------------
-      # Plain Linux binary
+      # Linux installer tarball
       # --------------------------------------------------
-      - name: Package binary
+      - name: Package installer
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p dist
 
-          cp "$BINARY" dist/corvus-linux-x86_64
-          chmod +x dist/corvus-linux-x86_64
-
           mkdir -p "$RUNNER_TEMP/corvus-installer"
-          cp dist/corvus-linux-x86_64 "$RUNNER_TEMP/corvus-installer/"
+          cp "$BINARY" "$RUNNER_TEMP/corvus-installer/corvus-linux-x86_64"
+          chmod +x "$RUNNER_TEMP/corvus-installer/corvus-linux-x86_64"
           cp packaging/install.sh packaging/corvus.desktop packaging/corvus.svg \
             "$RUNNER_TEMP/corvus-installer/"
           chmod +x "$RUNNER_TEMP/corvus-installer/install.sh"
@@ -208,17 +206,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -s dist/corvus-linux-x86_64
           test -s dist/corvus-linux-x86_64-installer.tar.gz
 
           tar -tzf dist/corvus-linux-x86_64-installer.tar.gz
 
-          file dist/corvus-linux-x86_64
-
           (
             cd dist
             sha256sum \
-              corvus-linux-x86_64 \
               corvus-linux-x86_64-installer.tar.gz \
               > SHA256SUMS
           )
@@ -839,6 +833,205 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
+  # Linux AppImage (x86_64): like the Flatpak it brings everything with it:
+  # Qt, corvus-cli, qrencode, libhunspell and the Hunspell dictionaries
+  # ------------------------------------------------------
+  appimage:
+    name: Build Linux AppImage (x86_64)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The Qt libraries come from the Qt installer below, not from apt, so no Qt packages
+      # (and no QtKeychain package, which is built against the distribution's Qt) are installed.
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            file \
+            curl \
+            ca-certificates \
+            python3-yaml \
+            zsync \
+            xvfb \
+            libgl1-mesa-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxcb-util1 \
+            libx11-xcb1 \
+            libdbus-1-dev \
+            libfontconfig1 \
+            libfreetype6 \
+            libegl1 \
+            libopengl0 \
+            libsecret-1-dev \
+            libhunspell-dev \
+            qrencode
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: qtmultimedia
+          cache: true
+
+      - name: Configure Qt environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          QMAKE_PATH="$(find "$QT_ROOT_DIR" -type f -name qmake -print -quit)"
+          if [ -z "$QMAKE_PATH" ]; then
+            echo "::error::qmake not found in $QT_ROOT_DIR"
+            exit 1
+          fi
+
+          echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
+          "$QMAKE_PATH" --version
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+
+      # Same QtKeychain as the Flatpak, built against the Qt above so that the bundled
+      # Qt libraries are the only ones in the AppImage.
+      - name: Build QtKeychain
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          git clone --depth 1 --branch 0.17.0 \
+            https://github.com/frankosterfeld/qtkeychain.git \
+            "$RUNNER_TEMP/qtkeychain-src"
+
+          cmake \
+            -S "$RUNNER_TEMP/qtkeychain-src" \
+            -B "$RUNNER_TEMP/qtkeychain-build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/qtkeychain-install" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DBUILD_WITH_QT6=ON \
+            -DBUILD_TRANSLATIONS=OFF \
+            -DBUILD_TEST_APPLICATION=OFF
+
+          cmake --build "$RUNNER_TEMP/qtkeychain-build" --parallel
+          cmake --install "$RUNNER_TEMP/qtkeychain-build"
+
+          echo "QTKEYCHAIN_PREFIX=$RUNNER_TEMP/qtkeychain-install" >> "$GITHUB_ENV"
+
+      - name: Configure and build Corvus
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            -S . \
+            -B build-appimage \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$QTKEYCHAIN_PREFIX"
+
+          cmake --build build-appimage --parallel
+
+          rm -rf AppDir
+          DESTDIR="$PWD/AppDir" cmake --install build-appimage
+
+      # corvus-cli, qrencode, libhunspell, the dictionaries and the Qt libraries/plugins
+      # are added by the script; it also checks that the bundle is complete.
+      - name: Build AppImage
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          APPDIR="$PWD/AppDir" \
+          OUTPUT="$PWD/dist/corvus-linux-x86_64.AppImage" \
+          EXTRA_LIB_PATH="$QTKEYCHAIN_PREFIX/lib" \
+          TOOLS_DIR="$RUNNER_TEMP/appimage-tools" \
+            packaging/appimage/build-appimage.sh
+
+      # Start the real AppImage under a virtual display. It has no account and no keyring,
+      # so it is expected to keep running (the step stops it after 15 s); what must not
+      # happen is a crash or a missing library / Qt plugin.
+      - name: Smoke test AppImage
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export HOME="$RUNNER_TEMP/appimage-home"
+          mkdir -p "$HOME"
+
+          set +e
+          timeout 15 xvfb-run -a dist/corvus-linux-x86_64.AppImage > "$RUNNER_TEMP/appimage-smoke.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/appimage-smoke.log"
+
+          if grep -E -i "error while loading shared libraries|could not load the qt platform plugin|cannot open shared object" "$RUNNER_TEMP/appimage-smoke.log"; then
+            echo "::error::The AppImage is missing a library or a Qt plugin"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            echo "::error::The AppImage exited with status $status"
+            exit 1
+          fi
+
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s dist/corvus-linux-x86_64.AppImage
+          test -s dist/corvus-linux-x86_64.AppImage.zsync
+          file dist/corvus-linux-x86_64.AppImage
+          ./dist/corvus-linux-x86_64.AppImage --appimage-updateinformation
+
+          ./dist/corvus-linux-x86_64.AppImage --appimage-extract 'usr/bin/*' > /dev/null
+          squashfs-root/usr/bin/corvus-cli --version
+          squashfs-root/usr/bin/qrencode -V
+          rm -rf squashfs-root
+
+          ls -lh dist
+
+      - name: Upload build artifacts
+        if: always() && hashFiles('dist/*') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: corvus-appimage-${{ github.sha }}
+          path: |
+            dist/*.AppImage
+            dist/*.AppImage.zsync
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------
   # macOS app (Swift / SwiftUI, Apple silicon)
   # ------------------------------------------------------
   macos-app:
@@ -1052,7 +1245,7 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------
-  # Windows (Qt, x86_64): portable zip + English setup, both with corvus-cli bundled
+  # Windows (Qt, x86_64): English setup with corvus-cli bundled
   # ------------------------------------------------------
   windows-app:
     name: Build Windows x86_64 (Qt + setup)
@@ -1117,7 +1310,7 @@ jobs:
           echo "QTKEYCHAIN_PREFIX=$(cygpath -m "$RUNNER_TEMP")/qtkeychain-install" >> "$GITHUB_ENV"
 
       # qrencode.exe is used to show the QR code when linking a device. Statically linked,
-      # so a single .exe. It is part of both the setup and the portable zip; the build fails
+      # so a single .exe. It is part of the setup; the build fails
       # if it cannot be built or does not work.
       - name: Build qrencode
         shell: bash
@@ -1264,7 +1457,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'corvus-cli.exe does not run' }
           Write-Host $out
 
-      - name: Build setup and portable zip
+      - name: Build setup
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -1288,8 +1481,6 @@ jobs:
 
           & $iscc "/DAppVersion=$version" "/DStageDir=$((Resolve-Path stage).Path)" packaging\windows\corvus.iss
           if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
-
-          Compress-Archive -Path stage\* -DestinationPath dist\corvus-windows-x64-portable.zip -Force
 
           Get-ChildItem dist | Format-Table Name, Length
 
@@ -1328,16 +1519,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($f in 'dist\corvus-windows-x64-setup.exe', 'dist\corvus-windows-x64-portable.zip') {
-            if (-not (Test-Path $f) -or (Get-Item $f).Length -eq 0) { throw "$f is missing or empty" }
-          }
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path dist\corvus-windows-x64-portable.zip).Path)
-          $names = $zip.Entries | ForEach-Object { $_.FullName }
-          $zip.Dispose()
-          foreach ($n in 'corvus.exe', 'qrencode.exe', 'Qt6Core.dll', 'Qt6Widgets.dll', 'corvus-cli/corvus-cli.exe', 'corvus-cli/libcrypto-3-x64.dll') {
-            if ($names -notcontains $n) { throw "$n is missing in the portable zip" }
-          }
+          $f = 'dist\corvus-windows-x64-setup.exe'
+          if (-not (Test-Path $f) -or (Get-Item $f).Length -eq 0) { throw "$f is missing or empty" }
           Get-ChildItem dist | Format-Table Name, Length
 
       - name: Upload build artifacts
@@ -1511,6 +1694,7 @@ jobs:
       - build
       - arch-package
       - flatpak
+      - appimage
       - macos-app
       - macos-qt-app
       - windows-app
@@ -1545,39 +1729,39 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Corvus ${{ github.ref_name }}
           body: |
-            Automatic Linux x86_64 (including Flatpak), Windows x86_64 and macOS (Apple silicon) builds.
+            Automatic Linux x86_64 (including Flatpak and AppImage), Windows x86_64 and macOS (Apple silicon) builds.
             macOS includes both the native SwiftUI app and the Qt app.
 
             Version: `${{ github.ref_name }}`
             Commit: `${{ github.sha }}`
 
             Files:
-            - `corvus-linux-x86_64` — plain executable
             - `corvus-linux-x86_64-installer.tar.gz` — executable, per-user installer, and menu resources
             - `corvus-<version>-1-x86_64.pkg.tar.zst` — Arch Linux package (`sudo pacman -U <file>`)
             - `corvus-linux-x86_64.flatpak` — sandboxed Flatpak bundle incl. corvus-cli (`flatpak install --user ./corvus-linux-x86_64.flatpak`)
+            - `corvus-linux-x86_64.AppImage` — AppImage incl. corvus-cli, qrencode, libhunspell and dictionaries (`chmod +x corvus-linux-x86_64.AppImage && ./corvus-linux-x86_64.AppImage`); updates itself through AppImageUpdate
+            - `corvus-linux-x86_64.AppImage.zsync` — update information for the AppImage (used by AppImageUpdate; not meant for manual download)
             - `corvus-linux-x86_64-flatpark.tar.gz` — self-contained app tree (Flatpak build output incl. corvus-cli, qrencode and libraries) used by the FlatPark package; not meant for manual installation
             - `corvus-macos-arm64.zip` — native SwiftUI app for Apple silicon, macOS 14 or newer
             - `corvus-qt-macos-arm64.zip` — Qt app for Apple silicon, including deployed Qt dependencies
             - `corvus-windows-x64-setup.exe` — Windows setup (English), includes corvus-cli
-            - `corvus-windows-x64-portable.zip` — Windows, no installation (unzip and run `corvus.exe`), includes corvus-cli
             - `SHA256SUMS` — SHA-256 checksums for all files above
 
-            `corvus-cli` must be installed separately on Linux (plain executable, installer, Arch), and on macOS (`brew install --cask corvus-cli`). The Flatpak and the Windows builds include corvus-cli and need nothing else.
+            `corvus-cli` must be installed separately on Linux (installer, Arch), and on macOS (`brew install --cask corvus-cli`). The Flatpak, the AppImage and the Windows builds include corvus-cli and need nothing else.
           draft: false
           prerelease: false
           make_latest: true
           fail_on_unmatched_files: true
           files: |
-            dist/corvus-linux-x86_64
             dist/corvus-linux-x86_64-installer.tar.gz
             dist/*.pkg.tar.zst
             dist/corvus-linux-x86_64.flatpak
+            dist/corvus-linux-x86_64.AppImage
+            dist/corvus-linux-x86_64.AppImage.zsync
             dist/corvus-linux-x86_64-flatpark.tar.gz
             dist/corvus-macos-arm64.zip
             dist/corvus-qt-macos-arm64.zip
             dist/corvus-windows-x64-setup.exe
-            dist/corvus-windows-x64-portable.zip
             dist/SHA256SUMS
 
       # The release above is created with GITHUB_TOKEN, so GitHub does not

@@ -28,7 +28,7 @@ QString SignalCli::autodetect()
     // Only decides for a first start: an executable chosen in the settings always wins
     // (see MainWindow::ensureExecutable).
 #ifdef Q_OS_WIN
-    // corvus-cli shipped by the Windows setup and the portable zip in <app>/corvus-cli/.
+    // corvus-cli shipped by the Windows setup in <app>/corvus-cli/.
     {
         const QString bundled = QStandardPaths::findExecutable(
             QStringLiteral("corvus-cli"), {QCoreApplication::applicationDirPath() + QStringLiteral("/corvus-cli")});

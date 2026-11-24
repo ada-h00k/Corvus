@@ -31,7 +31,7 @@ Corvus is a desktop client for Signal with an encrypted local chat history. It u
 - Forward text messages, attachments and stickers to up to five chats at once (Qt version; right-click a message → **Forward…**).
 - Customisable chat colours and appearance.
 
-Corvus is a graphical client; the connection to Signal is handled by `corvus-cli`, a separate backend program linked to your Signal account. It is a single native executable written in Rust (built on [presage](https://github.com/whisperfish/presage)) and does not need Java. The Flatpak and Windows setup include it, so there is nothing else to install there.
+Corvus is a graphical client; the connection to Signal is handled by `corvus-cli`, a separate backend program linked to your Signal account. It is a single native executable written in Rust (built on [presage](https://github.com/whisperfish/presage)) and does not need Java. The Flatpak, the AppImage and the Windows setup include it, so there is nothing else to install there.
 
 `corvus-cli` uses JSON-RPC to communicate with Corvus and keeps its own device link and account data. Link the computer with your phone as a new device when setting it up; Corvus keeps its local chat history.
 
@@ -57,6 +57,17 @@ The Flatpak includes [`corvus-cli`](https://github.com/ada-h00k/corvus-cli) and 
 The history key (and the GIPHY API key) is stored through the Flatpak Secret portal, so Corvus does not get access to your system keyring or to the passwords of other applications. This needs a portal backend that implements the Secret portal; if your desktop has none, protect the history with a passphrase instead.
 
 **Other installation methods**
+
+**AppImage:** download `corvus-linux-x86_64.AppImage` from the release, make it executable and run it:
+
+```sh
+chmod +x corvus-linux-x86_64.AppImage
+./corvus-linux-x86_64.AppImage
+```
+
+Like the Flatpak, the AppImage includes Qt, [`corvus-cli`](https://github.com/ada-h00k/corvus-cli), `qrencode`, Hunspell and the Hunspell dictionaries (German, English, French, Spanish, Italian), so nothing else has to be installed. Unlike the Flatpak it is not sandboxed: it has normal access to your files and stores the history key in the system keyring (Secret Service, for example GNOME Keyring or KWallet; without one, protect the history with a passphrase). It is built on Ubuntu 24.04 and needs glibc 2.39 or newer. If you use a launcher such as AppImageLauncher, it adds Corvus to your application menu.
+
+**Updating the AppImage:** it contains update information, so the usual AppImage tools can update it in place and only download the parts that changed: [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`appimageupdatetool corvus-linux-x86_64.AppImage`), Gear Lever, AppImageLauncher or similar. Each release also contains `corvus-linux-x86_64.AppImage.zsync`, which these tools use; you do not need to download it yourself.
 
 The standalone installer is also available from the [latest GitHub release](https://github.com/ada-h00k/Corvus/releases/latest). Download `corvus-linux-x86_64-installer.tar.gz`, extract it and run:
 
@@ -84,8 +95,6 @@ Install `corvus-cli` separately from the [corvus-cli releases](https://github.co
 3. On first start, Corvus finds `corvus-cli` by itself and offers to link the computer with your phone as a new device.
 
 The installer is for Windows 10 or newer. It does not require administrator rights for a per-user installation. The setup is not code-signed, so Windows SmartScreen may show a warning.
-
-**Portable version:** download `corvus-windows-x64-portable.zip`, extract it, and run `corvus.exe` (`qrencode.exe` and `corvus-cli` are included).
 
 ### macOS (recommended: Homebrew)
 
