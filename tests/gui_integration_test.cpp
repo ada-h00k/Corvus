@@ -729,6 +729,19 @@ int main(int argc, char **argv)
             CHECK(syncedReads.first().toObject()["timestamp"].toVariant().toLongLong() == 1700000000000LL);
         }
 
+        CHECK(waitFor([&] {
+            for (const QJsonObject &call : readLog(logFile)) {
+                if (call["method"].toString() != QStringLiteral("sendReceipt")) continue;
+                const QJsonObject params = call["params"].toObject();
+                if (params["type"].toString() != QStringLiteral("read") ||
+                    params["recipient"].toString() != QStringLiteral("+49111")) continue;
+                const QJsonArray timestamps = params["targetTimestamps"].toArray();
+                for (const QJsonValue &timestamp : timestamps)
+                    if (timestamp.toVariant().toLongLong() == 1700000000000LL) return true;
+            }
+            return false;
+        }));
+
         // A burst of messages read in the open chat is coalesced into one linked-device sync.
         const int syncCallsBeforeBurst = countCalls(logFile, "syncReadMessages");
         for (int i = 0; i < 3; ++i) {
