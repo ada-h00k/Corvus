@@ -5304,7 +5304,8 @@ void MainWindow::applyReceipt(const QString &key, qint64 timestamp, int status,
     const QString recipient = resolveKey(recipientKey).isEmpty() ? recipientKey : resolveKey(recipientKey);
     bool changed = false;
     auto applyToConversation = [&](const QString &conversationKey, Conversation &conversation) {
-        for (Message &message : conversation.msgs) {
+        for (int messageIndex = 0; messageIndex < conversation.msgs.size(); ++messageIndex) {
+            Message &message = conversation.msgs[messageIndex];
             if (!message.outgoing || (message.ts() != timestamp && message.latestTs() != timestamp)) continue;
             RecipientReceipt receipt = message.recipientReceipts.value(recipient);
             const int oldStatus = receipt.status;
@@ -5315,12 +5316,12 @@ void MainWindow::applyReceipt(const QString &key, qint64 timestamp, int status,
             if (status == 2 && receipt.readAtMs <= 0) receipt.readAtMs = receiptTimeMs;
             if (oldStatus == receipt.status && oldDeliveredAt == receipt.deliveredAtMs && oldReadAt == receipt.readAtMs)
                 continue;
-            if (conversationKey != m_current) m_view->invalidateConversation(conversationKey);
             message.recipientReceipts.insert(recipient, receipt);
             const int previousAggregate = message.receiptStatus;
             message.receiptStatus = previousAggregate;
             for (auto it = message.recipientReceipts.cbegin(); it != message.recipientReceipts.cend(); ++it)
                 message.receiptStatus = qMax(message.receiptStatus, it.value().status);
+            m_view->updateMessageReceipt(conversationKey, messageIndex, message.receiptStatus);
             persist(Records::receiptStatusUpdate(conversationKey, message));
             changed = true;
         }
@@ -5334,8 +5335,10 @@ void MainWindow::applyReceipt(const QString &key, qint64 timestamp, int status,
         for (auto conversation = m_convs.begin(); conversation != m_convs.end(); ++conversation)
             if (conversation.key() != key) applyToConversation(conversation.key(), conversation.value());
     }
-    if (changed && m_convs.contains(m_current)) showConversation(true);
-    else if (changed) refreshList();
+    // Receipt updates only change the two status ticks. The view is updated in place,
+    // including cached background conversations; rebuilding the full message layout here
+    // made ordinary delivery/read events block the GUI for long histories.
+    Q_UNUSED(changed);
 }
 
 void MainWindow::showMessageDetails(int idx)

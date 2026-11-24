@@ -427,6 +427,36 @@ void ChatView::invalidateConversation(const QString &key)
     discardCachedConversation(key);
 }
 
+void ChatView::updateMessageReceipt(const QString &conversationKey, int messageIndex, int receiptStatus)
+{
+    const auto update = [this, messageIndex, receiptStatus](QList<Item> &items) -> QRect {
+        if (messageIndex < 0 || messageIndex >= items.size()) return {};
+        Item &item = items[messageIndex];
+        if (!item.built) return {};
+
+        // Reserve the width of two ticks in layoutItem(), so changing from sent to
+        // delivered/read never changes bubble geometry or requires a relayout.
+        item.statusText = m_showDeliveryStatus
+            ? (receiptStatus >= 1 ? QStringLiteral("✓✓") : QStringLiteral("✓"))
+            : QString();
+        item.statusRead = m_showReadReceipts && receiptStatus >= 2;
+        return item.statusRect;
+    };
+
+    if (conversationKey == m_conversationKey) {
+        const QRect statusRect = update(m_items);
+        if (!statusRect.isEmpty()) {
+            const int y = m_items[messageIndex].y - verticalScrollBar()->value();
+            viewport()->update(statusRect.translated(0, y).adjusted(-2, -2, 2, 2));
+        }
+        return;
+    }
+
+    auto cached = m_conversationCache.find(conversationKey);
+    if (cached != m_conversationCache.end())
+        update(cached->items);
+}
+
 void ChatView::invalidateAllCachedConversations()
 {
     const QStringList keys = m_conversationCache.keys();
@@ -1239,8 +1269,10 @@ void ChatView::layoutItem(int i, int y, bool cacheMeasureDoc)
     const int innerMax = maxBubble - 2 * kPadX;
 
     // ---- pass 1: sizes
+    const int statusW = (m_showDeliveryStatus && m.outgoing)
+        ? fms.horizontalAdvance(QStringLiteral("✓✓")) : 0;
     int contentW = fms.horizontalAdvance(it.timeText);
-    if (!it.statusText.isEmpty()) contentW += 5 + fms.horizontalAdvance(it.statusText);
+    if (statusW > 0) contentW += 5 + statusW;
     int senderW = 0, senderH = 0;
     QString senderShown;
     if (it.showSender) {
@@ -1448,7 +1480,6 @@ void ChatView::layoutItem(int i, int y, bool cacheMeasureDoc)
         yb += linkPreviewH + kGap;
     }
     const int timeW = fms.horizontalAdvance(it.timeText);
-    const int statusW = fms.horizontalAdvance(it.statusText);
     if (statusW > 0) {
         it.statusRect = QRect(bubbleX + bubbleW - kPadX - statusW, yb, statusW, fms.height());
         it.timeRect = QRect(it.statusRect.left() - 5 - timeW, yb, timeW, fms.height());

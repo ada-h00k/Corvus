@@ -256,6 +256,18 @@ int main(int argc, char **argv)
         CHECK(view.messageCount() == firstChat.size());
         CHECK(view.bubbleRect(0) == originalBubble);
 
+        // Receipt changes update only the ticks; bubble geometry must stay stable.
+        const QRect outgoingBubble = view.bubbleRect(1);
+        view.updateMessageReceipt("cache-chat-a", 1, 2);
+        CHECK(view.bubbleRect(1) == outgoingBubble);
+
+        // A receipt arriving while the chat is cached must be applied without
+        // discarding the cached layout, and remain visible when the chat is reopened.
+        view.showMessages({other}, false, "cache-chat-b", false, {});
+        view.updateMessageReceipt("cache-chat-a", 1, 1);
+        view.showMessages(firstChat, false, "cache-chat-a", false, {});
+        CHECK(view.bubbleRect(1) == outgoingBubble);
+
         Message pending;
         pending.time = QDateTime::currentDateTime();
         pending.outgoing = true;
