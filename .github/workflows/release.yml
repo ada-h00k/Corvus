@@ -973,7 +973,7 @@ jobs:
           OUTPUT="$PWD/dist/corvus-linux-x86_64.AppImage" \
           EXTRA_LIB_PATH="$QTKEYCHAIN_PREFIX/lib" \
           TOOLS_DIR="$RUNNER_TEMP/appimage-tools" \
-            packaging/appimage/build-appimage.sh
+            bash packaging/appimage/build-appimage.sh
 
       # Start the real AppImage under a virtual display. It has no account and no keyring,
       # so it is expected to keep running (the step stops it after 15 s); what must not
