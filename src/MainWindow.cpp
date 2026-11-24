@@ -3204,7 +3204,7 @@ bool MainWindow::addMessage(const QString &key, Message m, const QString &title,
     if (!m.outgoing && !(key == m_current && userIsLooking()))
         c.unread++;
     refreshList();
-    if (!m.outgoing && !isActiveWindow()) QApplication::alert(this);
+    if (!m.outgoing && !isActiveWindow() && m_notify.flashTaskbar) QApplication::alert(this);
     return true;
 }
 
