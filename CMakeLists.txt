@@ -216,10 +216,7 @@ if(APPLE)
     set(CORVUS_ICON_PNG "${CMAKE_BINARY_DIR}/corvus.svg.png")
     set(CORVUS_ICON_ICNS "${CMAKE_BINARY_DIR}/AppIcon.icns")
 
-    set(CORVUS_ICONSET_COMMANDS
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${CORVUS_ICONSET_DIR}" "${CORVUS_ICON_PNG}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CORVUS_ICONSET_DIR}"
-    )
+    set(CORVUS_ICONSET_COMMANDS)
     foreach(size IN ITEMS 16 32 128 256 512)
         math(EXPR retina_size "${size} * 2")
         list(APPEND CORVUS_ICONSET_COMMANDS
@@ -232,6 +229,8 @@ if(APPLE)
 
     add_custom_command(
         OUTPUT "${CORVUS_ICON_ICNS}"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${CORVUS_ICONSET_DIR}" "${CORVUS_ICON_PNG}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CORVUS_ICONSET_DIR}"
         COMMAND "${QLMANAGE_EXECUTABLE}" -t -s 1024 -o "${CMAKE_BINARY_DIR}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/packaging/corvus.svg"
         ${CORVUS_ICONSET_COMMANDS}
