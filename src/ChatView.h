@@ -50,6 +50,8 @@ public:
     void showMessages(const QList<Message> &msgs, bool keepScroll, const QString &conversationKey,
                       bool group, const QList<PinInfo> &pins);
     void invalidateConversation(const QString &key);
+    // Update only the status indicators; receipt events must not rebuild a whole chat.
+    void updateMessageReceipt(const QString &conversationKey, int messageIndex, int receiptStatus);
     void appendMessage(const Message &m);                                   // fast path
     void replaceLastMessage(const Message &m);
     // Pinned messages shown in the banner above the list (oldest first, at most three).
