@@ -11,6 +11,7 @@
 #include "SignalCli.h"
 
 #include <QHash>
+#include <QMap>
 #include <QJsonArray>
 #include <QMainWindow>
 #include <QMediaPlayer>
@@ -281,6 +282,9 @@ private:
     void updateDraftLinkPreview();
     void queueReadReceipt(const QString &key, qint64 timestamp, const QString &author, bool viewOnce);
     void flushPendingReadReceipts(const QString &key);
+    void enqueuePendingReadSync(const QString &key, qint64 timestamp, const QString &author);
+    void schedulePendingReadSyncs(const QString &key, int delayMs = 250);
+    void flushPendingReadSyncs(const QString &key);
     void applyReceipt(const QString &key, qint64 timestamp, int status,
                       const QString &recipientKey, qint64 receiptTimeMs);
     void showMessageDetails(int idx);
@@ -420,6 +424,12 @@ private:
     QString m_localTypingKey;
     bool m_loadingDraft = false;
     QHash<QString, QHash<qint64, QString>> m_pendingReadReceipts; // conversation -> timestamp -> author
+    QHash<QString, QMap<qint64, QString>> m_pendingReadSyncs; // bounded queue for linked-device sync
+    int m_pendingReadSyncCount = 0;
+    bool m_readSyncInFlight = false;
+    int m_readSyncRetryDelayMs = 10000;
+    QTimer m_readSyncTimer;
+    QString m_readSyncScheduledKey;
     QHash<QString, QHash<QString, qint64>> m_typingUntil; // conversation -> peer -> expiration ms
     QString m_account;
     QString m_version; // the signal-cli version corvus-cli is compatible with, e.g. "0.14.9"
