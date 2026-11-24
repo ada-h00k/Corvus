@@ -5252,8 +5252,30 @@ void MainWindow::flushPendingReadReceipts(const QString &key)
     if (pending.isEmpty()) return;
 
     QHash<QString, QJsonArray> byAuthor;
-    for (auto it = pending.cbegin(); it != pending.cend(); ++it)
+    QJsonArray syncReads;
+    for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
         byAuthor[it.value()].append(QJsonValue(static_cast<qint64>(it.key())));
+        syncReads.append(QJsonObject{
+            {QStringLiteral("sender"), it.value()},
+            {QStringLiteral("timestamp"), QJsonValue(static_cast<qint64>(it.key()))}
+        });
+    }
+
+    if (!syncReads.isEmpty()) {
+        m_cli.call(QStringLiteral("syncReadMessages"),
+                   QJsonObject{{QStringLiteral("reads"), syncReads}},
+                   [this, key, reads = syncReads](const QJsonValue &, const QString &error) {
+            if (error.isEmpty()) return;
+            qWarning() << "Could not synchronize read messages to linked devices:" << error;
+            if (!m_notify.readReceipts) return;
+            for (const QJsonValue &value : reads) {
+                const QJsonObject read = value.toObject();
+                const qint64 timestamp = read.value(QStringLiteral("timestamp")).toVariant().toLongLong();
+                const QString sender = read.value(QStringLiteral("sender")).toString();
+                if (timestamp > 0 && !sender.isEmpty()) m_pendingReadReceipts[key].insert(timestamp, sender);
+            }
+        });
+    }
 
     for (auto it = byAuthor.cbegin(); it != byAuthor.cend(); ++it) {
         QJsonObject params{{QStringLiteral("recipient"), it.key()},
