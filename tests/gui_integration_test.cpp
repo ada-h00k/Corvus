@@ -728,6 +728,26 @@ int main(int argc, char **argv)
             CHECK(syncedReads.first().toObject()["sender"].toString() == QStringLiteral("+49111"));
             CHECK(syncedReads.first().toObject()["timestamp"].toVariant().toLongLong() == 1700000000000LL);
         }
+
+        // A burst of messages read in the open chat is coalesced into one linked-device sync.
+        const int syncCallsBeforeBurst = countCalls(logFile, "syncReadMessages");
+        for (int i = 0; i < 3; ++i) {
+            const qint64 burstTs = 1700000001000LL + i * 1000;
+            inject(injectFile, QJsonObject{
+                {"sourceNumber", "+49111"}, {"sourceUuid", "u-alice"}, {"sourceName", "Alice"},
+                {"timestamp", burstTs},
+                {"dataMessage", QJsonObject{{"timestamp", burstTs}, {"message", QString("burst %1").arg(i)}}}});
+        }
+        CHECK(waitFor([&] { return view->messageCount() == 4; }));
+        CHECK(waitFor([&] { return countCalls(logFile, "syncReadMessages") > syncCallsBeforeBurst; }));
+        QTest::qWait(350);
+        CHECK(countCalls(logFile, "syncReadMessages") == syncCallsBeforeBurst + 1);
+        const QJsonArray burstReads =
+            findCall(logFile, "syncReadMessages", syncCallsBeforeBurst)["params"].toObject()["reads"].toArray();
+        CHECK(burstReads.size() == 3);
+        for (int i = 0; i < burstReads.size(); ++i)
+            CHECK(burstReads[i].toObject()["timestamp"].toVariant().toLongLong() ==
+                  1700000001000LL + i * 1000);
         CHECK(waitFor([&] { return html(view).contains("[image: pic.png]"); }));  // thumbnail fetched via getAttachment
         CHECK(html(view).contains("look at this"));
         CHECK(html(view).contains("earlier question"));              // quote rendered
