@@ -203,7 +203,48 @@ if(APPLE)
     set_target_properties(corvus PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/Info.plist
+        MACOSX_BUNDLE_ICON_FILE AppIcon.icns
     )
+
+    # Finder and Dock use the .icns referenced by CFBundleIconFile. Generate the
+    # native macOS icon from the same SVG used by the Swift app and other packages.
+    find_program(QLMANAGE_EXECUTABLE qlmanage REQUIRED)
+    find_program(SIPS_EXECUTABLE sips REQUIRED)
+    find_program(ICONUTIL_EXECUTABLE iconutil REQUIRED)
+
+    set(CORVUS_ICONSET_DIR "${CMAKE_BINARY_DIR}/AppIcon.iconset")
+    set(CORVUS_ICON_PNG "${CMAKE_BINARY_DIR}/corvus.svg.png")
+    set(CORVUS_ICON_ICNS "${CMAKE_BINARY_DIR}/AppIcon.icns")
+
+    set(CORVUS_ICONSET_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${CORVUS_ICONSET_DIR}" "${CORVUS_ICON_PNG}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CORVUS_ICONSET_DIR}"
+    )
+    foreach(size IN ITEMS 16 32 128 256 512)
+        math(EXPR retina_size "${size} * 2")
+        list(APPEND CORVUS_ICONSET_COMMANDS
+            COMMAND "${SIPS_EXECUTABLE}" -z "${size}" "${size}" "${CORVUS_ICON_PNG}"
+                    --out "${CORVUS_ICONSET_DIR}/icon_${size}x${size}.png"
+            COMMAND "${SIPS_EXECUTABLE}" -z "${retina_size}" "${retina_size}" "${CORVUS_ICON_PNG}"
+                    --out "${CORVUS_ICONSET_DIR}/icon_${size}x${size}@2x.png"
+        )
+    endforeach()
+
+    add_custom_command(
+        OUTPUT "${CORVUS_ICON_ICNS}"
+        COMMAND "${QLMANAGE_EXECUTABLE}" -t -s 1024 -o "${CMAKE_BINARY_DIR}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/packaging/corvus.svg"
+        ${CORVUS_ICONSET_COMMANDS}
+        COMMAND "${ICONUTIL_EXECUTABLE}" -c icns "${CORVUS_ICONSET_DIR}" -o "${CORVUS_ICON_ICNS}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/corvus.svg"
+        COMMENT "Generating Corvus macOS application icon"
+        VERBATIM
+    )
+    set_source_files_properties("${CORVUS_ICON_ICNS}" PROPERTIES
+        GENERATED TRUE
+        MACOSX_PACKAGE_LOCATION Resources
+    )
+    target_sources(corvus PRIVATE "${CORVUS_ICON_ICNS}")
 
     # corvus-cli helper, embedded as Contents/Helpers/corvus-signal-cli.app (src/SignalCliHelper.cpp).
     configure_file(packaging/macos/SignalCliHelper.plist.in
