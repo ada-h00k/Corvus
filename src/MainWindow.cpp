@@ -116,6 +116,10 @@ static bool isSpecialKey(const QString &key)
 }
 static const qint64 kMaxThumbSource = 30LL * 1024 * 1024;
 static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload limit
+static constexpr int kReadSyncBatchSize = 500; // corvus-cli rejects larger sync messages
+static constexpr int kMaxPendingReadSyncEntries = 5000;
+static constexpr int kReadSyncDebounceMs = 250;
+static constexpr int kReadSyncMaxRetryDelayMs = 5 * 60 * 1000;
 
 
 static QString firstHttpsLink(const QString &text)
@@ -511,6 +515,14 @@ public:
 
 MainWindow::MainWindow()
 {
+    m_readSyncTimer.setSingleShot(true);
+    connect(&m_readSyncTimer, &QTimer::timeout, this, [this] {
+        const QString key = m_readSyncScheduledKey;
+        m_readSyncScheduledKey.clear();
+        flushPendingReadSyncs(key);
+        if (key != m_current) schedulePendingReadSyncs(m_current);
+    });
+
     setWindowTitle(QStringLiteral("Corvus"));
     resize(1020, 680);
     setAcceptDrops(true);
@@ -5242,57 +5254,133 @@ void MainWindow::queueReadReceipt(const QString &key, qint64 timestamp, const QS
 {
     if (!m_notify.readReceipts || viewOnce || key.isEmpty() || author.isEmpty() || timestamp <= 0) return;
     m_pendingReadReceipts[key].insert(timestamp, author);
+    enqueuePendingReadSync(key, timestamp, author);
     if (key == m_current && userIsLooking()) flushPendingReadReceipts(key);
 }
 
 void MainWindow::flushPendingReadReceipts(const QString &key)
 {
     if (!m_notify.readReceipts || key.isEmpty() || !m_cli.isRunning() || !userIsLooking()) return;
-    auto pending = m_pendingReadReceipts.take(key);
-    if (pending.isEmpty()) return;
+    const auto pending = m_pendingReadReceipts.take(key);
 
-    QHash<QString, QJsonArray> byAuthor;
-    QJsonArray syncReads;
-    for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
-        byAuthor[it.value()].append(QJsonValue(static_cast<qint64>(it.key())));
-        syncReads.append(QJsonObject{
-            {QStringLiteral("sender"), it.value()},
-            {QStringLiteral("timestamp"), QJsonValue(static_cast<qint64>(it.key()))}
-        });
+    // Receipts to message authors keep their existing per-author batching. Linked-device
+    // synchronization is deliberately handled by its own debounced, single-flight queue below.
+    if (!pending.isEmpty()) {
+        QHash<QString, QJsonArray> byAuthor;
+        for (auto it = pending.cbegin(); it != pending.cend(); ++it)
+            byAuthor[it.value()].append(QJsonValue(static_cast<qint64>(it.key())));
+
+        for (auto it = byAuthor.cbegin(); it != byAuthor.cend(); ++it) {
+            QJsonObject params{{QStringLiteral("recipient"), it.key()},
+                               {QStringLiteral("targetTimestamps"), it.value()},
+                               {QStringLiteral("type"), QStringLiteral("read")}};
+            m_cli.call(QStringLiteral("sendReceipt"), params,
+                       [this, key, timestamps = it.value(), author = it.key()](const QJsonValue &, const QString &error) {
+                if (error.isEmpty()) return;
+                qWarning() << "Could not send read receipt:" << error;
+                // Do not lose receipts on a transient CLI error; the next activation/open can retry.
+                if (!m_notify.readReceipts) return;
+                for (const QJsonValue &value : timestamps) {
+                    const qint64 timestamp = value.toVariant().toLongLong();
+                    if (timestamp > 0) m_pendingReadReceipts[key].insert(timestamp, author);
+                }
+            });
+        }
     }
 
-    if (!syncReads.isEmpty()) {
-        m_cli.call(QStringLiteral("syncReadMessages"),
-                   QJsonObject{{QStringLiteral("reads"), syncReads}},
-                   [this, key, reads = syncReads](const QJsonValue &, const QString &error) {
-            if (error.isEmpty()) return;
+    schedulePendingReadSyncs(key);
+}
+
+void MainWindow::enqueuePendingReadSync(const QString &key, qint64 timestamp, const QString &author)
+{
+    const auto existing = m_pendingReadSyncs.constFind(key);
+    if (existing != m_pendingReadSyncs.cend() && existing->contains(timestamp)) return;
+
+    // Bound memory even when the app is offline or Signal keeps rejecting sync requests.
+    // Drop the oldest queued timestamp first; recently read messages are more useful to sync.
+    if (m_pendingReadSyncCount >= kMaxPendingReadSyncEntries) {
+        auto oldestConversation = m_pendingReadSyncs.end();
+        qint64 oldestTimestamp = std::numeric_limits<qint64>::max();
+        for (auto it = m_pendingReadSyncs.begin(); it != m_pendingReadSyncs.end(); ++it) {
+            if (!it.value().isEmpty() && it.value().firstKey() < oldestTimestamp) {
+                oldestTimestamp = it.value().firstKey();
+                oldestConversation = it;
+            }
+        }
+        if (oldestConversation != m_pendingReadSyncs.end()) {
+            oldestConversation.value().remove(oldestTimestamp);
+            if (oldestConversation.value().isEmpty()) m_pendingReadSyncs.erase(oldestConversation);
+            --m_pendingReadSyncCount;
+        }
+    }
+
+    m_pendingReadSyncs[key].insert(timestamp, author);
+    ++m_pendingReadSyncCount;
+}
+
+void MainWindow::schedulePendingReadSyncs(const QString &key, int delayMs)
+{
+    if (!m_notify.readReceipts || key.isEmpty() || key != m_current ||
+        !m_cli.isRunning() || !userIsLooking() || m_readSyncInFlight) return;
+    const auto it = m_pendingReadSyncs.constFind(key);
+    if (it == m_pendingReadSyncs.cend() || it->isEmpty()) return;
+
+    // Keep a retry backoff for the same chat, but let a newly opened chat take priority.
+    if (m_readSyncTimer.isActive()) {
+        if (m_readSyncScheduledKey == key) return;
+        m_readSyncTimer.stop();
+    }
+    m_readSyncScheduledKey = key;
+    m_readSyncTimer.start(qMax(0, delayMs));
+}
+
+void MainWindow::flushPendingReadSyncs(const QString &key)
+{
+    if (!m_notify.readReceipts || key.isEmpty() || key != m_current ||
+        !m_cli.isRunning() || !userIsLooking() || m_readSyncInFlight) return;
+    auto pending = m_pendingReadSyncs.find(key);
+    if (pending == m_pendingReadSyncs.end() || pending->isEmpty()) return;
+
+    QJsonArray reads;
+    QMap<qint64, QString> batch;
+    auto it = pending->begin();
+    while (it != pending->end() && batch.size() < kReadSyncBatchSize) {
+        const qint64 timestamp = it.key();
+        const QString sender = it.value();
+        reads.append(QJsonObject{
+            {QStringLiteral("sender"), sender},
+            {QStringLiteral("timestamp"), QJsonValue(timestamp)}
+        });
+        batch.insert(timestamp, sender);
+        it = pending->erase(it);
+    }
+    m_pendingReadSyncCount -= batch.size();
+    if (pending->isEmpty()) m_pendingReadSyncs.erase(pending);
+    if (reads.isEmpty()) return;
+
+    m_readSyncInFlight = true;
+    m_cli.call(QStringLiteral("syncReadMessages"),
+               QJsonObject{{QStringLiteral("reads"), reads}},
+               [this, key, batch = std::move(batch)](const QJsonValue &, const QString &error) {
+        m_readSyncInFlight = false;
+        if (!error.isEmpty()) {
             qWarning() << "Could not synchronize read messages to linked devices:" << error;
-            if (!m_notify.readReceipts) return;
-            for (const QJsonValue &value : reads) {
-                const QJsonObject read = value.toObject();
-                const qint64 timestamp = read.value(QStringLiteral("timestamp")).toVariant().toLongLong();
-                const QString sender = read.value(QStringLiteral("sender")).toString();
-                if (timestamp > 0 && !sender.isEmpty()) m_pendingReadReceipts[key].insert(timestamp, sender);
+            if (m_notify.readReceipts) {
+                for (auto it = batch.cbegin(); it != batch.cend(); ++it)
+                    enqueuePendingReadSync(key, it.key(), it.value());
             }
-        });
-    }
+            if (key == m_current) {
+                schedulePendingReadSyncs(key, m_readSyncRetryDelayMs);
+                m_readSyncRetryDelayMs = qMin(m_readSyncRetryDelayMs * 2, kReadSyncMaxRetryDelayMs);
+            } else {
+                schedulePendingReadSyncs(m_current, kReadSyncDebounceMs);
+            }
+            return;
+        }
 
-    for (auto it = byAuthor.cbegin(); it != byAuthor.cend(); ++it) {
-        QJsonObject params{{QStringLiteral("recipient"), it.key()},
-                           {QStringLiteral("targetTimestamps"), it.value()},
-                           {QStringLiteral("type"), QStringLiteral("read")}};
-        m_cli.call(QStringLiteral("sendReceipt"), params,
-                   [this, key, timestamps = it.value(), author = it.key()](const QJsonValue &, const QString &error) {
-            if (error.isEmpty()) return;
-            qWarning() << "Could not send read receipt:" << error;
-            // Do not lose receipts on a transient CLI error; the next activation/open can retry.
-            if (!m_notify.readReceipts) return;
-            for (const QJsonValue &value : timestamps) {
-                const qint64 timestamp = value.toVariant().toLongLong();
-                if (timestamp > 0) m_pendingReadReceipts[key].insert(timestamp, author);
-            }
-        });
-    }
+        m_readSyncRetryDelayMs = 10000;
+        schedulePendingReadSyncs(m_current, kReadSyncDebounceMs);
+    });
 }
 
 void MainWindow::applyReceipt(const QString &key, qint64 timestamp, int status,
@@ -7800,7 +7888,13 @@ void MainWindow::applyNotifications(const NotificationSettings &notify)
         // Wait for the next real edit; restoring an existing draft must not start typing.
         m_localTypingTimer.stop();
     }
-    if (!m_notify.readReceipts) m_pendingReadReceipts.clear();
+    if (!m_notify.readReceipts) {
+        m_pendingReadReceipts.clear();
+        m_pendingReadSyncs.clear();
+        m_pendingReadSyncCount = 0;
+        m_readSyncTimer.stop();
+        m_readSyncScheduledKey.clear();
+    }
     if (m_view) {
         m_view->setReadReceiptsEnabled(m_notify.readReceipts);
         m_view->setDeliveryStatusVisible(m_notify.showDeliveryStatus);
