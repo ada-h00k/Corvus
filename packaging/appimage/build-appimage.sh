@@ -88,15 +88,31 @@ echo "::endgroup::"
 echo "::group::Hunspell dictionaries"
 python3 - "$repo_root/packaging/flatpak/io.github.ada_h00k.Corvus.yml" "$APPDIR" <<'PY'
 import hashlib
+import re
 import sys
 import urllib.request
 from pathlib import Path
 
-import yaml
-
-manifest = yaml.safe_load(Path(sys.argv[1]).read_text())
+# Only the standard library: the python3 on PATH of a CI runner is not necessarily the
+# system one, so modules installed with apt (such as PyYAML) may not be importable.
+text = Path(sys.argv[1]).read_text()
 appdir = Path(sys.argv[2])
-module = next(m for m in manifest["modules"] if m["name"] == "hunspell-dictionaries")
+
+# The "hunspell-dictionaries" module of the manifest: from its "- name:" line to the next
+# module. Its sources are plain "- type: file" blocks with url, sha256 and dest-filename.
+match = re.search(r"(?ms)^  - name: hunspell-dictionaries$(.*?)(?=^  - name: |\Z)", text)
+if not match:
+    raise SystemExit("Module hunspell-dictionaries not found in the Flatpak manifest")
+
+sources = []
+for block in re.split(r"(?m)^      - type: file$", match.group(1))[1:]:
+    fields = dict(re.findall(r"(?m)^        (url|sha256|dest-filename): (\S+)$", block))
+    if set(fields) != {"url", "sha256", "dest-filename"}:
+        raise SystemExit(f"Unexpected source block in the Flatpak manifest: {block!r}")
+    sources.append(fields)
+if not sources:
+    raise SystemExit("No dictionary sources found in the Flatpak manifest")
+module = {"sources": sources}
 
 dict_dir = appdir / "usr/share/hunspell"
 license_dir = appdir / "usr/share/licenses/corvus/dictionaries"

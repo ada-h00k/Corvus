@@ -860,7 +860,6 @@ jobs:
             file \
             curl \
             ca-certificates \
-            python3-yaml \
             zsync \
             xvfb \
             libgl1-mesa-dev \
