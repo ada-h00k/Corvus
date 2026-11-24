@@ -17,6 +17,7 @@ NotificationSettings NotificationSettings::load()
     n.trayIcon = s.value(QStringLiteral("trayIcon"), n.trayIcon).toBool();
     n.closeToTray = s.value(QStringLiteral("closeToTray"), n.closeToTray).toBool();
     n.startMinimizedInTray = s.value(QStringLiteral("startMinimizedInTray"), n.startMinimizedInTray).toBool();
+    n.flashTaskbar = s.value(QStringLiteral("flashTaskbar"), n.flashTaskbar).toBool();
     s.endGroup();
     s.beginGroup(QStringLiteral("privacy"));
     n.readReceipts = s.value(QStringLiteral("readReceipts"), n.readReceipts).toBool();
@@ -38,6 +39,7 @@ void NotificationSettings::save() const
     s.setValue(QStringLiteral("trayIcon"), trayIcon);
     s.setValue(QStringLiteral("closeToTray"), closeToTray);
     s.setValue(QStringLiteral("startMinimizedInTray"), startMinimizedInTray);
+    s.setValue(QStringLiteral("flashTaskbar"), flashTaskbar);
     s.endGroup();
     s.beginGroup(QStringLiteral("privacy"));
     s.setValue(QStringLiteral("readReceipts"), readReceipts);
@@ -51,5 +53,6 @@ bool NotificationSettings::operator==(const NotificationSettings &o) const
     return notifications == o.notifications && content == o.content && sound == o.sound && soundId == o.soundId &&
            soundFile == o.soundFile && trayIcon == o.trayIcon && closeToTray == o.closeToTray &&
            startMinimizedInTray == o.startMinimizedInTray && readReceipts == o.readReceipts &&
-           typingIndicators == o.typingIndicators && showDeliveryStatus == o.showDeliveryStatus;
+           typingIndicators == o.typingIndicators && showDeliveryStatus == o.showDeliveryStatus &&
+           flashTaskbar == o.flashTaskbar;
 }
