@@ -408,7 +408,8 @@ int main(int argc, char **argv)
         QTemporaryDir t;
         QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, t.path());
         const NotificationSettings d = NotificationSettings::load();
-        CHECK(d.notifications && d.sound && d.trayIcon && d.closeToTray && !d.startMinimizedInTray && d.soundId == "chime");
+        CHECK(d.notifications && d.sound && d.trayIcon && d.closeToTray && !d.startMinimizedInTray &&
+              d.flashTaskbar && d.soundId == "chime");
         NotificationSettings n = d;
         n.notifications = false;
         n.sound = true;
@@ -418,6 +419,7 @@ int main(int argc, char **argv)
         n.trayIcon = false;
         n.closeToTray = false;
         n.startMinimizedInTray = true;
+        n.flashTaskbar = false;
         n.save();
         CHECK(NotificationSettings::load() == n);
         CHECK(MainWindow::shouldStartMinimizedInTray(true, true));
@@ -741,7 +743,9 @@ int main(int argc, char **argv)
         QCheckBox *trayOn = box("Show a tray icon");   // General page
         QCheckBox *closeTray = box("Keep running");    // General page
         QCheckBox *startInTray = box("Start minimized"); // General page
-        CHECK(notify && soundOn && trayOn && closeTray && startInTray);
+        QCheckBox *flashTaskbar = box("Flash the taskbar");
+        CHECK(notify && soundOn && trayOn && closeTray && startInTray && flashTaskbar);
+        CHECK(flashTaskbar->isChecked());
         auto *np = dlg.findChild<NotificationPage *>();
         CHECK(np != nullptr);
         const QList<QComboBox *> combos = np->findChildren<QComboBox *>();
@@ -752,14 +756,17 @@ int main(int argc, char **argv)
         soundOn->setChecked(false);
         CHECK(!combos[1]->isEnabled());
         trayOn->setChecked(false);
+        flashTaskbar->setChecked(false);
         CHECK(!closeTray->isEnabled() && !startInTray->isEnabled());
         NotificationSettings got = dlg.notifications();
-        CHECK(!got.notifications && !got.sound && !got.trayIcon && !got.startMinimizedInTray);
+        CHECK(!got.notifications && !got.sound && !got.trayIcon && !got.startMinimizedInTray &&
+              !got.flashTaskbar);
 
         NotificationSettings other;
         other.notifications = true;
         other.sound = true;
         other.startMinimizedInTray = true;
+        other.flashTaskbar = false;
         other.soundId = "pop";
         other.content = NotificationSettings::NameOnly;
         np->setSettings(other);
@@ -767,6 +774,7 @@ int main(int argc, char **argv)
         startInTray->setChecked(true);
         CHECK(dlg.notifications() == other);
         CHECK(startInTray->isChecked());
+        CHECK(!flashTaskbar->isChecked());
         CHECK(combos[1]->isEnabled());
 
         // the test buttons really fire
