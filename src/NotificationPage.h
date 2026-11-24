@@ -33,6 +33,7 @@ private:
     Notifier *m_notifier;
 
     QCheckBox *m_notify;
+    QCheckBox *m_flashTaskbar;
     QComboBox *m_content;
     QPushButton *m_testNotify;
     QLabel *m_notifyNote; // result of the last "Test"

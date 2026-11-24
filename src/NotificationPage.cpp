@@ -41,6 +41,14 @@ NotificationPage::NotificationPage(const NotificationSettings &current, SoundPla
     nl->addWidget(m_notifyNote);
     lay->addWidget(notifyBox);
 
+    // --- taskbar attention
+    auto *taskbarBox = new QGroupBox(tr("Taskbar"));
+    auto *tl = new QVBoxLayout(taskbarBox);
+    m_flashTaskbar = new QCheckBox(tr("Flash the taskbar for new messages"));
+    m_flashTaskbar->setObjectName(QStringLiteral("flashTaskbar"));
+    tl->addWidget(m_flashTaskbar);
+    lay->addWidget(taskbarBox);
+
     // --- sound
     auto *soundBox = new QGroupBox(tr("Sound"));
     auto *sl = new QVBoxLayout(soundBox);
@@ -72,7 +80,8 @@ NotificationPage::NotificationPage(const NotificationSettings &current, SoundPla
 
     lay->addStretch(1);
 
-    for (QCheckBox *c : {m_notify, m_soundOn}) connect(c, &QCheckBox::toggled, this, [this] { refreshEnabled(); });
+    for (QCheckBox *c : {m_notify, m_soundOn, m_flashTaskbar})
+        connect(c, &QCheckBox::toggled, this, [this] { refreshEnabled(); });
     connect(m_content, &QComboBox::currentIndexChanged, this, &NotificationPage::changed);
     connect(m_soundBox, &QComboBox::currentIndexChanged, this, [this] { refreshEnabled(); });
     connect(m_pickFile, &QPushButton::clicked, this, &NotificationPage::chooseFile);
@@ -98,6 +107,7 @@ NotificationSettings NotificationPage::settings() const
 {
     NotificationSettings s = m_base;
     s.notifications = m_notify->isChecked();
+    s.flashTaskbar = m_flashTaskbar->isChecked();
     s.content = m_content->currentData().toInt();
     s.sound = m_soundOn->isChecked();
     s.soundId = m_soundBox->currentData().toString();
@@ -109,6 +119,7 @@ void NotificationPage::setSettings(const NotificationSettings &s)
 {
     m_base = s;
     m_notify->setChecked(s.notifications);
+    m_flashTaskbar->setChecked(s.flashTaskbar);
     m_content->setCurrentIndex(qMax(0, m_content->findData(s.content)));
     m_soundOn->setChecked(s.sound);
     m_customFile = s.soundFile;

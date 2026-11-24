@@ -17,6 +17,7 @@ struct NotificationSettings {
     bool readReceipts = true;       // send and display read receipts
     bool typingIndicators = true;   // send and display typing indicators
     bool showDeliveryStatus = true; // show sent/delivered/read indicators on outgoing messages
+    bool flashTaskbar = true;       // request taskbar attention for incoming messages
 
     static NotificationSettings load();
     void save() const;
