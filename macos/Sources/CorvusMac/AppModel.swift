@@ -1344,6 +1344,22 @@ final class AppModel {
             let p: JSON = ["recipient": author, "targetTimestamp": tss, "type": "read"]
             Task { _ = try? await cli.call("sendReceipt", p) }
         }
+
+        let readSyncs: [[String: Any]] = due.compactMap { item in
+            guard item.0 != account else { return nil }
+            return ["sender": item.0, "timestamp": item.1]
+        }
+        if !readSyncs.isEmpty {
+            Task {
+                do {
+                    _ = try await cli.call("syncReadMessages", ["reads": readSyncs])
+                } catch {
+                    // Retry on the next activation/chat open if the phone did not receive the sync.
+                    unsentReads[key, default: []].append(contentsOf: due.filter { $0.0 != account })
+                    NSLog("Could not synchronize read messages to linked devices: %@", error.localizedDescription)
+                }
+            }
+        }
     }
 
     // MARK: - Sending

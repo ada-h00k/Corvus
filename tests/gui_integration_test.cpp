@@ -721,6 +721,13 @@ int main(int argc, char **argv)
         CHECK(waitFor([&] { return listHas(list, "Alice (1)"); }));
         selectItem(list, "Alice");
         CHECK(waitFor([&] { return view->messageCount() == 1; }));
+        CHECK(waitFor([&] { return !findCall(logFile, "syncReadMessages").isEmpty(); }));
+        const QJsonArray syncedReads = lastCall(logFile, "syncReadMessages")["params"].toObject()["reads"].toArray();
+        CHECK(syncedReads.size() == 1);
+        if (!syncedReads.isEmpty()) {
+            CHECK(syncedReads.first().toObject()["sender"].toString() == QStringLiteral("+49111"));
+            CHECK(syncedReads.first().toObject()["timestamp"].toVariant().toLongLong() == 1700000000000LL);
+        }
         CHECK(waitFor([&] { return html(view).contains("[image: pic.png]"); }));  // thumbnail fetched via getAttachment
         CHECK(html(view).contains("look at this"));
         CHECK(html(view).contains("earlier question"));              // quote rendered

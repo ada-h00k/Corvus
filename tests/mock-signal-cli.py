@@ -510,6 +510,15 @@ for line in sys.stdin:
         # Read/viewed receipts share the same JSON-RPC method; accept them so UI tests can
         # assert the exact targetTimestamps + type payload without generating mock errors.
         res = {}
+    elif m == "syncReadMessages":
+        reads = p.get("reads")
+        if not isinstance(reads, list) or any(
+            not isinstance(item, dict) or not item.get("sender") or not item.get("timestamp")
+            for item in reads
+        ):
+            emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "invalid reads"}})
+            continue
+        res = {}
     elif m == "sendReaction":
         sent += 1
         res = {"timestamp": 1700000100000 + sent, "results": []}
