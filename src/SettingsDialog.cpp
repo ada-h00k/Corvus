@@ -255,10 +255,13 @@ AdvancedPage::AdvancedPage(QWidget *parent) : QWidget(parent)
     cl->addLayout(verRow);
     auto *buttons = new QHBoxLayout;
     auto *choose = new QPushButton(tr("Choose …"));
-    auto *update = new QPushButton(tr("Check for update"));
     auto *reconnect = new QPushButton(tr("Reconnect"));
     buttons->addWidget(choose);
-    buttons->addWidget(update);
+    if (qEnvironmentVariableIsEmpty("FLATPAK_ID")) {
+        auto *update = new QPushButton(tr("Check for update"));
+        buttons->addWidget(update);
+        connect(update, &QPushButton::clicked, this, &AdvancedPage::checkForUpdateRequested);
+    }
     buttons->addWidget(reconnect);
     buttons->addStretch(1);
     cl->addLayout(buttons);
@@ -275,7 +278,6 @@ AdvancedPage::AdvancedPage(QWidget *parent) : QWidget(parent)
     lay->addStretch(1);
 
     connect(choose, &QPushButton::clicked, this, &AdvancedPage::chooseExecutableRequested);
-    connect(update, &QPushButton::clicked, this, &AdvancedPage::checkForUpdateRequested);
     connect(reconnect, &QPushButton::clicked, this, &AdvancedPage::reconnectRequested);
     connect(key, &QPushButton::clicked, this, &AdvancedPage::giphyKeyRequested);
 }
