@@ -76,8 +76,15 @@ int main(int argc, char **argv)
         t.start();
         fn();
         QCoreApplication::processEvents();
-        std::printf("%-34s %8.1f ms   checksum %016llx\n", name, t.nsecsElapsed() / 1e6,
-                    static_cast<unsigned long long>(checksum(view)));
+        const double visibleMs = t.nsecsElapsed() / 1e6; // the chat can be shown from here on
+        // Long chats are laid out lazily; the checksum is taken once everything is measured, so
+        // it must equal the result of a fully synchronous layout.
+        for (int i = 0; i < 30000 && view.relayoutPending(); ++i) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        std::printf("%-34s %8.1f ms visible, %8.1f ms until settled   checksum %016llx\n", name,
+                    visibleMs, t.nsecsElapsed() / 1e6, static_cast<unsigned long long>(checksum(view)));
     };
     std::printf("messages: %d\n", n);
     step("open chat (cold)", [&] { view.showMessages(msgs); });

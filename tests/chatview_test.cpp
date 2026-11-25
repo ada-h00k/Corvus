@@ -39,11 +39,20 @@ static int g_failed = 0;
         }                                                                              \
     } while (0)
 
+// The view under test. Long chats are laid out lazily (the rows on screen first, the rest in the
+// background), so waiting for the event loop also means waiting for that to finish: the geometry
+// of rows off screen is only valid afterwards.
+static ChatView *g_view = nullptr;
+
 static void pump()
 {
     for (int i = 0; i < 10; ++i) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
         QThread::msleep(5);
+    }
+    for (int i = 0; i < 4000 && g_view && g_view->relayoutPending(); ++i) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(1);
     }
 }
 
@@ -70,7 +79,9 @@ static QImage gradient(int w, int h)
 
 static QList<Message> sample(bool withFiller)
 {
-    const QDateTime base = QDateTime::currentDateTime().addSecs(-3600);
+    // A fixed time: the width of the time text (and a date separator) must not depend on when the
+    // test runs.
+    const QDateTime base(QDate::currentDate().addDays(-1), QTime(10, 30));
     auto in = [&](int sec, const QString &text) {
         Message m;
         m.time = base.addSecs(sec);
@@ -146,6 +157,7 @@ int main(int argc, char **argv)
     ap.radius = 16;
 
     ChatView view;
+    g_view = &view;
     view.setSelfKey("+491234567");
     view.setNameResolver([](const QString &k) { return k == "+49111" ? QString("Alice") : k; });
     view.setAppearance(ap);

@@ -204,6 +204,7 @@ private:
     void applyResizeAnchor();
     void commitRelayout(bool repaint);    // reflow y, scroll range, scroll anchor, video overlay
     void relayoutWindow();                // current viewport (+ margin) first
+    void beginLazyLayout();               // open a long chat: newest rows now, the rest later
     bool relayoutVisibleStale();          // lay out stale rows that are on screen; true if any
     void relayoutSlice();                 // one time-boxed step of the background pass
     void finishRelayout();                // complete it synchronously (cache, jump to message)

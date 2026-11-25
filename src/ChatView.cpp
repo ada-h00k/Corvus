@@ -47,6 +47,9 @@ constexpr int kGap = 4;
 constexpr int kMaxImage = 300;
 constexpr int kMaxCachedConversations = 3;
 constexpr int kMaxCachedConversationItems = 2500;
+// Chats with at least this many messages are opened lazily (see beginLazyLayout()). Below it a
+// full layout costs a few milliseconds and is simpler.
+constexpr int kLazyOpenMinMessages = 100;
 
 QFont scaled(const QFont &f, qreal factor, bool bold = false)
 {
@@ -482,10 +485,20 @@ void ChatView::cacheCurrentConversation()
 {
     if (m_conversationKey.isEmpty()) return;
 
-    finishRelayout(); // cached rows must all be laid out for cached.layoutWidth
-
     stopVideoPlayback();
     clearSelection();
+    if (m_relayoutActive) {
+        // Not every row has been laid out yet. Finishing that here would stall the switch, and
+        // such a chat reopens immediately anyway (beginLazyLayout()), so it is not cached.
+        cancelRelayout();
+        disposeItemResources(m_items);
+        discardCachedConversation(m_conversationKey);
+        m_msgs.clear();
+        m_items.clear();
+        m_renderFirst = m_renderLast = -1;
+        m_layoutWidth = -1;
+        return;
+    }
     CachedConversation cached;
     cached.items = std::move(m_items);
     cached.pins = m_pins;
@@ -713,8 +726,15 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll, const Q
     m_conversationKey = conversationKey;
     m_renderFirst = m_renderLast = -1;
     m_layoutWidth = -1;
-    relayoutAll();
-    verticalScrollBar()->setValue((bottom || !keepScroll) ? verticalScrollBar()->maximum() : old);
+    if (msgs.size() >= kLazyOpenMinMessages && (bottom || !keepScroll)) {
+        // Opens at the newest message: only what is on screen has to be laid out before the
+        // chat can be shown; the (long) history above is measured in the background.
+        cancelRelayout();
+        beginLazyLayout();
+    } else {
+        relayoutAll();
+        verticalScrollBar()->setValue((bottom || !keepScroll) ? verticalScrollBar()->maximum() : old);
+    }
     if (!keepScroll) m_missed = 0; // another conversation: nothing is "new" here
     updateToLatestButton();
     updateVideoGeometry();
@@ -1768,7 +1788,7 @@ bool ChatView::relayoutVisibleStale()
     const int top = verticalScrollBar()->value();
     const int bottom = top + viewport()->height();
     int first = itemAtY(top);
-    if (first < 0) first = 0;
+    if (first < 0) first = count - 1;
     int last = first;
     while (last + 1 < count && m_items[last + 1].y < bottom) ++last;
     first = qMax(0, first - 2);
@@ -1797,7 +1817,7 @@ void ChatView::relayoutWindow()
     else
         docTop = m_items[m_anchorIndex].y - m_anchorOffset;
     int first = itemAtY(qMax(0, docTop - margin));
-    if (first < 0) first = 0;
+    if (first < 0) first = count - 1; // below the last row; never "everything"
     int last = first;
     const int docBottom = docTop + viewH + margin;
     while (last + 1 < count && m_items[last + 1].y < docBottom) ++last;
@@ -1806,14 +1826,42 @@ void ChatView::relayoutWindow()
     last = qMin(count - 1, last + 1);
 
     for (int i = first; i <= last; ++i)
-        layoutItem(i, m_items[i].y, true);
+        if (isStale(i)) layoutItem(i, m_items[i].y, true); // rows that are current stay as they are
     m_windowFirst = first;
     m_windowLast = last;
     commitRelayout(true);
 
     // New heights can pull rows into view that were outside the window.
-    for (int guard = 0; guard < 3 && relayoutVisibleStale(); ++guard)
+    for (int guard = 0; guard < 12 && relayoutVisibleStale(); ++guard)
         commitRelayout(true);
+}
+
+void ChatView::beginLazyLayout()
+{
+    const int count = m_items.size();
+    if (count == 0) return;
+    m_layoutWidth = m_resizePreviewWidth = viewport()->width();
+
+    // Rows that have not been measured yet (layoutW == -1) get a height estimated from the
+    // newest ones, so the scroll bar is plausible from the start.
+    const int sample = qMin(count, 12);
+    for (Item &it : m_items) it.height = 64;
+    reflowPositions();
+    int sum = 0;
+    for (int i = count - sample; i < count; ++i) {
+        layoutItem(i, m_items[i].y, true);
+        sum += m_items[i].height;
+    }
+    const int estimate = qMax(24, sum / sample);
+    for (int i = 0; i < count - sample; ++i) m_items[i].height = estimate;
+    reflowPositions(); // y and height must agree before the window is chosen from them
+
+    m_anchorBottom = true;
+    m_relayoutActive = true;
+    m_bgStarted = false;
+    relayoutWindow();
+    m_resizeCleanupTimer->start(); // drop the measuring documents again once things have settled
+    m_relayoutTimer->start();
 }
 
 void ChatView::relayoutSlice()
@@ -1923,8 +1971,10 @@ void ChatView::paintEvent(QPaintEvent *)
     m_renderLast = resourceLast;
     previewResizeItems(resourceFirst, resourceLast);
 
-    for (int i = first; i <= last; ++i) ensureItemRenderResources(i);
+    for (int i = first; i <= last; ++i)
+        if (m_items[i].layoutW > 0) ensureItemRenderResources(i);
     for (int i = first; i <= last; ++i) {
+        if (m_items[i].layoutW <= 0) continue; // still waiting for the background layout
         p.save();
         p.translate(0, m_items[i].y - top);
         paintItem(p, i);
