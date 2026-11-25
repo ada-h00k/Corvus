@@ -148,6 +148,7 @@ private:
         bool showSender = false;
         // layout (item-local coordinates, valid for m_layoutWidth)
         int y = 0, height = 0;
+        int resizePreviewShiftX = 0; // horizontal delta already applied during an in-progress resize
         QRect dateRect, bubble, senderRect, quoteBox, quoteAuthorRect, quoteTextRect, textRect, timeRect, statusRect, pillsRect;
         QRect linkPreviewRect, linkPreviewImageRect, linkPreviewTitleRect, linkPreviewDescriptionRect, linkPreviewHostRect;
         QList<QRect> attRects;
@@ -188,6 +189,7 @@ private:
     void invalidateAllCachedConversations();
     void layoutItem(int i, int y, bool cacheMeasureDoc = false);
     void previewResize(int width);
+    void previewResizeItems(int first, int last);
     void relayoutAll(bool cacheMeasureDocs = false);
     void updateScrollRange();
     int totalHeight() const { return m_items.isEmpty() ? 0 : m_items.last().y + m_items.last().height; }
