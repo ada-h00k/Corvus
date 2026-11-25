@@ -226,6 +226,99 @@ int main(int argc, char **argv)
         pump();
     }
 
+    // Incremental relayout after a width change: the rows on screen are wrapped for the new width
+    // at once (the text re-wraps live while the window edge is dragged), the rest of the
+    // conversation follows in the background without moving what the user is looking at, and the
+    // end result is exactly what a fresh layout at that width gives.
+    {
+        QList<Message> many;
+        const QDateTime start = QDateTime::currentDateTime().addDays(-2);
+        for (int i = 0; i < 800; ++i) {
+            Message m;
+            m.time = start.addSecs(i * 90);
+            m.outgoing = i % 3 == 0;
+            m.sender = m.outgoing ? QString() : QString("Alice");
+            m.authorKey = m.outgoing ? "+491234567" : "+49111";
+            m.text = QString("message %1 ").arg(i) + QString("lorem ipsum dolor sit amet ").repeated(1 + i % 9);
+            many << m;
+        }
+        const auto settle = [&](ChatView &v) {
+            for (int i = 0; i < 4000 && v.relayoutPending(); ++i) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                QThread::msleep(1);
+            }
+        };
+        const auto firstVisible = [](const ChatView &v) {
+            for (int i = 0; i < v.messageCount(); ++i)
+                if (v.bubbleRect(i).bottom() > 0) return i;
+            return -1;
+        };
+
+        const QSize originalViewSize = view.size();
+        view.resize(760, 640);
+        view.showMessages(many);
+        pump();
+        QScrollBar *scroll = view.verticalScrollBar();
+        scroll->setValue(scroll->maximum() / 2);
+        pump();
+        const int topBefore = firstVisible(view);
+        CHECK(topBefore > 100 && topBefore < 700);
+
+        view.resize(430, 640);
+        // Rows on screen are wrapped for the new width immediately, not after a pause.
+        const int vw = view.viewport()->width();
+        int visibleRows = 0;
+        for (int i = firstVisible(view); i < view.messageCount() && view.bubbleRect(i).top() < view.viewport()->height(); ++i) {
+            CHECK(view.bubbleRect(i).width() <= int(vw * 0.75) + 1);
+            ++visibleRows;
+        }
+        CHECK(visibleRows > 3);
+        CHECK(view.relayoutPending()); // the other rows are still to come
+
+        settle(view);
+        CHECK(!view.relayoutPending());
+        CHECK(qAbs(firstVisible(view) - topBefore) <= 1); // nothing jumped while rows above changed height
+
+        // Identical to a layout made from scratch at this width.
+        {
+            ChatView fresh;
+            fresh.setSelfKey("+491234567");
+            fresh.setNameResolver([](const QString &k) { return k == "+49111" ? QString("Alice") : k; });
+            fresh.setAppearance(ap);
+            fresh.resize(view.size());
+            fresh.show();
+            fresh.showMessages(many);
+            pump();
+            settle(fresh); // the scroll bar appearing changes the width once more
+            pump();
+            CHECK(fresh.viewport()->width() == view.viewport()->width());
+            int mismatches = 0;
+            for (int i = 0; i < many.size(); ++i) {
+                const QRect a = view.bubbleRect(i).translated(0, scroll->value());
+                const QRect b = fresh.bubbleRect(i).translated(0, fresh.verticalScrollBar()->value());
+                if (a != b || view.textRect(i).size() != fresh.textRect(i).size()) ++mismatches;
+            }
+            CHECK(mismatches == 0);
+            CHECK(scroll->maximum() == fresh.verticalScrollBar()->maximum());
+        }
+
+        // Growing again while the previous pass is still running, and jumping to a message or
+        // switching chats before it has finished, must leave a complete layout behind.
+        view.resize(520, 640);
+        view.resize(600, 640);
+        view.scrollToMessage(5);
+        CHECK(!view.relayoutPending());
+        view.resize(480, 640);
+        view.showMessages({many.first()}, false, "relayout-chat-b", false, {});
+        pump();
+        view.showMessages(many, false, "relayout-chat-a", false, {});
+        view.resize(originalViewSize);
+        settle(view);
+        CHECK(!view.relayoutPending());
+        view.showMessages(sample(false));
+        pump();
+    }
+
     // colours are configurable
     Appearance red = ap;
     red.outBg = QColor("#c0392b");

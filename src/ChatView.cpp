@@ -28,6 +28,7 @@
 #include <QStyleOptionSlider>
 #include <QToolTip>
 #include <QTextDocument>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QToolButton>
 #include <QVideoFrame>
@@ -346,19 +347,28 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
         updateVideoGeometry();
         updateToLatestButton();
+        // The user scrolled while the off-screen rows are still being re-laid out: hold the
+        // new position instead of the one captured when the resize started.
+        if (m_relayoutActive && m_progScroll == 0) captureResizeAnchor();
     });
     connect(verticalScrollBar(), &QScrollBar::rangeChanged, this, [this] { updateToLatestButton(); });
     m_toLatest = new ScrollToLatestButton(viewport());
     m_toLatest->onClicked = [this] { verticalScrollBar()->setValue(verticalScrollBar()->maximum()); };
     m_resizeTimer = new QTimer(this);
     m_resizeTimer->setSingleShot(true);
-    // A full relayout walks every message; debounce it so a drag does not trigger
-    // dozens of whole-conversation passes per second.
-    m_resizeTimer->setInterval(70);
+    // Every resize event re-lays out only the rows on screen (relayoutWindow()), so the text
+    // re-wraps live while the window edge is dragged. Once the drag pauses, the rest of the
+    // conversation is brought up to date in short slices that never block the UI.
+    m_resizeTimer->setInterval(40);
     connect(m_resizeTimer, &QTimer::timeout, this, [this] {
-        relayoutAll(true);
-        verticalScrollBar()->setValue(m_resizeAtBottom ? verticalScrollBar()->maximum() : m_resizeScrollValue);
+        if (!m_relayoutActive) return;
+        m_bgStarted = false;
+        relayoutSlice();
     });
+    m_relayoutTimer = new QTimer(this);
+    m_relayoutTimer->setSingleShot(true);
+    m_relayoutTimer->setInterval(0);
+    connect(m_relayoutTimer, &QTimer::timeout, this, &ChatView::relayoutSlice);
     // Keep parsed text documents available across short pauses while the user drags
     // the window edge. The normal renderer still releases off-screen paint resources.
     m_resizeCleanupTimer = new QTimer(this);
@@ -471,6 +481,8 @@ void ChatView::invalidateAllCachedConversations()
 void ChatView::cacheCurrentConversation()
 {
     if (m_conversationKey.isEmpty()) return;
+
+    finishRelayout(); // cached rows must all be laid out for cached.layoutWidth
 
     stopVideoPlayback();
     clearSelection();
@@ -611,6 +623,7 @@ void ChatView::selectWordAt(int msg, int textPos)
 
 void ChatView::clearView()
 {
+    cancelRelayout();
     stopVideoPlayback();
     disposeItemResources(m_items);
     invalidateAllCachedConversations();
@@ -673,6 +686,7 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll, const Q
                                cached.layoutWidth == viewport()->width();
             if (valid) {
                 m_msgs = msgs;
+                cancelRelayout();
                 m_items = std::move(cached.items);
                 m_conversationKey = conversationKey;
                 m_bannerCycle = cached.bannerCycle;
@@ -750,6 +764,7 @@ void ChatView::replaceLastMessage(const Message &m)
 void ChatView::scrollToMessage(int idx)
 {
     if (idx < 0 || idx >= m_items.size()) return;
+    finishRelayout(); // the target row's position must not move afterwards
     const Item &it = m_items[idx];
     verticalScrollBar()->setValue(qBound(0, it.y + it.bubble.top() - 24, verticalScrollBar()->maximum()));
     m_flash = idx;
@@ -1243,6 +1258,7 @@ void ChatView::layoutItem(int i, int y, bool cacheMeasureDoc)
     const Message &m = m_msgs[i];
     const int W = viewport()->width();
     it.resizePreviewShiftX = 0;
+    it.layoutW = W;
     if (!cacheMeasureDoc) it.measureDoc.reset();
 
     const QFont base = font();
@@ -1539,6 +1555,7 @@ void ChatView::layoutItem(int i, int y, bool cacheMeasureDoc)
 
 void ChatView::relayoutAll(bool cacheMeasureDocs)
 {
+    cancelRelayout(); // everything below is laid out from scratch
     m_layoutWidth = viewport()->width();
     m_resizePreviewWidth = m_layoutWidth;
 
@@ -1597,12 +1614,15 @@ void ChatView::previewResizeItems(int first, int last)
     last = qMin(m_items.size() - 1, last);
     if (first > last) return;
 
-    const int targetShift = m_resizePreviewWidth - m_layoutWidth;
     const auto shift = [](QRect &rect, int dx) {
         if (!rect.isNull()) rect.translate(dx, 0);
     };
     for (int i = first; i <= last; ++i) {
         Item &it = m_items[i];
+        // Rows that are still waiting for the background relayout were laid out for an older
+        // width, so every row is shifted relative to its own layout width.
+        if (it.layoutW <= 0) continue;
+        const int targetShift = m_resizePreviewWidth - it.layoutW;
         const int dx = targetShift - it.resizePreviewShiftX;
         if (dx != 0 && i < m_msgs.size() && m_msgs[i].outgoing) {
             shift(it.bubble, dx);
@@ -1640,6 +1660,14 @@ void ChatView::updateScrollRange()
     verticalScrollBar()->setPageStep(viewport()->height());
 }
 
+void ChatView::scrollContentsBy(int dx, int dy)
+{
+    // When rows off screen change height the anchor moves the scroll bar by exactly as much as
+    // the content moved, so the viewport shows the same picture: nothing to repaint.
+    if (m_quietScroll) return;
+    QAbstractScrollArea::scrollContentsBy(dx, dy);
+}
+
 void ChatView::resizeEvent(QResizeEvent *e)
 {
     QAbstractScrollArea::resizeEvent(e);
@@ -1647,15 +1675,23 @@ void ChatView::resizeEvent(QResizeEvent *e)
     const bool widthChanged = width != m_layoutWidth;
     const bool previewNeedsReset = m_resizePreviewWidth >= 0 && width != m_resizePreviewWidth;
     if (widthChanged || previewNeedsReset) {
-        previewResize(width);
-        if (!m_resizeTimer->isActive()) {
-            m_resizeAtBottom = atBottom();
-            m_resizeScrollValue = verticalScrollBar()->value();
+        if (m_items.isEmpty() || m_layoutWidth <= 0) {
+            // Nothing has been laid out yet.
+            m_layoutWidth = m_resizePreviewWidth = width;
+            updateScrollRange();
+        } else {
+            if (!m_relayoutActive) {
+                captureResizeAnchor();
+                m_relayoutActive = true;
+            }
+            // Slices of the background pass belong to the previous width.
+            m_relayoutTimer->stop();
+            m_bgStarted = false;
+            m_layoutWidth = m_resizePreviewWidth = width;
+            relayoutWindow();
+            m_resizeTimer->start();
+            m_resizeCleanupTimer->start();
         }
-        updateScrollRange();
-        verticalScrollBar()->setValue(m_resizeAtBottom ? verticalScrollBar()->maximum() : m_resizeScrollValue);
-        m_resizeTimer->start();
-        m_resizeCleanupTimer->start();
     } else {
         const bool bottom = atBottom();
         const int old = verticalScrollBar()->value();
@@ -1664,6 +1700,189 @@ void ChatView::resizeEvent(QResizeEvent *e)
     }
     updateToLatestButton();
     updateVideoGeometry();
+}
+
+// ------------------------------------------------- incremental relayout (resize)
+//
+// A width change invalidates the wrapping of every message, but only the rows on screen need
+// to be right immediately. relayoutWindow() lays those out (a few milliseconds, so the text
+// re-wraps live while the edge is dragged); relayoutSlice() then catches up with the rest of
+// the conversation in short time boxes. Rows still waiting are drawn as before the resize,
+// shifted to the new right edge (previewResizeItems()). Item heights change as rows are
+// brought up to date, so a scroll anchor keeps what the user is looking at in place.
+
+void ChatView::reflowPositions()
+{
+    // Cheap (one addition per row): the expensive part of a layout is measuring the text.
+    int y = m_bannerOffset;
+    for (Item &it : m_items) {
+        it.y = y;
+        y += it.height;
+    }
+}
+
+void ChatView::captureResizeAnchor()
+{
+    m_anchorBottom = m_items.isEmpty() || atBottom();
+    if (m_anchorBottom) return;
+    const int value = verticalScrollBar()->value();
+    int idx = itemAtY(value);
+    if (idx < 0) idx = m_items.size() - 1;
+    m_anchorIndex = idx;
+    m_anchorOffset = m_items[idx].y - value;
+}
+
+void ChatView::applyResizeAnchor()
+{
+    QScrollBar *bar = verticalScrollBar();
+    int target = bar->maximum();
+    if (!m_anchorBottom && m_anchorIndex >= 0 && m_anchorIndex < m_items.size())
+        target = m_items[m_anchorIndex].y - m_anchorOffset;
+    ++m_progScroll;
+    bar->setValue(qBound(0, target, bar->maximum()));
+    --m_progScroll;
+}
+
+void ChatView::commitRelayout(bool repaint)
+{
+    // updateScrollRange() may clamp the value and so emit valueChanged(); that is not the
+    // user scrolling and must not move the anchor.
+    m_quietScroll = !repaint;
+    ++m_progScroll;
+    reflowPositions();
+    updateScrollRange();
+    applyResizeAnchor();
+    --m_progScroll;
+    m_quietScroll = false;
+    updateVideoGeometry();
+    updateToLatestButton();
+    // Rows above or below the screen changing height moves nothing that is visible (the
+    // anchor sees to that), so the background pass does not repaint.
+    if (repaint) viewport()->update();
+}
+
+bool ChatView::relayoutVisibleStale()
+{
+    const int count = m_items.size();
+    if (count == 0) return false;
+    const int top = verticalScrollBar()->value();
+    const int bottom = top + viewport()->height();
+    int first = itemAtY(top);
+    if (first < 0) first = 0;
+    int last = first;
+    while (last + 1 < count && m_items[last + 1].y < bottom) ++last;
+    first = qMax(0, first - 2);
+    last = qMin(count - 1, last + 2);
+    bool any = false;
+    for (int i = first; i <= last; ++i) {
+        if (!isStale(i)) continue;
+        layoutItem(i, m_items[i].y, true);
+        any = true;
+    }
+    return any;
+}
+
+void ChatView::relayoutWindow()
+{
+    const int count = m_items.size();
+    if (count == 0) return;
+
+    // The part of the document that will be on screen, in the coordinates of the layout that
+    // is still in place (y and height are consistent with each other there).
+    const int viewH = viewport()->height();
+    const int margin = 160;
+    int docTop;
+    if (m_anchorBottom || m_anchorIndex < 0 || m_anchorIndex >= count)
+        docTop = qMax(0, totalHeight() + 6 - viewH);
+    else
+        docTop = m_items[m_anchorIndex].y - m_anchorOffset;
+    int first = itemAtY(qMax(0, docTop - margin));
+    if (first < 0) first = 0;
+    int last = first;
+    const int docBottom = docTop + viewH + margin;
+    while (last + 1 < count && m_items[last + 1].y < docBottom) ++last;
+    if (m_anchorBottom) last = count - 1;
+    first = qMax(0, first - 1);
+    last = qMin(count - 1, last + 1);
+
+    for (int i = first; i <= last; ++i)
+        layoutItem(i, m_items[i].y, true);
+    m_windowFirst = first;
+    m_windowLast = last;
+    commitRelayout(true);
+
+    // New heights can pull rows into view that were outside the window.
+    for (int guard = 0; guard < 3 && relayoutVisibleStale(); ++guard)
+        commitRelayout(true);
+}
+
+void ChatView::relayoutSlice()
+{
+    if (!m_relayoutActive) return;
+    constexpr int kSliceMs = 4; // well below a frame: input and painting stay responsive
+    QElapsedTimer clock;
+    clock.start();
+
+    // The user may have scrolled into rows that are still waiting.
+    const bool visibleChanged = relayoutVisibleStale();
+    bool changed = visibleChanged;
+
+    const int count = m_items.size();
+    if (!m_bgStarted) {
+        m_bgStarted = true;
+        m_bgUp = m_windowFirst - 1;
+        m_bgDown = m_windowLast + 1;
+    }
+    const auto nextDown = [&] {
+        while (m_bgDown < count && !isStale(m_bgDown)) ++m_bgDown;
+        return m_bgDown < count ? m_bgDown++ : -1;
+    };
+    const auto nextUp = [&] {
+        while (m_bgUp >= 0 && m_bgUp < count && !isStale(m_bgUp)) --m_bgUp;
+        return (m_bgUp >= 0 && m_bgUp < count) ? m_bgUp-- : -1;
+    };
+    bool exhausted = false;
+    bool downTurn = true;
+    while (true) {
+        int i = downTurn ? nextDown() : nextUp();
+        if (i < 0) i = downTurn ? nextUp() : nextDown();
+        if (i < 0) {
+            exhausted = true;
+            break;
+        }
+        downTurn = !downTurn;
+        layoutItem(i, m_items[i].y, false);
+        changed = true;
+        if (clock.elapsed() >= kSliceMs) break;
+    }
+    if (changed) commitRelayout(visibleChanged);
+
+    if (exhausted) {
+        m_relayoutActive = false;
+        m_bgStarted = false;
+    } else {
+        m_relayoutTimer->start();
+    }
+}
+
+void ChatView::finishRelayout()
+{
+    if (!m_relayoutActive) return;
+    m_resizeTimer->stop();
+    m_relayoutTimer->stop();
+    for (int i = 0; i < m_items.size(); ++i)
+        if (isStale(i)) layoutItem(i, m_items[i].y, false);
+    commitRelayout(true);
+    m_relayoutActive = false;
+    m_bgStarted = false;
+}
+
+void ChatView::cancelRelayout()
+{
+    if (m_resizeTimer) m_resizeTimer->stop();
+    if (m_relayoutTimer) m_relayoutTimer->stop();
+    m_relayoutActive = false;
+    m_bgStarted = false;
 }
 
 int ChatView::itemAtY(int docY) const

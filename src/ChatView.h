@@ -74,6 +74,9 @@ public:
     int messageCount() const { return m_msgs.size(); }
     // Incoming messages that arrived while the view was scrolled away from the bottom.
     int missedMessages() const { return m_missed; }
+    // True while the layout of off-screen messages is still being brought up to date after a
+    // resize (the visible part is always current). Used by the benchmark and tests.
+    bool relayoutPending() const { return m_relayoutActive; }
 
     // Geometry in viewport coordinates (also used by tests).
     QRect bubbleRect(int idx) const;
@@ -115,6 +118,7 @@ signals:
 protected:
     void paintEvent(QPaintEvent *e) override;
     void resizeEvent(QResizeEvent *e) override;
+    void scrollContentsBy(int dx, int dy) override;
     void mousePressEvent(QMouseEvent *e) override;
     void mouseMoveEvent(QMouseEvent *e) override;
     void mouseReleaseEvent(QMouseEvent *e) override;
@@ -148,6 +152,7 @@ private:
         bool showSender = false;
         // layout (item-local coordinates, valid for m_layoutWidth)
         int y = 0, height = 0;
+        int layoutW = -1;            // viewport width this item was last laid out for
         int resizePreviewShiftX = 0; // horizontal delta already applied during an in-progress resize
         QRect dateRect, bubble, senderRect, quoteBox, quoteAuthorRect, quoteTextRect, textRect, timeRect, statusRect, pillsRect;
         QRect linkPreviewRect, linkPreviewImageRect, linkPreviewTitleRect, linkPreviewDescriptionRect, linkPreviewHostRect;
@@ -191,6 +196,18 @@ private:
     void previewResize(int width);
     void previewResizeItems(int first, int last);
     void relayoutAll(bool cacheMeasureDocs = false);
+    // Incremental relayout after a width change: the visible window is laid out at once, the
+    // rest in short time slices (see resizeEvent()). The scroll position is held by an anchor.
+    bool isStale(int i) const { return m_items[i].layoutW != m_layoutWidth; }
+    void reflowPositions();               // y of every item from the current heights (O(n) adds)
+    void captureResizeAnchor();
+    void applyResizeAnchor();
+    void commitRelayout(bool repaint);    // reflow y, scroll range, scroll anchor, video overlay
+    void relayoutWindow();                // current viewport (+ margin) first
+    bool relayoutVisibleStale();          // lay out stale rows that are on screen; true if any
+    void relayoutSlice();                 // one time-boxed step of the background pass
+    void finishRelayout();                // complete it synchronously (cache, jump to message)
+    void cancelRelayout();                // everything is about to be laid out from scratch
     void updateScrollRange();
     int totalHeight() const { return m_items.isEmpty() ? 0 : m_items.last().y + m_items.last().height; }
     int itemAtY(int docY) const;
@@ -238,8 +255,16 @@ private:
     int m_resizePreviewWidth = -1;
     int m_renderFirst = -1;
     int m_renderLast = -1;
-    int m_resizeScrollValue = 0;
-    bool m_resizeAtBottom = true;
+    // Incremental relayout state (valid while m_relayoutActive).
+    bool m_relayoutActive = false;
+    bool m_anchorBottom = true;    // keep the newest message in view
+    int m_anchorIndex = 0;         // otherwise: this message ...
+    int m_anchorOffset = 0;        // ... stays this many px below the top of the viewport
+    int m_progScroll = 0;          // >0 while ChatView itself moves the scroll bar
+    bool m_quietScroll = false;    // that move leaves the picture unchanged: skip the repaint
+    int m_windowFirst = 0, m_windowLast = -1; // rows laid out eagerly by the last resize event
+    bool m_bgStarted = false;
+    int m_bgDown = 0, m_bgUp = -1; // next row below / above the window for the background pass
     int m_audioMessage = -1;
     int m_audioAttachment = -1;
     bool m_audioLoading = false;
@@ -270,6 +295,7 @@ private:
     QTimer *m_autoScrollTimer = nullptr;
     QTimer *m_resizeTimer = nullptr;
     QTimer *m_resizeCleanupTimer = nullptr;
+    QTimer *m_relayoutTimer = nullptr; // zero-delay timer driving the background slices
     ScrollToLatestButton *m_toLatest = nullptr; // round arrow button at the bottom right
     int m_missed = 0;
     QPoint m_autoScrollAnchor;

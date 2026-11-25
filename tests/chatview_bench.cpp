@@ -82,14 +82,30 @@ int main(int argc, char **argv)
     std::printf("messages: %d\n", n);
     step("open chat (cold)", [&] { view.showMessages(msgs); });
     step("switch away and back (warm)", [&] { view.showMessages(msgs); });
-    // The relayout after a resize is debounced by a timer, so measure CPU time while it settles.
+    // After a resize the visible rows are laid out at once and the rest in short background
+    // slices. Measure the resize call itself, the longest stretch the event loop was blocked
+    // while the background pass ran, and how long it took to settle; the checksum is taken
+    // once the layout is complete, so it must match the fully synchronous result.
     auto cpuMs = [] { timespec ts; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
     auto resizeStep = [&](const char *name, int w) {
         const double c0 = cpuMs();
+        QElapsedTimer call;
+        call.start();
         view.resize(w, 700);
-        for (int i = 0; i < 30; ++i) { QCoreApplication::processEvents(); QThread::msleep(10); }
-        std::printf("%-34s %8.1f ms CPU  checksum %016llx\n", name, cpuMs() - c0,
-                    static_cast<unsigned long long>(checksum(view)));
+        const double callMs = call.nsecsElapsed() / 1e6;
+        double longest = callMs;
+        QElapsedTimer settle;
+        settle.start();
+        for (int i = 0; i < 30 || view.relayoutPending(); ++i) {
+            QElapsedTimer one;
+            one.start();
+            QCoreApplication::processEvents();
+            longest = qMax(longest, one.nsecsElapsed() / 1e6);
+            QThread::msleep(2);
+            if (settle.elapsed() > 30000) break;
+        }
+        std::printf("%-34s call %6.1f ms  longest stall %6.1f ms  CPU %7.1f ms  checksum %016llx\n", name,
+                    callMs, longest, cpuMs() - c0, static_cast<unsigned long long>(checksum(view)));
     };
     resizeStep("resize 900 -> 1000 (same wrap)", 1000);
     resizeStep("resize 1000 -> 500 (new wrap)", 500);
