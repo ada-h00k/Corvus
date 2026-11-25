@@ -22,6 +22,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QSize>
 #include <QSlider>
 #include <QTemporaryDir>
 #include <QThread>
@@ -200,6 +201,29 @@ int main(int argc, char **argv)
         CHECK(view.textRect(1).left() == expandedTextLeft + shrinkDelta);
         pump();
         CHECK(view.bubbleRect(1).right() == narrowedWidth - 13);
+    }
+
+    // A row that scrolls into view during an active resize must receive the current
+    // preview shift even though it was not part of the initial visible range.
+    {
+        const QSize originalViewSize = view.size();
+        const QList<Message> many = sample(true);
+        view.showMessages(many);
+        pump();
+        QScrollBar *scroll = view.verticalScrollBar();
+        scroll->setValue(0);
+        pump();
+        view.resize(view.width() + 80, view.height());
+        const int resizedWidth = view.viewport()->width();
+        scroll->setValue(scroll->maximum());
+        view.viewport()->repaint();
+        CHECK(view.bubbleRect(many.size() - 1).right() == resizedWidth - 13);
+        pump();
+        CHECK(view.bubbleRect(many.size() - 1).right() == resizedWidth - 13);
+        view.resize(originalViewSize);
+        pump();
+        view.showMessages(sample(false));
+        pump();
     }
 
     // colours are configurable

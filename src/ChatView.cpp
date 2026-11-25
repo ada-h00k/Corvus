@@ -44,6 +44,8 @@ constexpr int kPadX = 12;
 constexpr int kPadY = 8;
 constexpr int kGap = 4;
 constexpr int kMaxImage = 300;
+constexpr int kMaxCachedConversations = 3;
+constexpr int kMaxCachedConversationItems = 2500;
 
 QFont scaled(const QFont &f, qreal factor, bool bold = false)
 {
@@ -350,7 +352,9 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     m_toLatest->onClicked = [this] { verticalScrollBar()->setValue(verticalScrollBar()->maximum()); };
     m_resizeTimer = new QTimer(this);
     m_resizeTimer->setSingleShot(true);
-    m_resizeTimer->setInterval(24);
+    // A full relayout walks every message; debounce it so a drag does not trigger
+    // dozens of whole-conversation passes per second.
+    m_resizeTimer->setInterval(70);
     connect(m_resizeTimer, &QTimer::timeout, this, [this] {
         relayoutAll(true);
         verticalScrollBar()->setValue(m_resizeAtBottom ? verticalScrollBar()->maximum() : m_resizeScrollValue);
@@ -485,8 +489,17 @@ void ChatView::cacheCurrentConversation()
     discardCachedConversation(m_conversationKey);
     m_conversationCache.insert(m_conversationKey, std::move(cached));
     m_conversationCacheOrder.append(m_conversationKey);
-    while (m_conversationCacheOrder.size() > 4)
+    const auto cachedItemCount = [this] {
+        qsizetype count = 0;
+        for (auto it = m_conversationCache.cbegin(); it != m_conversationCache.cend(); ++it)
+            count += it.value().items.size();
+        return count;
+    };
+    while (!m_conversationCacheOrder.isEmpty() &&
+           (m_conversationCacheOrder.size() > kMaxCachedConversations ||
+            cachedItemCount() > kMaxCachedConversationItems)) {
         discardCachedConversation(m_conversationCacheOrder.first());
+    }
 
     m_msgs.clear();
     m_items.clear();
@@ -1229,6 +1242,8 @@ void ChatView::layoutItem(int i, int y, bool cacheMeasureDoc)
     Item &it = m_items[i];
     const Message &m = m_msgs[i];
     const int W = viewport()->width();
+    it.resizePreviewShiftX = 0;
+    if (!cacheMeasureDoc) it.measureDoc.reset();
 
     const QFont base = font();
     const QFont small = scaled(base, 0.85);
@@ -1526,9 +1541,28 @@ void ChatView::relayoutAll(bool cacheMeasureDocs)
 {
     m_layoutWidth = viewport()->width();
     m_resizePreviewWidth = m_layoutWidth;
+
+    // QTextDocuments are comparatively expensive and can be large. Retain them only
+    // for rows the renderer is about to paint (plus the same eight-row safety margin),
+    // not for every message in a long conversation.
+    int measureFirst = 0;
+    int measureLast = -1;
+    if (cacheMeasureDocs && !m_items.isEmpty()) {
+        const int top = verticalScrollBar()->value();
+        const int bottom = top + viewport()->height();
+        measureFirst = itemAtY(top);
+        if (measureFirst < 0) measureFirst = 0;
+        measureLast = measureFirst;
+        while (measureLast + 1 < m_items.size() && m_items[measureLast + 1].y < bottom)
+            ++measureLast;
+        measureFirst = qMax(0, measureFirst - 8);
+        measureLast = qMin(m_items.size() - 1, measureLast + 8);
+    }
+
     int y = m_bannerOffset; // room for the pinned-message banner above the first bubble
     for (int i = 0; i < m_items.size(); ++i) {
-        layoutItem(i, y, cacheMeasureDocs);
+        const bool keepMeasureDoc = cacheMeasureDocs && i >= measureFirst && i <= measureLast;
+        layoutItem(i, y, keepMeasureDoc);
         y += m_items[i].height;
     }
     updateScrollRange();
@@ -1539,51 +1573,65 @@ void ChatView::relayoutAll(bool cacheMeasureDocs)
 void ChatView::previewResize(int width)
 {
     if (m_resizePreviewWidth < 0) m_resizePreviewWidth = m_layoutWidth;
-    if (m_resizePreviewWidth <= 0) {
-        m_resizePreviewWidth = width;
-        return;
-    }
+    if (width == m_resizePreviewWidth) return;
+    m_resizePreviewWidth = width;
+    if (m_layoutWidth <= 0 || m_items.isEmpty()) return;
 
-    const int dx = width - m_resizePreviewWidth;
-    if (dx == 0) return;
+    // Only touch rows near the viewport in the resize-event path. Newly visible rows
+    // are adjusted lazily by paintEvent(), avoiding an O(total messages) mouse-move loop.
+    const int top = verticalScrollBar()->value();
+    const int bottom = top + viewport()->height();
+    int first = itemAtY(top);
+    if (first < 0) first = 0;
+    int last = first;
+    while (last + 1 < m_items.size() && m_items[last + 1].y < bottom)
+        ++last;
+    previewResizeItems(qMax(0, first - 8), qMin(m_items.size() - 1, last + 8));
+    viewport()->update();
+}
 
-    const auto shift = [dx](QRect &rect) {
+void ChatView::previewResizeItems(int first, int last)
+{
+    if (m_layoutWidth <= 0 || m_resizePreviewWidth < 0 || m_items.isEmpty()) return;
+    first = qMax(0, first);
+    last = qMin(m_items.size() - 1, last);
+    if (first > last) return;
+
+    const int targetShift = m_resizePreviewWidth - m_layoutWidth;
+    const auto shift = [](QRect &rect, int dx) {
         if (!rect.isNull()) rect.translate(dx, 0);
     };
-    for (int i = 0; i < m_items.size(); ++i) {
+    for (int i = first; i <= last; ++i) {
         Item &it = m_items[i];
-        if (i < m_msgs.size() && m_msgs[i].outgoing) {
-            // Keep outgoing bubbles attached to the right edge during the drag.
-            shift(it.bubble);
-            shift(it.senderRect);
-            shift(it.quoteBox);
-            shift(it.quoteAuthorRect);
-            shift(it.quoteTextRect);
-            shift(it.textRect);
-            shift(it.timeRect);
-            shift(it.statusRect);
-            shift(it.pillsRect);
-            shift(it.linkPreviewRect);
-            shift(it.linkPreviewImageRect);
-            shift(it.linkPreviewTitleRect);
-            shift(it.linkPreviewDescriptionRect);
-            shift(it.linkPreviewHostRect);
-            shift(it.pollRect);
-            shift(it.pollStatusRect);
-            shift(it.pollQuestionRect);
-            shift(it.pollFooterRect);
-            shift(it.contactRect);
-            shift(it.contactButtonRect);
-            for (QRect &rect : it.attRects) shift(rect);
-            for (QRect &rect : it.pollOptionRects) shift(rect);
-            for (Pill &pill : it.pills) shift(pill.rect);
+        const int dx = targetShift - it.resizePreviewShiftX;
+        if (dx != 0 && i < m_msgs.size() && m_msgs[i].outgoing) {
+            shift(it.bubble, dx);
+            shift(it.senderRect, dx);
+            shift(it.quoteBox, dx);
+            shift(it.quoteAuthorRect, dx);
+            shift(it.quoteTextRect, dx);
+            shift(it.textRect, dx);
+            shift(it.timeRect, dx);
+            shift(it.statusRect, dx);
+            shift(it.pillsRect, dx);
+            shift(it.linkPreviewRect, dx);
+            shift(it.linkPreviewImageRect, dx);
+            shift(it.linkPreviewTitleRect, dx);
+            shift(it.linkPreviewDescriptionRect, dx);
+            shift(it.linkPreviewHostRect, dx);
+            shift(it.pollRect, dx);
+            shift(it.pollStatusRect, dx);
+            shift(it.pollQuestionRect, dx);
+            shift(it.pollFooterRect, dx);
+            shift(it.contactRect, dx);
+            shift(it.contactButtonRect, dx);
+            for (QRect &rect : it.attRects) shift(rect, dx);
+            for (QRect &rect : it.pollOptionRects) shift(rect, dx);
+            for (Pill &pill : it.pills) shift(pill.rect, dx);
         }
-        // Date separators span the complete viewport, regardless of message direction.
-        if (!it.dateRect.isNull()) it.dateRect.setWidth(width);
+        if (!it.dateRect.isNull()) it.dateRect.setWidth(m_resizePreviewWidth);
+        it.resizePreviewShiftX = targetShift;
     }
-
-    m_resizePreviewWidth = width;
-    viewport()->update();
 }
 
 void ChatView::updateScrollRange()
@@ -1654,6 +1702,7 @@ void ChatView::paintEvent(QPaintEvent *)
         if (i < resourceFirst || i > resourceLast) releaseItemRenderResources(i);
     m_renderFirst = resourceFirst;
     m_renderLast = resourceLast;
+    previewResizeItems(resourceFirst, resourceLast);
 
     for (int i = first; i <= last; ++i) ensureItemRenderResources(i);
     for (int i = first; i <= last; ++i) {
