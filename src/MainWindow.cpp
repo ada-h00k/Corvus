@@ -943,7 +943,9 @@ MainWindow::MainWindow()
     settings->addAction(tr("Configure Corvus …"), QKeySequence::Preferences, this, [this] { openSettings(); });
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
-    help->addAction(tr("Check for backend update"), this, [this] { checkForUpdates(); });
+    // Flatpak ships corvus-cli together with Corvus; it is updated through Flatpak.
+    if (qEnvironmentVariableIsEmpty("FLATPAK_ID"))
+        help->addAction(tr("Check for backend update"), this, [this] { checkForUpdates(); });
     help->addAction(tr("About"), this, &MainWindow::showAbout);
 
     for (int index = 0; index < 9; ++index) {
