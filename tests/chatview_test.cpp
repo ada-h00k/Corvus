@@ -22,6 +22,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QSize>
 #include <QSlider>
 #include <QTemporaryDir>
 #include <QThread>
