@@ -44,7 +44,13 @@ Differences from the Qt app:
   The app quarantines all files it creates (`LSFileQuarantineEnabled`); corvus-cli runs through the embedded helper
   `Contents/Helpers/corvus-signal-cli.app` so it does not inherit that and can load its native libraries.
 - The history is stored in `~/Library/Application Support/corvus/corvus/`, the same
-  location a Qt build on macOS uses.
+  location a Qt build on macOS uses. Both apps read and write every record field of the other
+  (`Sources/CorvusCore/Records.swift` mirrors `src/Records.cpp`), so switching between them loses nothing.
+- Text formatting uses the Format menu (⌘B, ⌘I, ⇧⌘X strikethrough, ⇧⌘M monospace, ⇧⌘P spoiler) or the
+  message field's context menu instead of the Qt app's floating formatting bar.
+- Polls and contact cards are under the attach button's menu (the arrow next to the paperclip).
+- Spell checking languages are chosen in macOS (Edit → Spelling and Grammar), not in a Corvus menu.
+- "Bounce the Dock icon for new messages" takes the place of "Flash the taskbar".
 
 The release workflow (`.github/workflows/release.yml`) builds and tests the app and attaches
 `corvus-macos-arm64.zip` (Apple silicon) to every release. It is signed ad hoc only, so on
@@ -52,3 +58,24 @@ first launch open it with right-click → *Open*.
 
 Debug builds (`swift build`) accept `SIGNAL_CLI_MAC_TEST_PASSPHRASE` and `SIGNAL_CLI_MAC_DEBUG_COMMANDS`
 for unattended runs against `tests/mock-signal-cli.py` (see `Sources/CorvusMac/DebugHooks.swift`).
+
+### Trying it without a second Signal account
+
+The mock backend (`tests/mock-signal-cli.py`) answers polls, contact cards, blocking, message requests
+(contact "Dave" is an open request), safety numbers and trust like corvus-cli does. The app keeps its
+history and settings in your user account, so try it as a separate macOS user (or after backing up
+`~/Library/Application Support/corvus` and `defaults export` of the app's settings):
+
+```sh
+cp ../tests/mock-signal-cli.py /tmp/mock-corvus-cli && chmod +x /tmp/mock-corvus-cli
+swift build
+SIGNAL_CLI_MAC_TEST_PASSPHRASE=test .build/debug/CorvusMac   # then Settings → Signal backend … → /tmp/mock-corvus-cli
+```
+
+Incoming messages are simulated with `MOCK_INJECT=<file>`: every JSON line (an envelope) appended to that file
+arrives as if it had been received, for example a poll, a pin, a View Once photo or a file named `invoice\u202Etxt.exe`:
+
+```sh
+MOCK_INJECT=/tmp/inject SIGNAL_CLI_MAC_TEST_PASSPHRASE=test .build/debug/CorvusMac &
+echo '{"sourceNumber":"+49111","timestamp":1,"dataMessage":{"timestamp":1,"pollCreate":{"question":"Lunch?","options":["Pizza","Sushi"]}}}' >> /tmp/inject
+```
