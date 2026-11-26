@@ -14,6 +14,9 @@ struct LinkView: View {
     @State private var status = ""
     @State private var running = false
     @State private var process: Process?
+    @State private var input: FileHandle?          // corvus-cli reads the history transfer answer here
+    @State private var transferOffered = false
+    @State private var transferAnswered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -44,6 +47,17 @@ struct LinkView: View {
                 .disabled(uri.isEmpty)
             }
             Text(status).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if transferOffered && !transferAnswered {
+                // The phone offers its recent history (Signal's synchronized start), like Signal Desktop asks.
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Your phone offers to transfer the recent chat history (last 45 days) to this computer.")
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Transfer history") { answerTransfer(true) }.keyboardShortcut(.defaultAction)
+                        Button("Continue without") { answerTransfer(false) }
+                    }
+                }
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction)
@@ -75,7 +89,11 @@ struct LinkView: View {
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
-        p.standardInput = FileHandle.nullDevice
+        let stdin = Pipe()
+        p.standardInput = stdin
+        input = stdin.fileHandleForWriting
+        transferOffered = false
+        transferAnswered = false
         var buffer = ""
         out.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
@@ -83,15 +101,11 @@ struct LinkView: View {
             let s = String(decoding: d, as: UTF8.self)
             Task { @MainActor in
                 buffer += s
-                for line in buffer.split(separator: "\n") {
-                    let t = line.trimmingCharacters(in: .whitespaces)
-                    if t.hasPrefix("sgnl://") || t.hasPrefix("tsdevice:") {
-                        if uri != t {
-                            uri = t
-                            status = "Please scan the QR code with your phone …"
-                        }
-                        break
-                    }
+                // Complete lines only; the trailing partial one stays in the buffer.
+                while let nl = buffer.firstIndex(of: "\n") {
+                    let t = buffer[..<nl].trimmingCharacters(in: .whitespaces)
+                    buffer.removeSubrange(...nl)
+                    handleLine(t)
                 }
             }
         }
@@ -117,6 +131,38 @@ struct LinkView: View {
             running = false
             status = "\(BackendInfo.name(forExecutable: executable)) could not be started: \(error.localizedDescription)"
         }
+    }
+
+    /// corvus-cli reports the phone's transfer offer and the import progress after the QR code was scanned.
+    private func handleLine(_ t: String) {
+        if t.isEmpty { return }
+        if t == "history-offered" {
+            if !transferOffered {
+                transferOffered = true
+                status = "Waiting for your choice …"
+            }
+        } else if t.hasPrefix("history-progress ") {
+            status = "Importing chat history … (\(t.dropFirst(17)) messages)"
+        } else if t.hasPrefix("history-done") {
+            let count = t.dropFirst(12).trimmingCharacters(in: .whitespaces)
+            status = count.isEmpty ? "Chat history transferred." : "Chat history transferred (\(count) messages)."
+        } else if t == "history-skip" {
+            status = "Linked without chat history."
+        } else if t.hasPrefix("history-error ") {
+            status = "The chat history transfer failed, linking continues without it:\n\(t.dropFirst(14))"
+        } else if t.hasPrefix("sgnl://") || t.hasPrefix("tsdevice:") {
+            if uri != t {
+                uri = t
+                status = "Please scan the QR code with your phone …"
+            }
+        }
+    }
+
+    private func answerTransfer(_ transfer: Bool) {
+        guard !transferAnswered, let input else { return }
+        transferAnswered = true
+        status = transfer ? "Transferring chat history …" : "Linked without chat history."
+        try? input.write(contentsOf: Data((transfer ? "transfer\n" : "skip\n").utf8))
     }
 
     private func cancel() {

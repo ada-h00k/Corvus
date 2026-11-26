@@ -57,6 +57,23 @@ struct ContentView: View {
         .sheet(isPresented: $model.messageRequestsShown) {
             MessageRequestsView()
         }
+        .sheet(isPresented: Binding(get: { model.importActive }, set: { _ in })) {
+            // Like the official client's loading screen: the chats appear once the import is done.
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Chat history").font(.headline)
+                Text(model.importTotal > 0
+                     ? "Importing the transferred chat history … (\(min(model.importDone, model.importTotal)) of \(model.importTotal) messages)"
+                     : "Importing the transferred chat history …")
+                if model.importTotal > 0 {
+                    ProgressView(value: Double(min(model.importDone, model.importTotal)), total: Double(model.importTotal))
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
+            }
+            .padding(20)
+            .frame(width: 420)
+            .interactiveDismissDisabled()
+        }
         .sheet(isPresented: Binding(get: { model.giphyApiKey != nil }, set: { if !$0 { model.giphyApiKey = nil } })) {
             if let key = model.giphyApiKey {
                 GiphyPicker(apiKey: key) { url, analytics in model.sendGif(url: url, analytics: analytics) }

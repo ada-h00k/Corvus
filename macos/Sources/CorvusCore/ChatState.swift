@@ -19,6 +19,10 @@ public struct ChatState {
     public var contactNames: [String: String] = [:]   // key -> contact name from signal-cli
     public var pendingSends: [String: PendingSend] = [:]
     public var account = ""
+    /// While the phone's transferred history is replayed: (timestamp -> authors) per chat, a constant-time
+    /// duplicate check instead of a scan per message.
+    public var importSeen: [String: [Int64: Set<String>]] = [:]
+    var importBaseline: [String: Set<String>] = [:]
     /// Declined message requests (Qt record "j"): they outlive a deleted conversation.
     public var declined: Set<String> = []
     /// Receipts for timestamps not (yet) in any chat: the send RPC may still be running. Applied on confirmation.
@@ -285,6 +289,45 @@ public struct ChatState {
             recs.append(Records.archive(key, archived: false, sigArchived: convs[key]!.sigArchived))
         }
         return (at, recs)
+    }
+
+    /// A message from the transferred history: inserted silently in its original order (no unread count),
+    /// duplicates rejected. Returns the records to persist; empty for a duplicate.
+    public mutating func addHistoryMessage(_ key: String, _ m0: Message, title: String = "", group: Bool = false) -> [JSON] {
+        ensure(key, title: title, group: group)
+        var m = m0
+        let author = effectiveAuthor(convs[key]!, m)
+        if importSeen[key]?[m.ts]?.contains(author) == true || isKnownBeforeImport(key, ts: m.ts, author: author) {
+            return [] // duplicate
+        }
+        importSeen[key, default: [:]][m.ts, default: []].insert(author)
+        // Disappearing messages count from when they were sent or received (the phone left the expired ones out).
+        if m.expiresInSeconds > 0 && m.expirationStartMs <= 0 { m.expirationStartMs = m.ts }
+        m.orderTs = max(m.ts, (convs[key]!.msgs.last?.sortTs ?? 0) + 1)
+        convs[key]!.insertSorted(m)
+        var recs = [Records.message(key, m)]
+        if convs[key]!.archived {
+            convs[key]!.archived = false
+            recs.append(Records.archive(key, archived: false, sigArchived: convs[key]!.sigArchived))
+        }
+        return recs
+    }
+
+    /// Messages that were already in the chat before the import started also count as duplicates.
+    private func isKnownBeforeImport(_ key: String, ts: Int64, author: String) -> Bool {
+        importBaseline[key]?.contains("\(ts)|\(author)") ?? false
+    }
+
+    /// Remembers the messages that exist when an import starts (cheap duplicate check against them).
+    public mutating func beginImport() {
+        importSeen = [:]
+        importBaseline = [:]
+        for (k, c) in convs { importBaseline[k] = Set(c.msgs.map { "\($0.ts)|\(effectiveAuthor(c, $0))" }) }
+    }
+
+    public mutating func endImport() {
+        importSeen = [:]
+        importBaseline = [:]
     }
 
     public mutating func applyReaction(_ key: String, ts: Int64, authors: [String], reactor: String, emoji: String) -> JSON? {

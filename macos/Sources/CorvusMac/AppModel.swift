@@ -198,6 +198,11 @@ final class AppModel {
     var messageRequestsShown = false
     var safetyChanged: [String: SafetyChange] = [:]   // conversation key -> unacknowledged change
     @ObservationIgnored private var viewOnceOpening: Set<String> = []
+    @ObservationIgnored private var historySecret = ""
+    // Replay of the history the phone transferred while linking (shown behind a loading screen).
+    var importActive = false
+    var importDone = 0
+    var importTotal = 0
     var composerViewOnce = false // send the one staged photo as View Once
 
     /// One still image staged (no GIF, no recording), no caption and no reply: it can go out as View Once.
@@ -402,10 +407,12 @@ final class AppModel {
 
         chats.account = acc
         chats.ensureNoteToSelf()
+        importActive = false // a reconnect ends an import that was running; the rest comes now
         cli.start(account: acc)
         guard cli.isRunning else { return }
         setConnected(true)
         loadContactsAndGroups()
+        startHistoryImportReplay()
         checkForUpdates(silent: true) // silent: only a hint in the status bar
     }
 
@@ -431,6 +438,14 @@ final class AppModel {
 
     func linkDevice() async {
         if cli.executable.isEmpty { guard await ensureExecutable() else { return } }
+        // Re-linking a linked computer starts from scratch, like re-registering in Signal Desktop: the chat
+        // history here and all data of the current link are deleted. The history file exists on a fresh
+        // install too (it is created before the first link), so only an account or a chat proves a link.
+        if !account.isEmpty || chats.convs.values.contains(where: { !$0.msgs.isEmpty || !chats.isNoteToSelf($0.key) }) {
+            guard await Dialogs.confirm("This computer is already linked with a Signal account.",
+                                        "Linking again deletes the chat history on this computer and all data of the current link, and starts from scratch — the same fresh start the official Signal Desktop client makes when it registers again.",
+                                        ok: "Delete and link anew", destructive: true) else { return }
+        }
         connectGen += 1
         cli.stop()
         setConnected(false)
@@ -440,8 +455,130 @@ final class AppModel {
             linkSheetShown = true
         }
         if linked {
-            UserDefaults.standard.removeObject(forKey: "account")
+            guard await resetForFreshStart() else { return }
             await connectAccount()
+        }
+    }
+
+    /// After a successful (re-)link the old account is gone: its history file goes too, and everything
+    /// remembered about it is dropped. The fresh history is created with the same unlock secret.
+    private func resetForFreshStart() async -> Bool {
+        cancelEdit(restoreDraft: false)
+        stopTyping()
+        store.close()
+        try? FileManager.default.removeItem(atPath: AppPaths.historyPath)
+        if !account.isEmpty { UserDefaults.standard.removeObject(forKey: "knownSafetyNumbers." + account) }
+        UserDefaults.standard.removeObject(forKey: "account")
+        chats = ChatState()
+        groupMembers = [:]
+        knownSafety = [:]
+        knownSafetyAccount = ""
+        safetyChanged = [:]
+        identityCheckedMs = [:]
+        hiddenContacts = [:]
+        drafts = [:]
+        typing = [:]
+        unsentReads = [:]
+        importActive = false
+        current = nil
+        showArchived = false
+        composerText = ""
+        composerMentions = []
+        composerStyles = []
+        replyQuote = Quote()
+        pendingFiles = []
+        guard !historySecret.isEmpty else {
+            await Dialogs.warn("Chat history", "The history could not be created again. Restart Corvus to unlock it.")
+            return false
+        }
+        if case .failure(let e) = await openStore(historySecret, create: true) {
+            await Dialogs.warn("Chat history", e.localizedDescription)
+            return false
+        }
+        listChanged()
+        return true
+    }
+
+    // MARK: - Transferred history
+
+    /// Replays the history the phone transferred while linking (listHistoryImport, then fetchHistoryImport in
+    /// pages of 2000), silently: no unread counts, notifications or receipts. An abort leaves the source in place,
+    /// so the next start imports the rest; clearHistoryImport removes it after a full import.
+    private func startHistoryImportReplay() {
+        Task {
+            guard let res = try? await cli.call("listHistoryImport"), jsonBool(jsonObject(res)["available"]) else { return }
+            importTotal = jsonInt(jsonObject(res)["count"])
+            importDone = 0
+            importActive = true
+            chats.beginImport()
+            var cursor: Int64 = 0
+            while importActive {
+                guard cli.isRunning, let page = try? await cli.call("fetchHistoryImport", ["cursor": cursor, "limit": 2000]) else {
+                    break // aborted: the rest is imported next time
+                }
+                let o = jsonObject(page)
+                let messages = jsonArray(o["messages"])
+                var recs: [JSON] = []
+                for env in messages { recs += historyEnvelope(jsonObject(env)) }
+                persist(recs)
+                importDone += messages.count
+                guard o["nextCursor"] is NSNumber else {
+                    _ = try? await cli.call("clearHistoryImport")
+                    break
+                }
+                cursor = jsonInt64(o["nextCursor"])
+            }
+            importActive = false
+            chats.endImport()
+            listChanged()
+        }
+    }
+
+    /// One envelope of the transferred history: messages, reactions, edits, deletions and timer changes
+    /// (receipts, typing, pins and polls are not part of the transfer).
+    private func historyEnvelope(_ env: JSON) -> [JSON] {
+        var pe = parseEnvelope(env)
+        if pe.kind == .none { return [] }
+        let group = !pe.groupId.isEmpty
+        if !pe.outgoing && !group && chats.isNoteToSelf(pe.src) {
+            pe.outgoing = true
+            if pe.destination.isEmpty { pe.destination = account }
+        }
+        if !pe.mentions.isEmpty {
+            let resolved = TextStyles.resolveMentions(pe.msg.text, pe.mentions.map { m in
+                let n = mentionName(m.number.isEmpty ? m.uuid : m.number)
+                return (m.start, m.length, n.isEmpty ? (m.name.isEmpty ? m.number : m.name) : n)
+            }, styles: pe.msg.textStyles)
+            pe.msg.text = resolved.text
+            pe.msg.textStyles = resolved.styles
+        }
+        let srcKey = chats.resolveKey(pe.src)
+        let key = group ? "g:" + pe.groupId : (pe.outgoing ? chats.resolveKey(pe.destination) : srcKey)
+        if key.isEmpty { return [] }
+        let author = pe.outgoing ? account : srcKey
+        switch pe.kind {
+        case .message:
+            var m = pe.msg
+            m.outgoing = pe.outgoing
+            m.authorKey = author
+            m.sanitizeViewOnce()
+            if m.quote.valid { m.quote.authorKey = chats.resolveKey(m.quote.authorKey) }
+            if !pe.outgoing { m.sender = chats.convs[srcKey]?.title ?? (pe.srcName.isEmpty ? pe.src : pe.srcName) }
+            return chats.addHistoryMessage(key, m, title: group ? "Group" : (pe.outgoing ? key : srcKey), group: group)
+        case .reaction:
+            return chats.applyReaction(key, ts: pe.targetTs, authors: [pe.targetNumber, pe.targetUuid], reactor: author,
+                                       emoji: pe.remove ? "" : pe.emoji).map { [$0] } ?? []
+        case .edit:
+            return chats.applyEdit(key, targetTs: pe.targetTs, authors: [author], text: pe.msg.text, newTs: pe.msg.ts,
+                                   styles: pe.msg.textStyles).map { [$0] } ?? []
+        case .remoteDelete:
+            return chats.applyDelete(key, targetTs: pe.targetTs, authors: [author]).map { [$0] } ?? []
+        case .expirationUpdate:
+            guard chats.convs[key] != nil, chats.convs[key]!.expirationSeconds != pe.expirationSeconds else { return [] }
+            chats.convs[key]!.expirationSeconds = pe.expirationSeconds
+            return [Records.expiration(key, pe.expirationSeconds)]
+        default:
+            return []
         }
     }
 
@@ -526,7 +663,7 @@ final class AppModel {
         let store = self.store, path = AppPaths.historyPath
         statusText = create ? "Creating chat history …" : "Unlocking chat history …"
         defer { statusText = "Not connected" }
-        return await Task.detached {
+        let result: Result<[JSON], HistoryStoreError> = await Task.detached {
             do {
                 if create {
                     try store.create(path: path, passphrase: secret)
@@ -539,6 +676,8 @@ final class AppModel {
                 return .failure(HistoryStoreError(code: 4))
             }
         }.value
+        if case .success = result { historySecret = secret } // a fresh start after re-linking reuses it
+        return result
     }
 
     private func saveProtectionMode(_ mode: String) {
@@ -670,11 +809,13 @@ final class AppModel {
 
     private func changePassphrase(old: String, new: String) async -> HistoryStoreError? {
         let store = self.store
-        return await Task.detached { () -> HistoryStoreError? in
+        let error = await Task.detached { () -> HistoryStoreError? in
             do { try store.changePassphrase(old: old, new: new); return nil } catch let e as HistoryStoreError { return e } catch {
                 return HistoryStoreError(code: 5)
             }
         }.value
+        if error == nil { historySecret = new }
+        return error
     }
 
     func changeHistoryProtection() async {

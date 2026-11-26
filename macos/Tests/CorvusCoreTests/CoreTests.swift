@@ -505,6 +505,28 @@ final class ChatStateTests: XCTestCase {
         XCTAssertTrue(s.convs["+49alice"]!.msgs[0].poll.terminated)
     }
 
+    func testHistoryImportIsSilentAndDeduplicated() {
+        var s = makeState()
+        s.addMessage("+49bob", outgoing(500)) // already here before the import
+        s.beginImport()
+        var old = Message()
+        old.ts = 100
+        old.text = "old"
+        old.authorKey = "+49bob"
+        old.expiresInSeconds = 3600
+        XCTAssertEqual(s.addHistoryMessage("+49bob", old).count, 1)
+        XCTAssertTrue(s.addHistoryMessage("+49bob", old).isEmpty, "a replayed duplicate is rejected")
+        XCTAssertTrue(s.addHistoryMessage("+49bob", outgoing(500)).isEmpty, "so is a message that was already here")
+        var other = old
+        other.authorKey = "+49carol" // same timestamp, other author: a different message
+        XCTAssertEqual(s.addHistoryMessage("g:G1", other, group: true).count, 1)
+        s.endImport()
+        let c = s.convs["+49bob"]!
+        XCTAssertEqual(c.unread, 0)
+        XCTAssertEqual(c.msgs.map(\.ts), [500, 100], "kept in arrival order after what was there")
+        XCTAssertEqual(c.msgs[1].expirationStartMs, 100, "disappearing messages count from when they were sent")
+    }
+
     func testPerRecipientReceipts() {
         var s = makeState()
         s.addMessage("g:G1", outgoing(200), group: true)
