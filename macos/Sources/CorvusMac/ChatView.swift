@@ -110,8 +110,11 @@ struct MessageGrouping {
 private struct MessageList: View {
     @Environment(AppModel.self) private var model
     let conversation: Conversation
+    @State private var atBottom = true // the end of the chat is in view
+    @State private var missed = 0      // messages that arrived while scrolled up
 
     static let typingRowId = "typing-indicator"
+    static let bottomId = "chat-bottom"
 
     private func sameRun(_ a: Message, _ b: Message) -> Bool {
         a.outgoing == b.outgoing && a.authorKey == b.authorKey && abs(a.ts - b.ts) <= Theme.groupGapMs
@@ -142,6 +145,11 @@ private struct MessageList: View {
                             .id(MessageList.typingRowId)
                             .transition(.opacity)
                     }
+                    // Seen while the newest message is in view; the "scroll to latest" button shows otherwise.
+                    Color.clear.frame(height: 1)
+                        .id(MessageList.bottomId)
+                        .onAppear { atBottom = true; missed = 0 }
+                        .onDisappear { atBottom = false }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -149,10 +157,30 @@ private struct MessageList: View {
             }
             .defaultScrollAnchor(.bottom)
             .background(model.appearance.backgroundColor)
-            .onChange(of: msgs.last?.id) { _, id in
-                guard let id else { return }
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
+            .onChange(of: msgs.last?.id) { old, id in
+                guard let id, let last = msgs.last else { return }
+                // Follow new messages only while at the end (or for your own); otherwise count them on the button.
+                if atBottom || last.outgoing {
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
+                } else if let old, msgs.contains(where: { $0.id == old }) { // appended, not the old last one removed
+                    missed += 1
+                }
             }
+            .onChange(of: conversation.key) { _, _ in
+                missed = 0
+                atBottom = true
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if !atBottom && !msgs.isEmpty {
+                    ScrollToLatestButton(missed: missed) {
+                        missed = 0
+                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(MessageList.bottomId, anchor: .bottom) }
+                    }
+                    .padding(16)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: atBottom)
             .onChange(of: typers.isEmpty) { _, none in
                 guard !none else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(MessageList.typingRowId, anchor: .bottom) }
@@ -165,6 +193,37 @@ private struct MessageList: View {
                 if let id = msgs.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
         }
+    }
+}
+
+/// Round "scroll to the newest message" button, with a badge for the messages that arrived meanwhile.
+private struct ScrollToLatestButton: View {
+    let missed: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(.regularMaterial))
+                .overlay(Circle().strokeBorder(.separator))
+                .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+                .overlay(alignment: .topTrailing) {
+                    if missed > 0 {
+                        Text(missed > 99 ? "99+" : "\(missed)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(Capsule().fill(Theme.signalBlue))
+                            .offset(x: 6, y: -6)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .help(missed > 0 ? "\(missed) new message\(missed == 1 ? "" : "s") – scroll to the newest" : "Scroll to the newest message")
+        .accessibilityLabel("Scroll to the newest message")
     }
 }
 
