@@ -199,6 +199,26 @@ public struct ChatState {
         return Records.pin(key, PinInfo(ts: targetTs), removed: true)
     }
 
+    /// A vote on a known poll. Returns the record, nil if nothing changed (unknown poll or an older vote).
+    public mutating func applyPollVote(_ key: String, targetTs: Int64, authors: [String], voter: String,
+                                       optionIndexes: [Int], voteCount: Int64, voteTs: Int64) -> JSON? {
+        guard !voter.isEmpty, let c = convs[key], let i = findMessage(c, ts: targetTs, authors: authors) else { return nil }
+        let m = c.msgs[i]
+        guard !m.deleted, m.hasPoll else { return nil }
+        let valid = optionIndexes.filter { $0 >= 0 && $0 < m.poll.options.count }
+        let vote = PollVote(optionIndexes: valid, voteCount: voteCount, voteTs: voteTs)
+        guard convs[key]!.msgs[i].poll.apply(vote, by: voter) else { return nil }
+        return Records.pollVote(key, ts: m.ts, author: effectiveAuthor(c, m), by: voter, vote: vote)
+    }
+
+    /// The author ended the poll early (`authors` must be the poll's author, so nobody else can).
+    public mutating func applyPollTerminate(_ key: String, targetTs: Int64, authors: [String]) -> JSON? {
+        guard let c = convs[key], let i = findMessage(c, ts: targetTs, authors: authors) else { return nil }
+        guard !c.msgs[i].deleted, c.msgs[i].hasPoll, !c.msgs[i].poll.terminated else { return nil }
+        convs[key]!.msgs[i].poll.terminated = true
+        return Records.pollTerminate(key, convs[key]!.msgs[i])
+    }
+
     /// The message a pin points at (index into msgs), nil if it is not available.
     public func pinnedMessage(_ c: Conversation, _ pin: PinInfo) -> Int? {
         findMessage(c, ts: pin.ts, authors: pin.authorKey.isEmpty ? [] : [pin.authorKey])

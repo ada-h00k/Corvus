@@ -2,7 +2,7 @@ import Foundation
 
 /// A signal-cli "receive" envelope reduced to what the GUI needs.
 public struct ParsedEnvelope {
-    public enum Kind { case none, message, reaction, edit, remoteDelete, expirationUpdate, receipt, typing, pin, unpin }
+    public enum Kind { case none, message, reaction, edit, remoteDelete, expirationUpdate, receipt, typing, pin, unpin, pollVote, pollTerminate }
 
     public var kind: Kind = .none
     public var outgoing = false        // sent by one of our own other devices (sync message)
@@ -22,6 +22,11 @@ public struct ParsedEnvelope {
     public var targetNumber = ""
     public var targetUuid = ""
     public var targetTs: Int64 = 0     // reaction: reacted message; edit/remoteDelete: timestamp of the target message
+
+    // Poll vote / poll end: targetTs = the poll message, targetNumber/targetUuid = its author
+    public var pollOptionIndexes: [Int] = []
+    public var pollVoteCount: Int64 = 0
+    public var envelopeTs: Int64 = 0
 
     // Pin: -1 = forever (also when the backend leaves it unspecified)
     public var pinDurationSeconds: Int64 = -1
@@ -173,6 +178,27 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
         }
         return
     }
+    // Signal polls: a vote / the early end reference the poll message and have no body of their own.
+    let vote = jsonObject(dm["pollVote"])
+    if !vote.isEmpty {
+        out.kind = .pollVote
+        out.targetNumber = jsonString(vote["authorNumber"])
+        if out.targetNumber.isEmpty { out.targetNumber = jsonString(vote["author"]) }
+        out.targetUuid = jsonString(vote["authorUuid"])
+        out.targetTs = jsonInt64(vote["targetSentTimestamp"])
+        out.pollOptionIndexes = jsonArray(vote["optionIndexes"]).compactMap { v in
+            let i = jsonInt(v)
+            return v is NSNumber && i >= 0 ? i : nil
+        }
+        out.pollVoteCount = jsonInt64(vote["voteCount"])
+        return
+    }
+    let terminate = jsonObject(dm["pollTerminate"])
+    if !terminate.isEmpty {
+        out.kind = .pollTerminate
+        out.targetTs = jsonInt64(terminate["targetSentTimestamp"])
+        return
+    }
     // "Delete for everyone": {"remoteDelete": {"timestamp": <sent timestamp of the deleted message>}}
     let rd = jsonObject(dm["remoteDelete"])
     if !rd.isEmpty {
@@ -190,7 +216,14 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
     out.msg.viewOnce = jsonBool(dm["viewOnce"])
     out.msg.linkPreview = out.msg.viewOnce ? LinkPreview() : parseLinkPreview(dm)
     out.msg.expiresInSeconds = out.expirationSeconds
-    if out.msg.text.isEmpty && out.msg.attachments.isEmpty { return } // receipts, typing, sessions, ...
+    let pollCreate = jsonObject(dm["pollCreate"])
+    if !pollCreate.isEmpty {
+        out.msg.hasPoll = true
+        out.msg.poll.question = jsonString(pollCreate["question"])
+        out.msg.poll.allowMultiple = jsonBool(pollCreate["allowMultiple"])
+        out.msg.poll.options = jsonArray(pollCreate["options"]).map { jsonString($0) }
+    }
+    if out.msg.text.isEmpty && out.msg.attachments.isEmpty && !out.msg.hasPoll && !out.msg.hasContact { return } // receipts, typing, sessions, ...
 
     var ts = jsonInt64(dm["timestamp"])
     if ts <= 0 { ts = envelopeTs }
@@ -227,6 +260,7 @@ public func parseEnvelope(_ env: JSON) -> ParsedEnvelope {
     out.srcName = jsonString(env["sourceName"])
     out.untrustedIdentity = jsonBool(env["untrustedIdentity"])
     let envTs = jsonInt64(env["timestamp"])
+    out.envelopeTs = envTs
 
     // {"receiptMessage": {"isDelivery": true, "isRead": false, "isViewed": false, "timestamps": [...]}}
     let rc = jsonObject(env["receiptMessage"])

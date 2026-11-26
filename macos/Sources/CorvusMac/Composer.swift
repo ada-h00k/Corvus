@@ -85,10 +85,23 @@ struct ComposerArea: View {
                 }
                 .help("Record a voice message")
                 .disabled(!model.editKey.isEmpty)
-                Button { model.chooseAttachments() } label: {
-                    Image(systemName: "paperclip").font(.system(size: 17)).frame(width: 30, height: 34)
+                // Attach: a click picks files; the menu also offers a poll (as in the Qt app's attach menu).
+                Menu {
+                    Button("Files …") { model.chooseAttachments() }
+                    if let key = model.current, model.supportsPolls {
+                        Button("Poll …") { model.chatSheet = .createPoll(key) }
+                            .disabled(!model.editKey.isEmpty)
+                    }
+                } label: {
+                    Image(systemName: "paperclip").font(.system(size: 17))
+                } primaryAction: {
+                    model.chooseAttachments()
                 }
-                .help("Attach files")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.visible)
+                .fixedSize()
+                .frame(height: 34)
+                .help("Attach files (click) · more options (arrow)")
                 Button { model.sendMessage() } label: {
                     Image(systemName: model.editKey.isEmpty ? "arrow.up" : "checkmark")
                         .font(.system(size: 15, weight: .bold))

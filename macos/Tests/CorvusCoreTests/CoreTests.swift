@@ -453,6 +453,44 @@ final class ChatStateTests: XCTestCase {
         XCTAssertEqual(s.convs["+49alice"]!.pins.map(\.ts), [400])
     }
 
+    func testPollsFromEnvelopes() {
+        let create: JSON = ["sourceNumber": "+49alice", "timestamp": 100,
+                            "dataMessage": ["timestamp": 100, "pollCreate": ["question": "Lunch?", "allowMultiple": false,
+                                                                             "options": ["Pizza", "Sushi"]] as JSON] as JSON]
+        let pc = parseEnvelope(create)
+        XCTAssertEqual(pc.kind, .message, "a poll has no text but is a message")
+        XCTAssertTrue(pc.msg.hasPoll)
+        XCTAssertEqual(pc.msg.poll.options, ["Pizza", "Sushi"])
+
+        var s = makeState()
+        var m = pc.msg
+        m.authorKey = "+49alice"
+        s.addMessage("+49alice", m)
+        let vote: JSON = ["sourceNumber": "+49bob", "timestamp": 300,
+                          "dataMessage": ["timestamp": 300, "pollVote": ["authorNumber": "+49alice", "targetSentTimestamp": 100,
+                                                                         "optionIndexes": [1, 7], "voteCount": 2] as JSON] as JSON]
+        let pv = parseEnvelope(vote)
+        XCTAssertEqual(pv.kind, .pollVote)
+        XCTAssertEqual(pv.pollOptionIndexes, [1, 7])
+        XCTAssertNotNil(s.applyPollVote("+49alice", targetTs: 100, authors: [pv.targetNumber], voter: "+49bob",
+                                        optionIndexes: pv.pollOptionIndexes, voteCount: pv.pollVoteCount, voteTs: pv.envelopeTs))
+        XCTAssertEqual(s.convs["+49alice"]!.msgs[0].poll.voteOf("+49bob"), [1], "out-of-range options are dropped")
+        // an older vote that arrives late is ignored
+        XCTAssertNil(s.applyPollVote("+49alice", targetTs: 100, authors: ["+49alice"], voter: "+49bob",
+                                     optionIndexes: [0], voteCount: 1, voteTs: 400))
+        // a newer empty vote takes it back
+        XCTAssertNotNil(s.applyPollVote("+49alice", targetTs: 100, authors: ["+49alice"], voter: "+49bob",
+                                        optionIndexes: [], voteCount: 3, voteTs: 500))
+        XCTAssertTrue(s.convs["+49alice"]!.msgs[0].poll.votes.isEmpty)
+
+        let end: JSON = ["sourceNumber": "+49alice", "timestamp": 600,
+                         "dataMessage": ["timestamp": 600, "pollTerminate": ["targetSentTimestamp": 100] as JSON] as JSON]
+        XCTAssertEqual(parseEnvelope(end).kind, .pollTerminate)
+        XCTAssertNil(s.applyPollTerminate("+49alice", targetTs: 100, authors: ["+49bob"]), "only the author can end it")
+        XCTAssertNotNil(s.applyPollTerminate("+49alice", targetTs: 100, authors: ["+49alice"]))
+        XCTAssertTrue(s.convs["+49alice"]!.msgs[0].poll.terminated)
+    }
+
     func testPerRecipientReceipts() {
         var s = makeState()
         s.addMessage("g:G1", outgoing(200), group: true)
@@ -621,6 +659,25 @@ final class SignalCliProcessTests: XCTestCase {
         _ = try await cli.call("trust", ["recipient": "+49111", "verifiedSafetyNumber": id.digits])
         let after = SafetyNumber.pick(SafetyNumber.parse(try await cli.call("listIdentities", ["number": "+49111"])), recipient: "+49111")
         XCTAssertEqual(after?.isVerified, true)
+    }
+
+    func testPollCallsAgainstMock() async throws {
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: "/usr/bin/python3"), "python3 missing")
+        let cli = SignalCli()
+        cli.executable = try mockPath()
+        defer { try? FileManager.default.removeItem(atPath: cli.executable) }
+        cli.start(account: "+491234567")
+        defer { cli.stop() }
+        let created = try await cli.call("sendPollCreate", ["recipient": ["+49111"], "question": "Q?", "option": ["a", "b"], "noMulti": true])
+        let ts = jsonInt64(jsonObject(created)["timestamp"])
+        XCTAssertGreaterThan(ts, 0)
+        _ = try await cli.call("sendPollVote", ["recipient": ["+49111"], "pollAuthor": "+491234567", "pollTimestamp": ts,
+                                                "voteCount": 1, "option": [0]])
+        _ = try await cli.call("sendPollTerminate", ["recipient": ["+49111"], "pollTimestamp": ts])
+        do {
+            _ = try await cli.call("sendPollCreate", ["recipient": ["+49111"], "question": "Q?", "option": ["only one"]])
+            XCTFail("a poll needs two options")
+        } catch {}
     }
 
     /// The calls behind Block contact and Message requests, with the parameters the app sends.

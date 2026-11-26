@@ -164,6 +164,59 @@ private struct PinBanner: View {
     }
 }
 
+/// A poll in its bubble: question, options with their share of the votes; a click votes (or takes it back).
+private struct PollBubble: View {
+    @Environment(AppModel.self) private var model
+    let message: Message
+    let foreground: Color
+
+    var body: some View {
+        let poll = message.poll
+        let counts = poll.optionCounts
+        let total = poll.votes.count
+        let mine = Set(poll.voteOf(model.account))
+        VStack(alignment: .leading, spacing: 8) {
+            Text(poll.terminated ? "Poll · Final results" : poll.allowMultiple ? "Poll · Select one or more" : "Poll · Select one")
+                .font(.caption.weight(.semibold)).foregroundStyle(foreground.opacity(0.75))
+            Text(verbatim: poll.question).font(.system(size: NSFont.systemFontSize + 1, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(poll.options.indices, id: \.self) { i in
+                Button { model.votePoll(message.id, option: i) } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Image(systemName: mine.contains(i) ? (poll.allowMultiple ? "checkmark.square.fill" : "checkmark.circle.fill")
+                                                               : (poll.allowMultiple ? "square" : "circle"))
+                            Text(verbatim: poll.options[i]).fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 8)
+                            Text("\(counts[i])").monospacedDigit()
+                                .fontWeight(counts[i] > 0 && counts[i] == poll.topCount ? .bold : .regular)
+                        }
+                        GeometryReader { g in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(foreground.opacity(0.18))
+                                Capsule().fill(foreground.opacity(0.75))
+                                    .frame(width: total == 0 ? 0 : g.size.width * CGFloat(counts[i]) / CGFloat(total))
+                            }
+                        }
+                        .frame(height: 4)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(poll.terminated || !model.connected)
+            }
+            HStack {
+                Text(total == 0 ? "No votes" : "\(total) vote\(total == 1 ? "" : "s")")
+                Spacer()
+                Button("View votes") { model.chatSheet = .pollVotes(message.id) }.buttonStyle(.plain).underline()
+            }
+            .font(.caption).foregroundStyle(foreground.opacity(0.75))
+        }
+        .foregroundStyle(foreground)
+        .frame(minWidth: 240)
+    }
+}
+
 /// A View Once photo: "1×" and its state; an unopened received one opens on click (once).
 private struct ViewOnceBox: View {
     @Environment(AppModel.self) private var model
@@ -579,6 +632,7 @@ private struct Bubble: View {
                     VStack(alignment: .leading, spacing: 6) {
                         if showSender { senderLabel }
                         if m.quote.valid { QuoteView(quote: m.quote, foreground: fg, outgoing: m.outgoing) }
+                        if m.hasPoll { PollBubble(message: m, foreground: fg) }
                         if m.viewOnce {
                             ViewOnceBox(message: m, foreground: fg)
                         } else {
@@ -942,6 +996,13 @@ private struct MessageMenu: View {
                         }
                     } label: { Label("Pin …", systemImage: "pin") }
                     .disabled(!model.connected)
+                }
+            }
+            if m.hasPoll {
+                Button { model.chatSheet = .pollVotes(m.id) } label: { Label("View votes …", systemImage: "chart.bar") }
+                if m.outgoing && !m.poll.terminated {
+                    Button { model.endPoll(m.id) } label: { Label("End poll", systemImage: "stop.circle") }
+                        .disabled(!model.connected)
                 }
             }
             if model.canForward(m) {

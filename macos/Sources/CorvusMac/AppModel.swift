@@ -36,12 +36,16 @@ enum ChatSheet: Identifiable, Equatable {
     case safetyNumber(String)   // conversation key (1:1)
     case forward(String)        // Message.id in the open chat
     case gallery(String)        // conversation key
+    case createPoll(String)     // conversation key
+    case pollVotes(String)      // Message.id in the open chat
 
     var id: String {
         switch self {
         case .messageDetails(let m): return "details:" + m
         case .forward(let m): return "forward:" + m
         case .gallery(let k): return "gallery:" + k
+        case .createPoll(let k): return "poll:" + k
+        case .pollVotes(let m): return "votes:" + m
         case .safetyNumber(let k): return "safety:" + k
         }
     }
@@ -831,7 +835,7 @@ final class AppModel {
 
     /// Shows `preview` in chat `key` right away and sends `params`; the preview is confirmed (and written to
     /// the history) when the send succeeds, removed when it fails. Used by forwarding, polls and contact cards.
-    func sendWithPreview(_ key: String, params: JSON, preview template: Message, failure: String,
+    func sendWithPreview(_ key: String, method: String = "send", params: JSON, preview template: Message, failure: String,
                          cleanup: URL? = nil, done: ((Int64?) -> Void)? = nil) {
         guard chats.convs[key] != nil else { return }
         var preview = template
@@ -854,7 +858,7 @@ final class AppModel {
         Task { [params] in
             var result: Any?
             var err: String?
-            do { result = try await cli.call("send", params) } catch { err = error.localizedDescription }
+            do { result = try await cli.call(method, params) } catch { err = error.localizedDescription }
             checkSendOutcome(key, result: result, error: err)
             if let cleanup { try? FileManager.default.removeItem(at: cleanup) }
             guard let pendingNow = chats.pendingSends[pendingId] else { return }
@@ -876,6 +880,81 @@ final class AppModel {
             }
             done?(ts)
         }
+    }
+
+    // MARK: - Polls
+
+    /// sendPollCreate / sendPollVote / sendPollTerminate exist since corvus-cli 1.4.0.
+    var supportsPolls: Bool { backend.isCorvusCli && AppModel.compareVersions(backend.version, "1.4.0") != .orderedAscending }
+
+    static let maxPollOptions = 10
+
+    func createPoll(_ key: String, question: String, options: [String], allowMultiple: Bool) {
+        guard let c = chats.convs[key], supportsPolls, !c.blocked else { return }
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let opts = options.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !q.isEmpty, opts.count >= 2, opts.count <= AppModel.maxPollOptions else { return }
+        var p: JSON = ["question": q, "option": opts, "noMulti": !allowMultiple]
+        addRecipient(&p, c)
+        var preview = Message()
+        preview.hasPoll = true
+        preview.poll.question = q
+        preview.poll.options = opts
+        preview.poll.allowMultiple = allowMultiple
+        sendWithPreview(key, method: "sendPollCreate", params: p, preview: preview, failure: "The poll could not be sent")
+    }
+
+    /// Votes for (or takes back) `option`: single choice switches, multiple choice toggles. Every vote counts up.
+    func votePoll(_ id: String, option: Int) {
+        guard let c = currentConversation, let (_, m) = message(withId: id), !m.deleted, m.hasPoll, !m.poll.terminated,
+              option >= 0, option < m.poll.options.count else { return }
+        var indexes = m.poll.voteOf(account)
+        if m.poll.allowMultiple {
+            if indexes.contains(option) { indexes.removeAll { $0 == option } } else { indexes.append(option) }
+            indexes.sort()
+        } else {
+            indexes = indexes == [option] ? [] : [option]
+        }
+        let voteCount = (m.poll.votes[account]?.voteCount ?? 0) + 1
+        var p: JSON = ["pollAuthor": chats.effectiveAuthor(c, m), "pollTimestamp": m.latestTs,
+                       "voteCount": voteCount, "option": indexes]
+        addRecipient(&p, c)
+        let key = c.key, ts = m.ts
+        Task { [p] in
+            do {
+                _ = try await cli.call("sendPollVote", p)
+                if let rec = chats.applyPollVote(key, targetTs: ts, authors: [account], voter: account, optionIndexes: indexes,
+                                                 voteCount: voteCount, voteTs: nowMs()) { persist(rec) }
+            } catch {
+                showFlash("Could not vote: \(error.localizedDescription)", seconds: 8)
+            }
+        }
+    }
+
+    func endPoll(_ id: String) {
+        guard let c = currentConversation, let (_, m) = message(withId: id), !m.deleted, m.hasPoll, !m.poll.terminated,
+              m.outgoing else { return }
+        var p: JSON = ["pollTimestamp": m.latestTs]
+        addRecipient(&p, c)
+        let key = c.key, ts = m.ts
+        Task { [p] in
+            do {
+                _ = try await cli.call("sendPollTerminate", p)
+                if let rec = chats.applyPollTerminate(key, targetTs: ts, authors: [account]) { persist(rec) }
+            } catch {
+                showFlash("Could not end the poll: \(error.localizedDescription)", seconds: 8)
+            }
+        }
+    }
+
+    /// Like the official clients: the poll's author hears about new votes.
+    private func notifyPollVote(_ key: String, ts: Int64, authors: [String], voter: String, voted: Bool) {
+        guard voted, voter != account, notify.notifications, let c = chats.convs[key], !c.muted,
+              let i = chats.findMessage(c, ts: ts, authors: authors), c.msgs[i].outgoing,
+              !(key == current && userIsLooking()) else { return }
+        let body = notify.content == .nameAndText ? "\(displayName(voter)) voted in the poll “\(c.msgs[i].poll.question)”" : "New vote"
+        notifier.notify(key: key, title: notify.content == .hidden ? "Corvus" : c.title, body: body,
+                        icon: notify.content == .hidden ? nil : avatarImage(c))
     }
 
     // MARK: - Pins
@@ -1641,6 +1720,22 @@ final class AppModel {
             let reactor = pe.outgoing ? account : srcKey
             if let rec = chats.applyReaction(key, ts: pe.targetTs, authors: [pe.targetNumber, pe.targetUuid],
                                              reactor: reactor, emoji: pe.remove ? "" : pe.emoji) {
+                persist(rec)
+            }
+            return
+        case .pollVote:
+            let voter = pe.outgoing ? account : srcKey
+            if let rec = chats.applyPollVote(key, targetTs: pe.targetTs, authors: [pe.targetNumber, pe.targetUuid], voter: voter,
+                                             optionIndexes: pe.pollOptionIndexes, voteCount: pe.pollVoteCount,
+                                             voteTs: pe.envelopeTs > 0 ? pe.envelopeTs : nowMs()) {
+                persist(rec)
+                notifyPollVote(key, ts: pe.targetTs, authors: [pe.targetNumber, pe.targetUuid], voter: voter,
+                               voted: !pe.pollOptionIndexes.isEmpty)
+            }
+            return
+        case .pollTerminate:
+            // Only the author can end a poll; anything else never finds the message.
+            if let rec = chats.applyPollTerminate(key, targetTs: pe.targetTs, authors: [pe.outgoing ? account : srcKey]) {
                 persist(rec)
             }
             return

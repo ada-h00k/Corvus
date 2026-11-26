@@ -13,6 +13,8 @@ struct ChatSheetView: View {
         case .safetyNumber(let key): SafetyNumberView(key: key)
         case .forward(let id): ForwardView(messageId: id)
         case .gallery(let key): GalleryView(key: key)
+        case .createPoll(let key): CreatePollView(key: key)
+        case .pollVotes(let id): PollVotesView(messageId: id)
         }
     }
 }
@@ -445,5 +447,88 @@ private struct MediaTile: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .help(item.attachment.filename)
+    }
+}
+
+/// "New poll": a question and 2 … 10 options, single or multiple choice (port of the Qt PollDialog).
+struct CreatePollView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let key: String
+    @State private var question = ""
+    @State private var options = ["", ""]
+    @State private var allowMultiple = false
+    @State private var error = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("New poll").font(.headline)
+            Text("Question").font(.callout.weight(.semibold))
+            TextField("Ask a question", text: $question).textFieldStyle(.roundedBorder)
+                .onChange(of: question) { _, q in if q.count > 200 { question = String(q.prefix(200)) } }
+            Text("Options").font(.callout.weight(.semibold))
+            ForEach(options.indices, id: \.self) { i in
+                HStack {
+                    TextField("Option \(i + 1)", text: Binding(get: { i < options.count ? options[i] : "" },
+                                                              set: { v in if i < options.count { options[i] = String(v.prefix(100)) } }))
+                        .textFieldStyle(.roundedBorder)
+                    Button { options.remove(at: i) } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless)
+                        .disabled(options.count <= 2)
+                        .help("Remove option")
+                }
+            }
+            Button("Add option") { options.append("") }
+                .disabled(options.count >= AppModel.maxPollOptions)
+            Toggle("Allow multiple votes", isOn: $allowMultiple)
+            if !error.isEmpty { Text(error).foregroundStyle(.red).font(.callout) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Send") {
+                    let filled = options.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                    if question.trimmingCharacters(in: .whitespaces).isEmpty { error = "Poll question is required"; return }
+                    if filled.count < 2 { error = "Poll requires at least 2 options"; return }
+                    model.createPoll(key, question: question, options: filled, allowMultiple: allowMultiple)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!model.connected)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+}
+
+/// "View votes": who voted for which option.
+struct PollVotesView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let messageId: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let (_, m) = model.message(withId: messageId), m.hasPoll {
+                Text(verbatim: m.poll.question).font(.headline)
+                let counts = m.poll.optionCounts
+                List {
+                    ForEach(m.poll.options.indices, id: \.self) { i in
+                        Section("\(m.poll.options[i]) – \(counts[i]) vote\(counts[i] == 1 ? "" : "s")") {
+                            let voters = m.poll.votes.filter { $0.value.optionIndexes.contains(i) }.map(\.key)
+                                .map { $0 == model.account ? "You" : model.displayName($0) }.sorted()
+                            if voters.isEmpty { Text("No votes").foregroundStyle(.secondary) }
+                            ForEach(voters, id: \.self) { Text(verbatim: $0) }
+                        }
+                    }
+                }
+                .frame(minHeight: 240)
+            } else {
+                Text("This poll is no longer available.").foregroundStyle(.secondary)
+            }
+            HStack { Spacer(); Button("Close") { dismiss() }.keyboardShortcut(.defaultAction) }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }
