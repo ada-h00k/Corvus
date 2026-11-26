@@ -88,12 +88,13 @@ struct ComposerArea: View {
                 // Attach: a click picks files; the menu also offers a poll (as in the Qt app's attach menu).
                 Menu {
                     Button("Files …") { model.chooseAttachments() }
-                    if let key = model.current, model.supportsPolls {
-                        Button("Poll …") { model.chatSheet = .createPoll(key) }
+                    if model.current != nil, model.supportsPolls {
+                        // The open chat at the moment of the click (as in the Qt app), never the one the menu was built for.
+                        Button("Poll …") { if let open = model.current { model.chatSheet = .createPoll(open) } }
                             .disabled(!model.editKey.isEmpty)
                     }
-                    if let key = model.current, model.supportsContacts {
-                        Button("Contact …") { model.chatSheet = .shareContact(key) }
+                    if model.current != nil, model.supportsContacts {
+                        Button("Contact …") { if let open = model.current { model.chatSheet = .shareContact(open) } }
                             .disabled(!model.editKey.isEmpty || model.shareableContacts.isEmpty)
                     }
                 } label: {
