@@ -32,6 +32,30 @@ struct ChatPane: View {
                 }
             ComposerArea()
         }
+        .overlay(alignment: .bottom) {
+            if let url = model.savedFile {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Saved “\(url.lastPathComponent)”").lineLimit(1)
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                        model.savedFile = nil
+                    }
+                    .buttonStyle(.link)
+                    Button { model.savedFile = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless)
+                        .help("Close")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator))
+                .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                .padding(.bottom, 80)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: model.savedFile)
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in
             handleDrop(providers)
         }

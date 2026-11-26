@@ -208,6 +208,8 @@ final class AppModel {
     var importDone = 0
     var importTotal = 0
     var composerViewOnce = false // send the one staged photo as View Once
+    var savedFile: URL?          // just saved: offered in Finder
+    @ObservationIgnored private var savedFileTask: Task<Void, Never>?
 
     /// One still image staged (no GIF, no recording), no caption and no reply: it can go out as View Once.
     var viewOnceEligible: Bool {
@@ -3231,8 +3233,20 @@ final class AppModel {
         do {
             try data.write(to: url)
             Media.quarantine(url)
+            showSaved(url)
         } catch {
             Task { await Dialogs.warn("Attachment", "The file could not be written.") }
+        }
+    }
+
+    /// "Attachment saved · Show in Finder" for a few seconds (the Qt app's saved toast).
+    private func showSaved(_ url: URL) {
+        savedFile = url
+        savedFileTask?.cancel()
+        savedFileTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled, self?.savedFile == url else { return }
+            self?.savedFile = nil
         }
     }
 
