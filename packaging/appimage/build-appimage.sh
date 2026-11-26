@@ -4,7 +4,8 @@
 # The AppImage is meant to work like the Flatpak: besides the Qt libraries it bundles
 #   * corvus-cli (the Signal backend),
 #   * qrencode (QR code when linking a device) with its libraries,
-#   * libhunspell and the Hunspell dictionaries of the Flatpak.
+#   * libhunspell and the Hunspell dictionaries of the Flatpak,
+#   * the Noto Color Emoji font and the Breeze icons (fallbacks for what the host lacks).
 #
 # Inputs (environment):
 #   APPDIR           AppDir that already holds the `cmake --install` result (usr/...)
@@ -189,12 +190,48 @@ if [[ -f "$APPDIR/apprun-hooks/linuxdeploy-plugin-qt-hook.sh" ]]; then
 fi
 
 # --------------------------------------------------
+# Emoji font and icons: what the Flatpak gets from its runtime
+# --------------------------------------------------
+echo "::group::Emoji font and icons"
+# Corvus draws emojis with whatever font the system has; many systems have no color emoji
+# font. Noto Color Emoji (OFL) is added as an additional font directory next to the host's
+# own fontconfig setup.
+emoji_font="/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
+[[ -f "$emoji_font" ]] || { echo "::error::$emoji_font not found (package: fonts-noto-color-emoji)"; exit 1; }
+install -Dm644 "$emoji_font" "$APPDIR/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
+install -Dm644 /usr/share/doc/fonts-noto-color-emoji/copyright "$APPDIR/usr/share/licenses/corvus/NotoColorEmoji-copyright"
+install -d "$APPDIR/usr/etc/fonts"
+cat > "$APPDIR/usr/etc/fonts/fonts.conf" <<'FONTS'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <!-- The host's configuration first: system fonts, user fonts, caches, ... -->
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <!-- Fonts that come with the AppImage, found relative to this file -->
+  <dir prefix="relative">../../share/fonts</dir>
+</fontconfig>
+FONTS
+
+# Corvus asks the icon theme for a few icons (the settings categories, dialog buttons).
+# The host's theme does not always have all of them, so Breeze (light and dark) is bundled
+# and Corvus uses it as the fallback theme inside an AppImage.
+for theme in breeze breeze-dark; do
+    [[ -d "/usr/share/icons/$theme" ]] || { echo "::error::/usr/share/icons/$theme not found (package: breeze-icon-theme)"; exit 1; }
+    mkdir -p "$APPDIR/usr/share/icons"
+    cp -a "/usr/share/icons/$theme" "$APPDIR/usr/share/icons/"
+done
+install -Dm644 /usr/share/doc/breeze-icon-theme/copyright "$APPDIR/usr/share/licenses/corvus/breeze-icon-theme-copyright"
+echo "::endgroup::"
+
+# --------------------------------------------------
 # Check the bundle before packing it
 # --------------------------------------------------
 echo "::group::Bundle check"
 missing=0
 for f in usr/bin/corvus usr/bin/corvus-cli usr/bin/qrencode AppRun \
-         usr/share/hunspell/de_DE.dic usr/share/hunspell/en_US.dic; do
+         usr/share/hunspell/de_DE.dic usr/share/hunspell/en_US.dic \
+         usr/share/fonts/truetype/noto/NotoColorEmoji.ttf usr/etc/fonts/fonts.conf \
+         usr/share/icons/breeze/index.theme usr/share/icons/breeze-dark/index.theme; do
     if [[ ! -e "$APPDIR/$f" ]]; then echo "::error::Missing in AppDir: $f"; missing=1; fi
 done
 if ! ls "$APPDIR"/usr/lib/libhunspell-*.so* >/dev/null 2>&1; then

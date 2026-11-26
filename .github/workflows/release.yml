@@ -883,6 +883,8 @@ jobs:
             libopengl0 \
             libsecret-1-dev \
             libhunspell-dev \
+            fonts-noto-color-emoji \
+            breeze-icon-theme \
             qrencode
 
       - name: Install Qt

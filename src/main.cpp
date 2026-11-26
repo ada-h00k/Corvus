@@ -5,11 +5,14 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QIcon>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QLockFile>
 #include <QMessageBox>
+#include <QPalette>
 #include <QStandardPaths>
+#include <QStyleHints>
 #include <QStringList>
 #include <cerrno>
 #include <cstdio>
@@ -50,6 +53,18 @@ int main(int argc, char *argv[])
         QGuiApplication::setDesktopFileName(desktopId);
 
     QApplication::setWindowIcon(AppIcon::app());
+
+    // The AppImage uses the icon theme of the system, which does not necessarily have every
+    // icon Corvus asks for (the Flatpak brings the Breeze icons with its runtime). Breeze is
+    // bundled in the AppImage and serves as the fallback for icons the system theme lacks.
+    if (!qEnvironmentVariableIsEmpty("APPDIR")) {
+        const auto updateFallbackIcons = [] {
+            const bool dark = QGuiApplication::palette().color(QPalette::WindowText).lightness() > 128;
+            QIcon::setFallbackThemeName(dark ? QStringLiteral("breeze-dark") : QStringLiteral("breeze"));
+        };
+        updateFallbackIcons();
+        QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, &app, updateFallbackIcons);
+    }
 
     // Only one instance may use the chat history: two processes appending to history.corvus (or
     // compacting it) at the same time would corrupt it. The lock lives next to the file, so
