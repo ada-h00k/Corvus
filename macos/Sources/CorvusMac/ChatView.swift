@@ -33,6 +33,7 @@ struct ChatPane: View {
             ComposerArea()
         }
         .overlay(alignment: .bottom) {
+            ZStack {
             if let url = model.savedFile {
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
@@ -54,8 +55,9 @@ struct ChatPane: View {
                 .padding(.bottom, 80)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
+            }
+            .animation(.easeOut(duration: 0.2), value: model.savedFile) // the bar only, not the chat
         }
-        .animation(.easeOut(duration: 0.2), value: model.savedFile)
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in
             handleDrop(providers)
         }
@@ -399,16 +401,20 @@ private struct MessageList: View {
                 atBottom = true
             }
             .overlay(alignment: .bottomTrailing) {
-                if !atBottom && !msgs.isEmpty {
-                    ScrollToLatestButton(missed: missed) {
-                        missed = 0
-                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(MessageList.bottomId, anchor: .bottom) }
+                // The animation belongs to the button only: on the whole list it would animate the
+                // complete rebuild of the chat on every switch (atBottom flips then).
+                ZStack {
+                    if !atBottom && !msgs.isEmpty {
+                        ScrollToLatestButton(missed: missed) {
+                            missed = 0
+                            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(MessageList.bottomId, anchor: .bottom) }
+                        }
+                        .padding(16)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
-                    .padding(16)
-                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
+                .animation(.easeOut(duration: 0.15), value: atBottom)
             }
-            .animation(.easeOut(duration: 0.15), value: atBottom)
             .onChange(of: typers.isEmpty) { _, none in
                 guard !none else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(MessageList.typingRowId, anchor: .bottom) }
