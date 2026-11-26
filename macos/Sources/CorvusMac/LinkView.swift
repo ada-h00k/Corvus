@@ -7,6 +7,7 @@ import SwiftUI
 /// returned URI as a QR code (rendered with Core Image, no qrencode needed).
 struct LinkView: View {
     let executable: String
+    var secret = ""   // the freshly linked account is encrypted with the history's unlock right away
     let onFinish: (Bool) -> Void
 
     @State private var name = "corvus (\(Host.current().localizedName ?? "Mac"))"
@@ -85,7 +86,7 @@ struct LinkView: View {
         running = true
         let p = Process()
         SignalCli.configure(p, executable: executable, arguments: ["link", "-n", name.trimmingCharacters(in: .whitespaces)])
-        p.environment = SignalCli.childEnvironment()
+        p.environment = SignalCli.environment(secret: secret)
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err

@@ -162,6 +162,21 @@ public final class SignalCli {
         return env
     }
 
+    /// The same, plus the unlock secret in the variables corvus-cli reads: it encrypts its sessions, contacts and
+    /// attachments with it, so the backend's data opens with the unlock the chat history uses (as in the Qt app).
+    /// The environment is used instead of the command line, whose arguments every user of the Mac can see. After a
+    /// change the previous secret is passed along until corvus-cli has re-wrapped its keyring. A backend that does
+    /// not know the variables ignores them.
+    nonisolated public static func environment(secret: String, previous: String = "",
+                                               base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        var env = childEnvironment(base)
+        if !secret.isEmpty {
+            env["CORVUS_CLI_SECRET"] = secret
+            if !previous.isEmpty { env["CORVUS_CLI_SECRET_PREVIOUS"] = previous }
+        }
+        return env
+    }
+
     /// Phone numbers are masked in diagnostics unless CORVUS_DEBUG is set.
     nonisolated public static func maskNumbers(_ text: String) -> String {
         if ProcessInfo.processInfo.environment["CORVUS_DEBUG"] != nil { return text }
@@ -211,17 +226,25 @@ public final class SignalCli {
 
     public func run(_ args: [String], timeout: TimeInterval) async -> CliResult {
         let exe = executable
-        return await Task.detached { SignalCli.runBlocking(exe: exe, args: args, timeout: timeout) }.value
+        let env = backendEnvironment
+        return await Task.detached { SignalCli.runBlocking(exe: exe, args: args, timeout: timeout, environment: env) }.value
     }
 
-    nonisolated static func runBlocking(exe: String, args: [String], timeout: TimeInterval) -> CliResult {
+    /// The unlock secret of the chat history (keychain entry or passphrase), and the one it just replaced.
+    public var secret = ""
+    public var previousSecret = ""
+
+    public var backendEnvironment: [String: String] { SignalCli.environment(secret: secret, previous: previousSecret) }
+
+    nonisolated static func runBlocking(exe: String, args: [String], timeout: TimeInterval,
+                                        environment: [String: String] = childEnvironment()) -> CliResult {
         var r = CliResult()
         r.command = exe + " " + args.joined(separator: " ")
         r.backend = BackendInfo.name(forExecutable: exe)
         let start = Date()
         let p = Process()
         configure(p, executable: exe, arguments: args)
-        p.environment = childEnvironment()
+        p.environment = environment
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
@@ -280,7 +303,7 @@ public final class SignalCli {
         stop()
         let p = Process()
         SignalCli.configure(p, executable: executable, arguments: ["-a", account, "jsonRpc"])
-        p.environment = SignalCli.childEnvironment()
+        p.environment = backendEnvironment
         p.qualityOfService = .userInitiated
         let input = Pipe(), output = Pipe(), errors = Pipe()
         p.standardInput = input

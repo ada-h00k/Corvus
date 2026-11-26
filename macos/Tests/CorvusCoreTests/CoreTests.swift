@@ -1498,3 +1498,15 @@ final class BidiFileNameTests: XCTestCase {
         XCTAssertEqual(parseEnvelope(env).msg.attachments.first?.filename, "invoicetxt.exe")
     }
 }
+
+final class BackendSecretTests: XCTestCase {
+    func testSecretGoesIntoTheEnvironmentOnly() {
+        let env = SignalCli.environment(secret: "s3cret", previous: "old", base: ["PATH": "/usr/bin"])
+        XCTAssertEqual(env["CORVUS_CLI_SECRET"], "s3cret")
+        XCTAssertEqual(env["CORVUS_CLI_SECRET_PREVIOUS"], "old")
+        XCTAssertEqual(env["CORVUS_SWEEP_DAYS"], "0")
+        let none = SignalCli.environment(secret: "", previous: "old", base: [:])
+        XCTAssertNil(none["CORVUS_CLI_SECRET"])
+        XCTAssertNil(none["CORVUS_CLI_SECRET_PREVIOUS"])
+    }
+}

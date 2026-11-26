@@ -46,7 +46,7 @@ struct ContentView: View {
         .tint(Theme.signalBlue)
         .background(WindowAccessor())
         .sheet(isPresented: $model.linkSheetShown) {
-            LinkView(executable: model.cli.executable) { model.finishLinking($0) }
+            LinkView(executable: model.cli.executable, secret: model.backendSecret) { model.finishLinking($0) }
         }
         .sheet(item: $model.groupSheet) { sheet in
             GroupSheetView(sheet: sheet)

@@ -198,7 +198,9 @@ final class AppModel {
     var messageRequestsShown = false
     var safetyChanged: [String: SafetyChange] = [:]   // conversation key -> unacknowledged change
     @ObservationIgnored private var viewOnceOpening: Set<String> = []
-    @ObservationIgnored private var historySecret = ""
+    /// Every corvus-cli process gets it, so the backend's encrypted data opens with the same unlock.
+    @ObservationIgnored private var historySecret = "" { didSet { cli.secret = historySecret } }
+    var backendSecret: String { historySecret }
     // Replay of the history the phone transferred while linking (shown behind a loading screen).
     var importActive = false
     var importDone = 0
@@ -814,7 +816,10 @@ final class AppModel {
                 return HistoryStoreError(code: 5)
             }
         }.value
-        if error == nil { historySecret = new }
+        if error == nil {
+            cli.previousSecret = old // until corvus-cli has re-wrapped its keyring with the new one
+            historySecret = new
+        }
         return error
     }
 
