@@ -365,6 +365,7 @@ final class AppModel {
         guard gen == connectGen else { return } // reconnect requested while a dialog was open
 
         chats.account = acc
+        chats.ensureNoteToSelf()
         cli.start(account: acc)
         guard cli.isRunning else { return }
         setConnected(true)
@@ -430,6 +431,7 @@ final class AppModel {
                     let key = !number.isEmpty ? number : uuid
                     if key.isEmpty { continue }
                     if !number.isEmpty && !uuid.isEmpty { chats.alias[uuid] = number }
+                    if chats.isNoteToSelf(key) { continue } // fixed title, managed locally
 
                     var title = jsonString(c["name"])
                     if title.isEmpty { title = jsonString(c["profileName"]) }
@@ -593,6 +595,7 @@ final class AppModel {
 
     private func loadHistory(_ records: [JSON]) {
         chats.loadHistory(records)
+        chats.ensureNoteToSelf()
         listChanged()
     }
 
@@ -717,6 +720,7 @@ final class AppModel {
     }
 
     func learnName(_ key: String, _ name: String) {
+        if chats.isNoteToSelf(key) { return } // the chat with ourselves keeps its fixed title
         chats.ensure(key)
         let c = chats.convs[key]!
         if !c.storedName.isEmpty || c.isGroup { return }
@@ -727,6 +731,7 @@ final class AppModel {
     }
 
     func setNickname(_ key: String, _ nickname: String) {
+        if chats.isNoteToSelf(key) { return } // nicknames are for contacts, not for ourselves
         guard let c = chats.convs[key], !c.isGroup else { return }
         chats.convs[key]!.localNickname = nickname
         chats.convs[key]!.title = nickname.isEmpty
@@ -780,7 +785,7 @@ final class AppModel {
     }
 
     func deleteConversation(_ key: String) async {
-        guard let c = chats.convs[key] else { return }
+        guard let c = chats.convs[key], !chats.isNoteToSelf(key) else { return } // like the official client
         guard await Dialogs.confirm("Delete conversation", "Delete “\(c.title)” and its stored messages from this computer?",
                                     ok: "Delete", destructive: true) else { return }
         if key == editKey { cancelEdit() }
@@ -1205,6 +1210,12 @@ final class AppModel {
         }
 
         let group = !pe.groupId.isEmpty
+        // A message straight from our own number is a note to ourselves: treat it as our own send
+        // (no unread badge, no notification), like the Qt app and the official client.
+        if !pe.outgoing && !group && chats.isNoteToSelf(pe.src) {
+            pe.outgoing = true
+            if pe.destination.isEmpty { pe.destination = account }
+        }
         let srcKey = chats.resolveKey(pe.src)
         let key = group ? "g:" + pe.groupId : (pe.outgoing ? chats.resolveKey(pe.destination) : srcKey)
         if key.isEmpty { return }
@@ -2500,7 +2511,8 @@ final class AppModel {
     // MARK: - Avatars
 
     func avatarImage(_ c: Conversation) -> NSImage {
-        avatars[c.key] ?? Media.placeholderAvatar(key: c.key, title: c.title)
+        if chats.isNoteToSelf(c.key) { return Media.noteToSelfAvatar } // fixed glyph, never a profile photo
+        return avatars[c.key] ?? Media.placeholderAvatar(key: c.key, title: c.title)
     }
 
     /// Avatars are needed for the contact list and for notifications (unless those hide the sender).
@@ -2513,7 +2525,7 @@ final class AppModel {
         guard avatarsWanted, cli.isRunning else { return }
         for key in chats.convs.keys {
             if avatarInFlight >= 4 { return } // continues when a request finishes
-            if avatarTried.contains(key) || avatarBusy.contains(key) { continue }
+            if avatarTried.contains(key) || avatarBusy.contains(key) || chats.isNoteToSelf(key) { continue }
             fetchAvatar(key)
         }
     }

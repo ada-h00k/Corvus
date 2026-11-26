@@ -374,7 +374,8 @@ private struct ConversationMenu: View {
 
     var body: some View {
         let c = conversation
-        if !c.isGroup {
+        let selfChat = model.chats.isNoteToSelf(c.key)
+        if !c.isGroup && !selfChat {
             Button { Task { await model.editNickname(c.key) } } label: {
                 Label(c.localNickname.isEmpty ? "Set nickname …" : "Change nickname …", systemImage: "person.text.rectangle")
             }
@@ -402,9 +403,11 @@ private struct ConversationMenu: View {
             }
         } label: { Label("Disappearing messages", systemImage: "timer") }
         .disabled(!model.connected)
-        Divider()
-        Button(role: .destructive) { Task { await model.deleteConversation(c.key) } } label: {
-            Label("Delete conversation …", systemImage: "trash")
+        if !selfChat { // Note to Self can be archived, but never deleted (like the official client)
+            Divider()
+            Button(role: .destructive) { Task { await model.deleteConversation(c.key) } } label: {
+                Label("Delete conversation …", systemImage: "trash")
+            }
         }
     }
 }

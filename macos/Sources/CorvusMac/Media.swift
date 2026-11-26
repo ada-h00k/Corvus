@@ -116,6 +116,38 @@ enum Media {
         }
     }
 
+    /// The Note to Self glyph: Signal-blue circle with a white notepad (spiral binding, ruled lines),
+    /// drawn like the Qt app's noteToSelfAvatar.
+    static let noteToSelfAvatar: NSImage = {
+        let size: CGFloat = 64
+        return NSImage(size: NSSize(width: size, height: size), flipped: true) { rect in
+            let blue = NSColor(srgbRed: 0x3a / 255, green: 0x76 / 255, blue: 0xf0 / 255, alpha: 1)
+            blue.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            let paper = NSRect(x: size * 0.29, y: size * 0.26, width: size * 0.42, height: size * 0.54)
+            NSColor.white.setFill()
+            NSBezierPath(roundedRect: paper, xRadius: size * 0.05, yRadius: size * 0.05).fill()
+            for i in 0..<3 {
+                let x = paper.minX + paper.width * (0.22 + 0.28 * CGFloat(i))
+                NSColor.white.setFill()
+                NSBezierPath(ovalIn: NSRect(x: x - size * 0.05, y: paper.minY - size * 0.05, width: size * 0.1, height: size * 0.1)).fill()
+                blue.setFill()
+                NSBezierPath(ovalIn: NSRect(x: x - size * 0.018, y: paper.minY - size * 0.018, width: size * 0.036, height: size * 0.036)).fill()
+            }
+            blue.setStroke()
+            for i in 0..<3 {
+                let y = paper.minY + paper.height * (0.38 + 0.22 * CGFloat(i))
+                let line = NSBezierPath()
+                line.lineWidth = size * 0.035
+                line.lineCapStyle = .round
+                line.move(to: NSPoint(x: paper.minX + paper.width * 0.16, y: y))
+                line.line(to: NSPoint(x: paper.maxX - paper.width * 0.16, y: y))
+                line.stroke()
+            }
+            return true
+        }
+    }()
+
     /// Round avatar, cut from the centre of the picture.
     static func roundAvatar(_ image: NSImage, size: CGFloat = 64) -> NSImage {
         NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in

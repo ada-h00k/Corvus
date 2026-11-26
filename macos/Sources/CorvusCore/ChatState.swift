@@ -29,6 +29,20 @@ public struct ChatState {
 
     public func resolveKey(_ id: String) -> String { alias[id] ?? id }
 
+    public static let noteToSelfTitle = "Note to Self"
+
+    /// The chat with our own account (key may be our number or our UUID).
+    public func isNoteToSelf(_ key: String) -> Bool {
+        !account.isEmpty && (key == account || resolveKey(key) == account)
+    }
+
+    /// Like the official clients, "Note to Self" exists as soon as the account is known, with a fixed title.
+    public mutating func ensureNoteToSelf() {
+        guard !account.isEmpty else { return }
+        ensure(account, title: ChatState.noteToSelfTitle)
+        convs[account]!.title = ChatState.noteToSelfTitle
+    }
+
     /// Makes sure the conversation exists.
     public mutating func ensure(_ key: String, title: String = "", group: Bool = false) {
         if convs[key] != nil { return }
@@ -427,9 +441,11 @@ public struct ChatState {
 
     /// Conversations of one folder: newest activity first, or with `alphabetical` by name only, so the
     /// order does not change while messages arrive (same rules as the Qt app's ConversationOrder).
+    /// "Note to Self" is pinned at the top of the chat list (an archived one lives in the folder).
     public func sortedConversations(archived: Bool, alphabetical: Bool = false) -> [Conversation] {
         convs.values.filter { $0.archived == archived }.sorted { a, b in
-            ChatState.before(a, b, alphabetical: alphabetical)
+            if !archived && isNoteToSelf(a.key) != isNoteToSelf(b.key) { return isNoteToSelf(a.key) }
+            return ChatState.before(a, b, alphabetical: alphabetical)
         }
     }
 

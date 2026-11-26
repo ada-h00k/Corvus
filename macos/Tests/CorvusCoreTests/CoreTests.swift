@@ -352,6 +352,23 @@ final class ChatStateTests: XCTestCase {
         XCTAssertNil(jsonObject(Records.message("+49bob", outgoing(1))["d"])["rs"])
     }
 
+    func testNoteToSelfIsPinnedWithFixedTitle() {
+        var s = makeState()
+        s.alias["uuid-me"] = s.account
+        s.addMessage("+49bob", outgoing(500))
+        s.ensureNoteToSelf()
+        XCTAssertEqual(s.convs[s.account]?.title, "Note to Self")
+        XCTAssertTrue(s.isNoteToSelf("uuid-me"))
+        XCTAssertFalse(s.isNoteToSelf("+49bob"))
+        // pinned on top although Bob's chat is newer, also when sorted by name
+        XCTAssertEqual(s.sortedConversations(archived: false).first?.key, s.account)
+        XCTAssertEqual(s.sortedConversations(archived: false, alphabetical: true).first?.key, s.account)
+        // an archived Note to Self lives in the folder like any other chat
+        s.convs[s.account]!.archived = true
+        XCTAssertEqual(s.sortedConversations(archived: false).map(\.key), ["+49bob"])
+        XCTAssertEqual(s.sortedConversations(archived: true).map(\.key), [s.account])
+    }
+
     func testPerRecipientReceipts() {
         var s = makeState()
         s.addMessage("g:G1", outgoing(200), group: true)
