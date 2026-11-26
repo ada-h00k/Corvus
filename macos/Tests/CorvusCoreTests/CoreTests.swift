@@ -425,6 +425,34 @@ final class ChatStateTests: XCTestCase {
         XCTAssertTrue(s.convs["+49bob"]!.msgs[0].attachments.isEmpty)
     }
 
+    func testPinsFromEnvelopesAndLimit() {
+        let env: JSON = ["sourceNumber": "+49alice", "timestamp": 50,
+                         "dataMessage": ["timestamp": 50, "pinMessage": ["targetAuthorNumber": "+49me", "targetSentTimestamp": 100,
+                                                                         "pinDurationSeconds": 0] as JSON] as JSON]
+        let pe = parseEnvelope(env)
+        XCTAssertEqual(pe.kind, .pin)
+        XCTAssertEqual(pe.targetTs, 100)
+        XCTAssertEqual(pe.pinDurationSeconds, -1, "unspecified = forever")
+        let unpin: JSON = ["sourceNumber": "+49alice", "timestamp": 60,
+                           "dataMessage": ["timestamp": 60, "unpinMessage": ["targetAuthorNumber": "+49me", "targetSentTimestamp": 100] as JSON] as JSON]
+        XCTAssertEqual(parseEnvelope(unpin).kind, .unpin)
+
+        var s = makeState()
+        for ts in [100, 200, 300, 400] as [Int64] { s.addMessage("+49alice", outgoing(ts)) }
+        XCTAssertNil(s.applyPin("+49alice", targetTs: 999, authors: ["+49me"], by: "+49alice", durationSeconds: -1, now: 1))
+        for ts in [100, 200, 300, 400] as [Int64] {
+            XCTAssertNotNil(s.applyPin("+49alice", targetTs: ts, authors: ["+49me"], by: "+49alice", durationSeconds: -1, now: 1))
+        }
+        XCTAssertEqual(s.convs["+49alice"]!.pins.map(\.ts), [200, 300, 400], "a fourth pin replaces the oldest")
+        // re-pinning moves it to the end instead of showing it twice
+        _ = s.applyPin("+49alice", targetTs: 200, authors: ["+49me"], by: "+49me", durationSeconds: 86400, now: 1000)
+        XCTAssertEqual(s.convs["+49alice"]!.pins.map(\.ts), [300, 400, 200])
+        XCTAssertNotNil(s.applyUnpin("+49alice", targetTs: 300, authors: ["+49me"]))
+        XCTAssertNil(s.applyUnpin("+49alice", targetTs: 300, authors: ["+49me"]))
+        XCTAssertEqual(s.pruneExpiredPins(now: 1000 + 86_400_000), ["+49alice"])
+        XCTAssertEqual(s.convs["+49alice"]!.pins.map(\.ts), [400])
+    }
+
     func testPerRecipientReceipts() {
         var s = makeState()
         s.addMessage("g:G1", outgoing(200), group: true)

@@ -878,6 +878,59 @@ final class AppModel {
         }
     }
 
+    // MARK: - Pins
+
+    static let pinDurations: [(String, Int64)] = [("24 hours", 24 * 3600), ("7 days", 7 * 24 * 3600),
+                                                  ("30 days", 30 * 24 * 3600), ("Forever", -1)]
+
+    func isPinned(_ m: Message) -> Bool {
+        currentConversation?.pins.contains { $0.ts == m.ts || $0.ts == m.latestTs } ?? false
+    }
+
+    /// Pins a message of the open chat for everyone (corvus-cli sendPinMessage); a fourth pin replaces the oldest.
+    func pin(_ id: String, durationSeconds: Int64) {
+        guard let c = currentConversation, let (_, m) = message(withId: id), !m.deleted, !m.viewOnce else { return }
+        let author = chats.effectiveAuthor(c, m), ts = m.latestTs, key = c.key
+        var p: JSON = ["targetAuthor": author, "targetTimestamp": ts, "pinDuration": durationSeconds]
+        addRecipient(&p, c)
+        Task { [p] in
+            do {
+                _ = try await cli.call("sendPinMessage", p)
+                if let rec = chats.applyPin(key, targetTs: ts, authors: [author], by: account,
+                                            durationSeconds: durationSeconds, now: nowMs()) { persist(rec) }
+            } catch {
+                showFlash("Could not pin the message: \(error.localizedDescription)", seconds: 8)
+            }
+        }
+    }
+
+    func unpin(_ pin: PinInfo) {
+        guard let c = currentConversation else { return }
+        let key = c.key
+        let author = pin.authorKey.isEmpty ? (chats.pinnedMessage(c, pin).map { chats.effectiveAuthor(c, c.msgs[$0]) } ?? "") : pin.authorKey
+        var p: JSON = ["targetAuthor": author, "targetTimestamp": pin.ts]
+        addRecipient(&p, c)
+        Task { [p] in
+            do {
+                _ = try await cli.call("sendUnpinMessage", p)
+                if let rec = chats.applyUnpin(key, targetTs: pin.ts, authors: [author]) { persist(rec) }
+            } catch {
+                showFlash("Could not unpin the message: \(error.localizedDescription)", seconds: 8)
+            }
+        }
+    }
+
+    func unpin(message id: String) {
+        guard let c = currentConversation, let (_, m) = message(withId: id) else { return }
+        unpin(PinInfo(ts: m.latestTs, authorKey: chats.effectiveAuthor(c, m)))
+    }
+
+    /// Pins of the open chat that have not run out.
+    var activePins: [PinInfo] {
+        let now = nowMs()
+        return currentConversation?.pins.filter { !$0.isExpired(now: now) } ?? []
+    }
+
     // MARK: - Forwarding
 
     /// Chats a message can be forwarded to (not blocked ones), by name.
@@ -1220,6 +1273,10 @@ final class AppModel {
 
     private func expireMessages() {
         let now = nowMs()
+        // Expired pins vanish (no record: the next compaction drops them, like the Qt app).
+        if historyReady && chats.convs.values.contains(where: { $0.pins.contains { $0.isExpired(now: now) } }) {
+            chats.pruneExpiredPins(now: now)
+        }
         if historyReady && chats.hasExpiredViewOnce(now: now) {
             for r in chats.expireViewOnce(now: now) {
                 deleteAttachmentFiles(r.attachments)
@@ -1586,6 +1643,14 @@ final class AppModel {
                                              reactor: reactor, emoji: pe.remove ? "" : pe.emoji) {
                 persist(rec)
             }
+            return
+        case .pin, .unpin:
+            let by = pe.outgoing ? account : srcKey
+            let rec = pe.kind == .pin
+                ? chats.applyPin(key, targetTs: pe.targetTs, authors: [pe.targetNumber, pe.targetUuid], by: by,
+                                 durationSeconds: pe.pinDurationSeconds, now: nowMs())
+                : chats.applyUnpin(key, targetTs: pe.targetTs, authors: [pe.targetNumber, pe.targetUuid])
+            if let rec { persist(rec) }
             return
         case .edit:
             // Like the official clients: an edit is only applied to a known message written by the same author.

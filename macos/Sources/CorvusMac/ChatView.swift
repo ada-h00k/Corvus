@@ -15,6 +15,7 @@ struct ChatPane: View {
             if let change = model.safetyChanged[conversation.key], !conversation.isGroup {
                 SafetyBar(conversation: conversation, change: change)
             }
+            if !model.activePins.isEmpty { PinBanner(conversation: conversation, pins: model.activePins) }
             MessageList(conversation: conversation)
                 .overlay {
                     if dropTargeted {
@@ -99,6 +100,67 @@ private struct SearchBar: View {
         .background(Theme.chrome)
         .overlay(alignment: .bottom) { Divider() }
         .onAppear { focused = true }
+    }
+}
+
+/// The pinned messages of the chat (at most three): one at a time, a click shows it and moves to the next,
+/// the menu shows or unpins each of them (as in the Qt app's pin banner).
+private struct PinBanner: View {
+    @Environment(AppModel.self) private var model
+    let conversation: Conversation
+    let pins: [PinInfo]
+    @State private var shown = 0
+
+    private func snippet(_ pin: PinInfo) -> String {
+        guard let i = model.chats.pinnedMessage(conversation, pin) else { return "Message not available" }
+        let m = conversation.msgs[i]
+        var t = model.displayText(m).text.replacingOccurrences(of: "\n", with: " ")
+        if t.isEmpty, let a = m.attachments.first {
+            t = a.isSticker ? "Sticker" : a.isImage ? "📷 Photo" : a.isVideo ? "🎬 Video" : a.isAudio ? "🎤 Audio" : "📎 " + a.filename
+        }
+        if m.hasPoll { t = "📊 " + m.poll.question }
+        if m.hasContact { t = "👤 " + m.contact.name }
+        let who = m.outgoing ? "You" : model.displayName(m.authorKey)
+        return who.isEmpty ? t : who + ": " + t
+    }
+
+    var body: some View {
+        let i = min(shown, pins.count - 1)
+        let pin = pins[i]
+        HStack(spacing: 10) {
+            Image(systemName: "pin.fill").foregroundStyle(Theme.signalBlue)
+            Button {
+                if let mi = model.chats.pinnedMessage(conversation, pin) { model.scrollToMessage(index: mi) }
+                shown = (i + 1) % pins.count
+            } label: {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(pins.count > 1 ? "Pinned message \(i + 1)/\(pins.count)" : "Pinned message")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: snippet(pin)).lineLimit(1).font(.callout)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Show the pinned message")
+            Menu {
+                ForEach(Array(pins.enumerated()), id: \.offset) { _, p in
+                    let by = p.by.isEmpty ? "" : model.displayName(p.by) + " · "
+                    Menu(by + snippet(p)) {
+                        if let mi = model.chats.pinnedMessage(conversation, p) {
+                            Button("Show message") { model.scrollToMessage(index: mi) }
+                        }
+                        Button("Unpin") { model.unpin(p) }.disabled(!model.connected)
+                    }
+                }
+            } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(Theme.chrome)
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 
@@ -869,6 +931,19 @@ private struct MessageMenu: View {
                     Button(m.reactions[model.account] == e ? "\(e)  (remove)" : e) { model.sendReaction(m.id, e) }
                 }
             } label: { Label("React", systemImage: "face.smiling") }
+            if !m.viewOnce {
+                if model.isPinned(m) {
+                    Button { model.unpin(message: m.id) } label: { Label("Unpin", systemImage: "pin.slash") }
+                        .disabled(!model.connected)
+                } else {
+                    Menu {
+                        ForEach(AppModel.pinDurations, id: \.1) { label, seconds in
+                            Button(label) { model.pin(m.id, durationSeconds: seconds) }
+                        }
+                    } label: { Label("Pin …", systemImage: "pin") }
+                    .disabled(!model.connected)
+                }
+            }
             if model.canForward(m) {
                 Button { model.chatSheet = .forward(m.id) } label: { Label("Forward …", systemImage: "arrowshape.turn.up.right") }
                     .disabled(!model.connected)

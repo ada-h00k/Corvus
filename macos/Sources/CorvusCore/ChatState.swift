@@ -172,6 +172,38 @@ public struct ChatState {
         convs[key]!.pins.append(pin)
     }
 
+    /// A pin of a known message (by us or someone else). Returns the record, nil if the message is unknown.
+    public mutating func applyPin(_ key: String, targetTs: Int64, authors: [String], by: String,
+                                  durationSeconds: Int64, now: Int64) -> JSON? {
+        guard let c = convs[key], let i = findMessage(c, ts: targetTs, authors: authors), !c.msgs[i].deleted else { return nil }
+        let author = effectiveAuthor(c, c.msgs[i])
+        convs[key]!.pins.removeAll { $0.ts == targetTs && ($0.authorKey.isEmpty || author.isEmpty || $0.authorKey == author) }
+        let pin = PinInfo(ts: targetTs, authorKey: author, by: by, pinnedAtMs: now, durationSeconds: durationSeconds)
+        addPin(key, pin)
+        return Records.pin(key, pin)
+    }
+
+    /// Removes the pin of a message. Returns the record, nil if it was not pinned.
+    public mutating func applyUnpin(_ key: String, targetTs: Int64, authors: [String]) -> JSON? {
+        guard let c = convs[key] else { return nil }
+        let expected = findMessage(c, ts: targetTs, authors: authors).map { effectiveAuthor(c, c.msgs[$0]) } ?? ""
+        let given = authors.filter { !$0.isEmpty }
+        let match = { (p: PinInfo) -> Bool in
+            guard p.ts == targetTs else { return false }
+            if !expected.isEmpty { return p.authorKey.isEmpty || p.authorKey == expected }
+            if !given.isEmpty { return p.authorKey.isEmpty || given.contains(p.authorKey) }
+            return true
+        }
+        guard c.pins.contains(where: match) else { return nil }
+        convs[key]!.pins.removeAll(where: match)
+        return Records.pin(key, PinInfo(ts: targetTs), removed: true)
+    }
+
+    /// The message a pin points at (index into msgs), nil if it is not available.
+    public func pinnedMessage(_ c: Conversation, _ pin: PinInfo) -> Int? {
+        findMessage(c, ts: pin.ts, authors: pin.authorKey.isEmpty ? [] : [pin.authorKey])
+    }
+
     /// Drops pins whose duration ran out. Returns the keys of the chats that changed.
     @discardableResult
     public mutating func pruneExpiredPins(now: Int64) -> [String] {

@@ -2,7 +2,7 @@ import Foundation
 
 /// A signal-cli "receive" envelope reduced to what the GUI needs.
 public struct ParsedEnvelope {
-    public enum Kind { case none, message, reaction, edit, remoteDelete, expirationUpdate, receipt, typing }
+    public enum Kind { case none, message, reaction, edit, remoteDelete, expirationUpdate, receipt, typing, pin, unpin }
 
     public var kind: Kind = .none
     public var outgoing = false        // sent by one of our own other devices (sync message)
@@ -22,6 +22,9 @@ public struct ParsedEnvelope {
     public var targetNumber = ""
     public var targetUuid = ""
     public var targetTs: Int64 = 0     // reaction: reacted message; edit/remoteDelete: timestamp of the target message
+
+    // Pin: -1 = forever (also when the backend leaves it unspecified)
+    public var pinDurationSeconds: Int64 = -1
 
     // @mentions in msg.text (message, edit)
     public var mentions: [Mention] = []
@@ -152,6 +155,22 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
         if out.targetNumber.isEmpty { out.targetNumber = jsonString(r["targetAuthor"]) }
         out.targetUuid = jsonString(r["targetAuthorUuid"])
         out.targetTs = jsonInt64(r["targetSentTimestamp"])
+        return
+    }
+    // {"pinMessage": {"targetAuthorNumber"/"targetAuthorUuid", "targetSentTimestamp", "pinDurationSeconds"}}
+    // and {"unpinMessage": {…}}: like a reaction, an empty message that references another one.
+    for (field, kind) in [("pinMessage", ParsedEnvelope.Kind.pin), ("unpinMessage", .unpin)] {
+        let pin = jsonObject(dm[field])
+        if pin.isEmpty { continue }
+        out.kind = kind
+        out.targetNumber = jsonString(pin["targetAuthorNumber"])
+        if out.targetNumber.isEmpty { out.targetNumber = jsonString(pin["targetAuthor"]) }
+        out.targetUuid = jsonString(pin["targetAuthorUuid"])
+        out.targetTs = jsonInt64(pin["targetSentTimestamp"])
+        if kind == .pin {
+            out.pinDurationSeconds = pin["pinDurationSeconds"] == nil ? -1 : jsonInt64(pin["pinDurationSeconds"])
+            if out.pinDurationSeconds == 0 { out.pinDurationSeconds = -1 } // unspecified: keep it pinned
+        }
         return
     }
     // "Delete for everyone": {"remoteDelete": {"timestamp": <sent timestamp of the deleted message>}}
