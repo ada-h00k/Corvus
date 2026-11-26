@@ -189,6 +189,16 @@ final class AppModel {
     var hiddenContacts: [String: String] = [:]
     var messageRequestsShown = false
     var safetyChanged: [String: SafetyChange] = [:]   // conversation key -> unacknowledged change
+    @ObservationIgnored private var viewOnceOpening: Set<String> = []
+    var composerViewOnce = false // send the one staged photo as View Once
+
+    /// One still image staged (no GIF, no recording), no caption and no reply: it can go out as View Once.
+    var viewOnceEligible: Bool {
+        guard pendingFiles.count == 1, let f = pendingFiles.first, voiceFiles[f] == nil, editKey.isEmpty, !replyQuote.valid,
+              composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let mime = Media.mimeType(forFile: f)
+        return mime.hasPrefix("image/") && mime != "image/gif" && !f.lowercased().hasSuffix(".gif")
+    }
     @ObservationIgnored private var knownSafety: [String: String] = [:] // recipient -> accepted digits
     @ObservationIgnored private var knownSafetyAccount = ""
     @ObservationIgnored private var identityCheckedMs: [String: Int64] = [:]
@@ -1208,6 +1218,12 @@ final class AppModel {
 
     private func expireMessages() {
         let now = nowMs()
+        if historyReady && chats.hasExpiredViewOnce(now: now) {
+            for r in chats.expireViewOnce(now: now) {
+                deleteAttachmentFiles(r.attachments)
+                persist(r.record)
+            }
+        }
         guard historyReady, chats.hasExpiredMessages(now: now) else { return }
         let removed = chats.expireMessages(now: now)
         if removed.isEmpty { return }
@@ -1608,6 +1624,7 @@ final class AppModel {
         m.outgoing = pe.outgoing
         m.authorKey = pe.outgoing ? account : srcKey
         if m.outgoing && m.expiresInSeconds > 0 { m.expirationStartMs = m.ts }
+        m.sanitizeViewOnce()
         if m.quote.valid { m.quote.authorKey = chats.resolveKey(m.quote.authorKey) }
         if !pe.outgoing {
             var display = chats.convs[srcKey]?.title ?? ""
@@ -1631,7 +1648,7 @@ final class AppModel {
             alertIncoming(key, m)
             if !group { refreshAvatar(key) } // the contact may have changed the picture
         }
-        fetchThumbnails(key, ts: m.ts, author: m.authorKey)
+        if !m.viewOnce { fetchThumbnails(key, ts: m.ts, author: m.authorKey) } // no preview of a View Once photo
     }
 
     @discardableResult
@@ -1648,7 +1665,8 @@ final class AppModel {
                 typing[key]!.removeValue(forKey: m.authorKey)
                 if typing[key]!.isEmpty { typing.removeValue(forKey: key) }
             }
-            if !m.authorKey.isEmpty { unsentReads[key, default: []].append((m.authorKey, m.ts)) }
+            // A View Once item gets its "viewed" receipt when it is opened, not a read receipt.
+            if !m.authorKey.isEmpty && !m.viewOnce { unsentReads[key, default: []].append((m.authorKey, m.ts)) }
         }
         // A message in the selected chat is only read while the user looks at it.
         if !m.outgoing {
@@ -1843,6 +1861,8 @@ final class AppModel {
             previewForSend = draftLinkPreview
         }
         let files = pendingFiles, quote = replyQuote, gifAnalytics = pendingGifAnalyticsUrl
+        let viewOnce = composerViewOnce && viewOnceEligible
+        composerViewOnce = false
         stopTyping()
 
         var p: JSON = [:]
@@ -1893,6 +1913,7 @@ final class AppModel {
             p["quoteAuthor"] = quote.authorKey
             p["quoteMessage"] = quote.text
         }
+        if viewOnce { p["viewOnce"] = true }
         addRecipient(&p, c)
 
         // Insert a temporary local message before waiting for signal-cli. It is kept out of
@@ -1910,6 +1931,7 @@ final class AppModel {
         preview.attachments = atts
         preview.linkPreview = previewForSend
         preview.linkPreview.imagePath = ""
+        preview.viewOnce = viewOnce
 
         let localStyles = preview.textStyles
         let pendingId = UUID().uuidString
@@ -2658,8 +2680,34 @@ final class AppModel {
 
     /// A click on an attachment, following `AttachmentPolicy`: audio, video and images are shown by the app,
     /// files that can run code are never opened (only saved), everything else is opened after confirmation.
+    /// Opens an unopened View Once photo once: shown in the viewer, then its content is gone on this device
+    /// (and on the backend), and the sender gets a "viewed" receipt.
+    func openViewOnce(_ m: Message) {
+        guard let key = current, let c = chats.convs[key], m.viewOnce, !m.outgoing, !m.viewOnceViewed, !m.viewOnceExpired,
+              let att = m.attachments.first else { return }
+        let author = chats.effectiveAuthor(c, m), ts = m.ts
+        let token = "\(key)|\(ts)|\(author)"
+        guard !viewOnceOpening.contains(token) else { return }
+        viewOnceOpening.insert(token)
+        Task {
+            defer { viewOnceOpening.remove(token) }
+            guard let data = try? await fetchAttachmentData(key, att), !data.isEmpty, NSImage(data: data) != nil else {
+                showFlash("The View Once photo could not be loaded.", seconds: 6)
+                return
+            }
+            ImageViewerWindow.show(data: data, title: "View Once photo")
+            guard let r = chats.consumeViewOnce(key, ts: ts, author: author, expired: false) else { return }
+            deleteAttachmentFiles(r.attachments)
+            persist(r.record)
+            listChanged()
+            let p: JSON = ["recipient": author, "targetTimestamp": [ts], "type": "viewed"]
+            Task { _ = try? await cli.call("sendReceipt", p) }
+        }
+    }
+
     func openAttachment(_ m: Message, _ i: Int) {
         guard let key = current, i < m.attachments.count else { return }
+        if m.viewOnce { return openViewOnce(m) }
         let att = m.attachments[i]
         if (att.isAudio || att.isVideo)
             && AttachmentPolicy.classify(filename: att.filename, contentType: att.contentType, isMedia: true) == .risky {

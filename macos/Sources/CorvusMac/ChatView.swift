@@ -102,6 +102,36 @@ private struct SearchBar: View {
     }
 }
 
+/// A View Once photo: "1×" and its state; an unopened received one opens on click (once).
+private struct ViewOnceBox: View {
+    @Environment(AppModel.self) private var model
+    let message: Message
+    let foreground: Color
+
+    var body: some View {
+        let m = message
+        let openable = !m.outgoing && !m.viewOnceViewed && !m.viewOnceExpired && !m.attachments.isEmpty
+        let label = m.viewOnceExpired ? "View Once media expired"
+            : m.viewOnceViewed ? "Viewed"
+            : m.outgoing ? "View Once photo sent" : "View Once photo · Click to view"
+        Button { if openable { model.openViewOnce(m) } } label: {
+            HStack(spacing: 10) {
+                Text("1×").font(.system(size: 15, weight: .bold))
+                    .frame(width: 30, height: 30)
+                    .overlay(Circle().strokeBorder(foreground.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: openable ? [] : [3, 3])))
+                Text(label).font(.callout.weight(.semibold))
+            }
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(foreground.opacity(0.12)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!openable)
+        .help(openable ? "The photo can be viewed once; afterwards it is gone from this device" : "")
+    }
+}
+
 /// Warning shown while a contact's safety number changed and the change is not accepted yet.
 private struct SafetyBar: View {
     @Environment(AppModel.self) private var model
@@ -431,11 +461,11 @@ private struct Bubble: View {
         let bg = m.outgoing ? a.outBgColor : a.inBgColor
         let shape = bubbleShape(radius: CGFloat(a.radius))
         let pending = model.chats.isPendingPreview(model.current ?? "", ts: m.ts)
-        let mediaOnly = m.text.isEmpty && !m.quote.valid && !m.attachments.isEmpty
+        let mediaOnly = !m.viewOnce && m.text.isEmpty && !m.quote.valid && !m.attachments.isEmpty
             && m.attachments.allSatisfy { $0.isImage && !$0.thumb.isEmpty }
         let showSender = isGroup && !m.outgoing && !grouping.joinedAbove
         // A sticker on its own is shown without a bubble, like in the Signal apps.
-        let stickerOnly = m.text.isEmpty && !m.quote.valid && m.attachments.count == 1 && m.attachments[0].isSticker
+        let stickerOnly = !m.viewOnce && m.text.isEmpty && !m.quote.valid && m.attachments.count == 1 && m.attachments[0].isSticker
 
         Group {
             if m.deleted {
@@ -487,8 +517,12 @@ private struct Bubble: View {
                     VStack(alignment: .leading, spacing: 6) {
                         if showSender { senderLabel }
                         if m.quote.valid { QuoteView(quote: m.quote, foreground: fg, outgoing: m.outgoing) }
-                        ForEach(Array(m.attachments.enumerated()), id: \.offset) { i, att in
-                            AttachmentView(message: m, index: i, attachment: att, foreground: fg, edgeToEdge: false)
+                        if m.viewOnce {
+                            ViewOnceBox(message: m, foreground: fg)
+                        } else {
+                            ForEach(Array(m.attachments.enumerated()), id: \.offset) { i, att in
+                                AttachmentView(message: m, index: i, attachment: att, foreground: fg, edgeToEdge: false)
+                            }
                         }
                         if !m.text.isEmpty {
                             let shown = model.displayText(m)
@@ -848,7 +882,7 @@ private struct MessageMenu: View {
                 NSPasteboard.general.setString(m.text, forType: .string)
             } label: { Label("Copy text", systemImage: "doc.on.doc") }
         }
-        ForEach(Array(m.attachments.enumerated()), id: \.offset) { i, a in
+        ForEach(Array((m.viewOnce ? [] : m.attachments).enumerated()), id: \.offset) { i, a in
             Button { model.saveAttachment(m, i) } label: {
                 Label("Save “\(a.filename.isEmpty ? "attachment" : a.filename)” …", systemImage: "square.and.arrow.down")
             }

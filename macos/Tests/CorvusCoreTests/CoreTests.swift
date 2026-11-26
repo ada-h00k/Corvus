@@ -369,6 +369,62 @@ final class ChatStateTests: XCTestCase {
         XCTAssertEqual(s.sortedConversations(archived: true).map(\.key), [s.account])
     }
 
+    func testViewOnceIsConsumedOnceAndExpires() {
+        var s = makeState()
+        var m = Message()
+        m.ts = 1000
+        m.authorKey = "+49alice"
+        m.viewOnce = true
+        m.text = "caption"
+        var a = Attachment()
+        a.id = "vo"
+        a.contentType = "image/jpeg"
+        m.attachments = [a]
+        m.sanitizeViewOnce()
+        XCTAssertEqual(m.text, "", "a View Once item has no caption")
+        XCTAssertEqual(m.attachments.count, 1)
+        s.addMessage("+49alice", m)
+        // the stored record keeps only the opaque reference
+        let rec = Records.message("+49alice", s.convs["+49alice"]!.msgs[0])
+        XCTAssertEqual(jsonBool(jsonObject(rec["d"])["vo"]), true)
+
+        let consumed = s.consumeViewOnce("+49alice", ts: 1000, author: "+49alice", expired: false)
+        XCTAssertEqual(consumed?.attachments.map(\.id), ["vo"])
+        XCTAssertNil(s.consumeViewOnce("+49alice", ts: 1000, author: "+49alice", expired: false), "only once")
+        XCTAssertTrue(s.convs["+49alice"]!.msgs[0].viewOnceViewed)
+        var r = makeState()
+        r.loadHistory([rec, consumed!.record])
+        XCTAssertTrue(r.convs["+49alice"]!.msgs[0].viewOnceViewed)
+        XCTAssertTrue(r.convs["+49alice"]!.msgs[0].attachments.isEmpty)
+
+        // an unopened one runs out after 45 days
+        var e = makeState()
+        e.addMessage("+49alice", m)
+        XCTAssertFalse(e.hasExpiredViewOnce(now: 1000 + Message.viewOnceLifetimeMs - 1))
+        XCTAssertEqual(e.expireViewOnce(now: 1000 + Message.viewOnceLifetimeMs).count, 1)
+        XCTAssertTrue(e.convs["+49alice"]!.msgs[0].viewOnceExpired)
+    }
+
+    func testSentViewOnceKeepsNothing() {
+        var s = makeState()
+        s.ensure("+49bob")
+        var preview = outgoing(100)
+        preview.viewOnce = true
+        var a = Attachment()
+        a.path = "/tmp/x.jpg"
+        a.thumb = Data([1])
+        preview.attachments = [a]
+        s.convs["+49bob"]!.insertSorted(preview)
+        var p = PendingSend()
+        p.conversationKey = "+49bob"
+        p.temporaryTimestamp = 100
+        p.message = preview
+        s.pendingSends["id"] = p
+        _ = s.finalizePendingSend("id", timestamp: 150)
+        XCTAssertTrue(s.convs["+49bob"]!.msgs[0].viewOnce)
+        XCTAssertTrue(s.convs["+49bob"]!.msgs[0].attachments.isEmpty)
+    }
+
     func testPerRecipientReceipts() {
         var s = makeState()
         s.addMessage("g:G1", outgoing(200), group: true)

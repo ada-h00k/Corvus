@@ -30,6 +30,15 @@ struct ComposerArea: View {
                 AttachmentTray(files: model.pendingFiles, voiceFiles: model.voiceFiles) { f in
                     model.removePendingFile(f)
                 }
+                // View Once: offered only for exactly one still image without a caption or reply (as in the Qt app).
+                if model.viewOnceEligible {
+                    Toggle(isOn: Binding(get: { model.composerViewOnce }, set: { model.composerViewOnce = $0 })) {
+                        Label("View Once (1×)", systemImage: "1.circle")
+                    }
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                    .help("Send one photo that can be viewed once (one image, no caption)")
+                }
             }
             if model.recording {
                 RecordBar()

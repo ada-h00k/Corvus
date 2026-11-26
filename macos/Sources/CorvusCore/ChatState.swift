@@ -309,6 +309,40 @@ public struct ChatState {
         return Records.deletion(key, convs[key]!.msgs[i])
     }
 
+    /// A View Once item was opened (or ran out): its content is dropped for good. Returns the record and the
+    /// attachments whose stored copies are to be deleted; nil if there was nothing to consume.
+    public mutating func consumeViewOnce(_ key: String, ts: Int64, author: String, expired: Bool) -> (record: JSON, attachments: [Attachment])? {
+        guard let c = convs[key], let i = findMessage(c, ts: ts, authors: [author]) else { return nil }
+        let m = c.msgs[i]
+        guard m.viewOnce, !m.viewOnceViewed, !m.viewOnceExpired else { return nil }
+        convs[key]!.msgs[i].viewOnceViewed = !expired
+        convs[key]!.msgs[i].viewOnceExpired = expired
+        convs[key]!.msgs[i].attachments = []
+        convs[key]!.msgs[i].text = ""
+        convs[key]!.msgs[i].textStyles = []
+        convs[key]!.msgs[i].mentions = []
+        convs[key]!.msgs[i].quote = Quote()
+        return (Records.viewOnceUpdate(key, convs[key]!.msgs[i]), m.attachments)
+    }
+
+    /// Unopened View Once items older than 45 days expire.
+    public mutating func expireViewOnce(now: Int64) -> [(record: JSON, attachments: [Attachment])] {
+        var out: [(record: JSON, attachments: [Attachment])] = []
+        for key in convs.keys {
+            for m in convs[key]!.msgs where m.viewOnce && !m.viewOnceViewed && !m.viewOnceExpired
+                && now - m.ts >= Message.viewOnceLifetimeMs {
+                if let r = consumeViewOnce(key, ts: m.ts, author: effectiveAuthor(convs[key]!, m), expired: true) { out.append(r) }
+            }
+        }
+        return out
+    }
+
+    public func hasExpiredViewOnce(now: Int64) -> Bool {
+        convs.values.contains { c in
+            c.msgs.contains { $0.viewOnce && !$0.viewOnceViewed && !$0.viewOnceExpired && now - $0.ts >= Message.viewOnceLifetimeMs }
+        }
+    }
+
     /// Starts the local timer of incoming disappearing messages (when the chat is looked at).
     public mutating func startIncomingExpirationTimers(_ key: String, now: Int64) -> [JSON] {
         guard convs[key] != nil else { return [] }
@@ -357,6 +391,8 @@ public struct ChatState {
         confirmed.ts = ts
         if let r = earlyReceipts.removeValue(forKey: ts), r > confirmed.receipt { confirmed.receipt = r }
         if let echo, echo.expiresInSeconds > 0 { confirmed.expiresInSeconds = echo.expiresInSeconds }
+        if let echo, echo.viewOnce { confirmed.viewOnce = true }
+        confirmed.sanitizeViewOnce() // a sent View Once photo is not kept on this device
         if confirmed.expiresInSeconds > 0 { confirmed.expirationStartMs = ts }
         if let echo {
             // Keep the local file paths and thumbnails, but copy the remote attachment IDs

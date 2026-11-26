@@ -327,6 +327,21 @@ public struct Message: Equatable, Identifiable {
         viewOnceExpired = false
     }
 
+    /// Like the official clients a View Once message is only the photo: no caption, quote or preview.
+    /// Our own sent item cannot be reopened here, so its attachment reference is dropped too.
+    public mutating func sanitizeViewOnce() {
+        guard viewOnce else { return }
+        text = ""
+        textStyles = []
+        mentions = []
+        quote = Quote()
+        linkPreview = LinkPreview()
+        if outgoing { attachments = [] }
+    }
+
+    /// An unopened View Once item older than this is gone (as in the Qt app and the official clients).
+    public static let viewOnceLifetimeMs: Int64 = 45 * 24 * 60 * 60 * 1000
+
     public func canEdit(nowMs: Int64) -> Bool {
         outgoing && !deleted && !text.isEmpty && editCount < Message.maxEdits && nowMs - ts <= Message.editWindowMs
     }

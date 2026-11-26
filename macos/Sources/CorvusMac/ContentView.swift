@@ -376,6 +376,7 @@ private struct ConversationRow: View {
 
     private func preview(_ m: Message) -> String {
         if m.deleted { return m.deletedText }
+        if m.viewOnce { return (m.outgoing ? "You: " : "") + "1× View Once photo" }
         var t = m.text.replacingOccurrences(of: "\n", with: " ")
         if t.isEmpty, let a = m.attachments.first {
             t = a.isSticker ? "Sticker" : a.isGif ? "GIF" : a.isImage ? "📷 Photo" : a.isVideo ? "🎬 Video" : a.isAudio ? "🎤 Audio" : "📎 " + a.filename

@@ -168,7 +168,8 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
     out.msg.attachments = parseAttachments(dm)
     if let sticker = parseSticker(dm) { out.msg.attachments.append(sticker) }
     out.msg.quote = parseQuote(dm)
-    out.msg.linkPreview = parseLinkPreview(dm)
+    out.msg.viewOnce = jsonBool(dm["viewOnce"])
+    out.msg.linkPreview = out.msg.viewOnce ? LinkPreview() : parseLinkPreview(dm)
     out.msg.expiresInSeconds = out.expirationSeconds
     if out.msg.text.isEmpty && out.msg.attachments.isEmpty { return } // receipts, typing, sessions, ...
 
