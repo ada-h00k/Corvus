@@ -15,6 +15,7 @@ struct ChatSheetView: View {
         case .gallery(let key): GalleryView(key: key)
         case .createPoll(let key): CreatePollView(key: key)
         case .pollVotes(let id): PollVotesView(messageId: id)
+        case .shareContact(let key): ShareContactView(key: key)
         }
     }
 }
@@ -530,5 +531,39 @@ struct PollVotesView: View {
         }
         .padding(20)
         .frame(width: 420)
+    }
+}
+
+/// "Share a contact": pick someone from the address book to send as a contact card.
+struct ShareContactView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let key: String
+    @State private var query = ""
+    @State private var selection: String?
+
+    var body: some View {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let list = model.shareableContacts.filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Share a contact").font(.headline)
+            TextField("Search", text: $query).textFieldStyle(.roundedBorder)
+            List(list, id: \.key, selection: $selection) { c in
+                Text(verbatim: c.name).help(c.key != c.name ? c.key : "").tag(c.key)
+            }
+            .frame(minHeight: 280)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Share") {
+                    if let s = selection { model.shareContact(s, in: key) }
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selection == nil || !model.connected)
+            }
+        }
+        .padding(20)
+        .frame(width: 360, height: 460)
     }
 }

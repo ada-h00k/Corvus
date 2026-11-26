@@ -92,6 +92,10 @@ struct ComposerArea: View {
                         Button("Poll …") { model.chatSheet = .createPoll(key) }
                             .disabled(!model.editKey.isEmpty)
                     }
+                    if let key = model.current, model.supportsContacts {
+                        Button("Contact …") { model.chatSheet = .shareContact(key) }
+                            .disabled(!model.editKey.isEmpty || model.shareableContacts.isEmpty)
+                    }
                 } label: {
                     Image(systemName: "paperclip").font(.system(size: 17))
                 } primaryAction: {

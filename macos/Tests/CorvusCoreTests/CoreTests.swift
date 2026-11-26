@@ -453,6 +453,20 @@ final class ChatStateTests: XCTestCase {
         XCTAssertEqual(s.convs["+49alice"]!.pins.map(\.ts), [400])
     }
 
+    func testContactCardFromEnvelope() {
+        let env: JSON = ["sourceNumber": "+49alice", "timestamp": 10,
+                         "dataMessage": ["timestamp": 10, "contacts": [[
+                             "name": "Carol", "number": "+49333", "uuid": "u-carol",
+                             "avatar": ["avatar": ["id": "av1", "contentType": "image/jpeg"] as JSON] as JSON,
+                         ] as JSON]] as JSON]
+        let pe = parseEnvelope(env)
+        XCTAssertEqual(pe.kind, .message, "a card has no text but is a message")
+        XCTAssertTrue(pe.msg.hasContact)
+        XCTAssertEqual(pe.msg.contact.name, "Carol")
+        XCTAssertEqual(pe.msg.contact.uuid, "u-carol")
+        XCTAssertEqual(pe.msg.contact.avatarId, "av1")
+    }
+
     func testPollsFromEnvelopes() {
         let create: JSON = ["sourceNumber": "+49alice", "timestamp": 100,
                             "dataMessage": ["timestamp": 100, "pollCreate": ["question": "Lunch?", "allowMultiple": false,
@@ -659,6 +673,22 @@ final class SignalCliProcessTests: XCTestCase {
         _ = try await cli.call("trust", ["recipient": "+49111", "verifiedSafetyNumber": id.digits])
         let after = SafetyNumber.pick(SafetyNumber.parse(try await cli.call("listIdentities", ["number": "+49111"])), recipient: "+49111")
         XCTAssertEqual(after?.isVerified, true)
+    }
+
+    func testContactCardAgainstMock() async throws {
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: "/usr/bin/python3"), "python3 missing")
+        let cli = SignalCli()
+        cli.executable = try mockPath()
+        defer { try? FileManager.default.removeItem(atPath: cli.executable) }
+        cli.start(account: "+491234567")
+        defer { cli.stop() }
+        let res = try await cli.call("sendContact", ["recipient": ["+49111"], "name": "Carol", "number": "+49333",
+                                                     "avatar": Data([0xff, 0xd8]).base64EncodedString()])
+        XCTAssertGreaterThan(jsonInt64(jsonObject(res)["timestamp"]), 0)
+        do {
+            _ = try await cli.call("sendContact", ["recipient": ["+49111"], "name": " "])
+            XCTFail("a card needs a name")
+        } catch {}
     }
 
     func testPollCallsAgainstMock() async throws {

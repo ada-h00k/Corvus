@@ -38,6 +38,7 @@ enum ChatSheet: Identifiable, Equatable {
     case gallery(String)        // conversation key
     case createPoll(String)     // conversation key
     case pollVotes(String)      // Message.id in the open chat
+    case shareContact(String)   // conversation key
 
     var id: String {
         switch self {
@@ -46,6 +47,7 @@ enum ChatSheet: Identifiable, Equatable {
         case .gallery(let k): return "gallery:" + k
         case .createPoll(let k): return "poll:" + k
         case .pollVotes(let m): return "votes:" + m
+        case .shareContact(let k): return "contact:" + k
         case .safetyNumber(let k): return "safety:" + k
         }
     }
@@ -957,6 +959,79 @@ final class AppModel {
                         icon: notify.content == .hidden ? nil : avatarImage(c))
     }
 
+    // MARK: - Contact cards
+
+    /// sendContact exists since corvus-cli 1.5.0.
+    var supportsContacts: Bool { backend.isCorvusCli && AppModel.compareVersions(backend.version, "1.5.0") != .orderedAscending }
+
+    /// People that can be shared: the address book (with a name), not ourselves, by name.
+    var shareableContacts: [(key: String, name: String)] {
+        chats.contactNames.filter { !$0.value.isEmpty && !chats.isNoteToSelf($0.key) && !(chats.convs[$0.key]?.blocked ?? false) }
+            .map { ($0.key, $0.value) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func shareContact(_ contactKey: String, in key: String) {
+        guard let c = chats.convs[key], supportsContacts, !c.blocked,
+              let name = chats.contactNames[contactKey], !name.isEmpty else { return }
+        // Only real phone numbers ride on the card; a UUID-only contact is shared by name (and its serviceId).
+        let number = chats.resolveKey(contactKey)
+        let hasNumber = number.hasPrefix("+")
+        let uuid = contactKey.contains("-") ? contactKey : (chats.alias.first { $0.value == contactKey }?.key ?? "")
+        var avatar = ""
+        if let img = avatars[contactKey], let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+           let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85]) {
+            avatar = jpeg.base64EncodedString()
+        }
+        var p: JSON = ["name": name]
+        if hasNumber { p["number"] = number }
+        if !uuid.isEmpty { p["uuid"] = uuid }
+        if !avatar.isEmpty { p["avatar"] = avatar }
+        addRecipient(&p, c)
+        var preview = Message()
+        preview.hasContact = true
+        preview.contact = ContactCard(name: name, number: hasNumber ? number : "", uuid: uuid)
+        preview.contact.avatar = avatar
+        sendWithPreview(key, method: "sendContact", params: p, preview: preview, failure: "The contact could not be shared")
+    }
+
+    /// Opens (or starts) the 1:1 chat with the person on a contact card.
+    func openContactChat(_ m: Message) {
+        guard m.hasContact, !m.deleted else { return }
+        let number = chats.resolveKey(m.contact.number), uuid = m.contact.uuid
+        var key = number.hasPrefix("+") ? number : (uuid.isEmpty ? "" : chats.resolveKey(uuid))
+        guard !key.isEmpty else { return } // no usable identifier
+        if chats.convs[key] == nil {
+            let other = key == number ? uuid : number
+            if !other.isEmpty && chats.convs[other] != nil { key = other }
+        }
+        chats.ensure(key, title: m.contact.name)
+        showArchived = chats.convs[key]!.archived
+        openConversation(key)
+    }
+
+    /// The avatar on a received card arrives as an attachment pointer (kept in memory, like the Qt app).
+    private func fetchContactAvatar(_ key: String, ts: Int64, author: String, attempt: Int = 0) {
+        guard let c = chats.convs[key], let i = chats.findMessage(c, ts: ts, authors: [author]) else { return }
+        let m = c.msgs[i]
+        guard m.hasContact, !m.contact.avatarId.isEmpty, m.contact.avatar.isEmpty else { return }
+        var p: JSON = ["id": m.contact.avatarId]
+        addRecipient(&p, c)
+        Task { [p] in
+            do {
+                let res = try await cli.call("getAttachment", p)
+                let data = Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
+                let thumb = Media.makeThumbnail(data)
+                guard !thumb.isEmpty, let c2 = chats.convs[key], let j = chats.findMessage(c2, ts: ts, authors: [author]) else { return }
+                chats.convs[key]!.msgs[j].contact.avatar = thumb.base64EncodedString()
+            } catch {
+                guard attempt < 3 else { return }
+                try? await Task.sleep(for: .seconds(2 * (attempt + 1)))
+                fetchContactAvatar(key, ts: ts, author: author, attempt: attempt + 1)
+            }
+        }
+    }
+
     // MARK: - Pins
 
     static let pinDurations: [(String, Int64)] = [("24 hours", 24 * 3600), ("7 days", 7 * 24 * 3600),
@@ -1811,6 +1886,7 @@ final class AppModel {
             if !group { refreshAvatar(key) } // the contact may have changed the picture
         }
         if !m.viewOnce { fetchThumbnails(key, ts: m.ts, author: m.authorKey) } // no preview of a View Once photo
+        if m.hasContact { fetchContactAvatar(key, ts: m.ts, author: m.authorKey) }
     }
 
     @discardableResult

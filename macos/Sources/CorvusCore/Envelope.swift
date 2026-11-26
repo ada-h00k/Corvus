@@ -216,6 +216,13 @@ private func parseBody(_ dm: JSON, _ out: inout ParsedEnvelope, envelopeTs: Int6
     out.msg.viewOnce = jsonBool(dm["viewOnce"])
     out.msg.linkPreview = out.msg.viewOnce ? LinkPreview() : parseLinkPreview(dm)
     out.msg.expiresInSeconds = out.expirationSeconds
+    // Contact cards: the first card is shown, like the official clients do for one shared contact.
+    // The avatar rides as an attachment pointer and is fetched later, like a thumbnail.
+    if let card = jsonArray(dm["contacts"]).first.map(jsonObject) {
+        out.msg.hasContact = true
+        out.msg.contact = ContactCard(name: jsonString(card["name"]), number: jsonString(card["number"]), uuid: jsonString(card["uuid"]))
+        out.msg.contact.avatarId = jsonString(jsonObject(jsonObject(card["avatar"])["avatar"])["id"])
+    }
     let pollCreate = jsonObject(dm["pollCreate"])
     if !pollCreate.isEmpty {
         out.msg.hasPoll = true

@@ -164,6 +164,36 @@ private struct PinBanner: View {
     }
 }
 
+/// A shared contact: avatar, name and number; "Message" opens the chat with them.
+private struct ContactCardView: View {
+    @Environment(AppModel.self) private var model
+    let message: Message
+    let foreground: Color
+
+    var body: some View {
+        let card = message.contact
+        HStack(spacing: 10) {
+            if let data = Data(base64Encoded: card.avatar), let img = NSImage(data: data) {
+                AvatarView(image: Media.roundAvatar(img), size: 40)
+            } else {
+                AvatarView(image: Media.placeholderAvatar(key: card.number + card.uuid, title: card.name), size: 40)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: card.name.isEmpty ? "Contact" : card.name).fontWeight(.semibold)
+                if !card.number.isEmpty { Text(verbatim: card.number).font(.caption).opacity(0.8) }
+            }
+            Spacer(minLength: 12)
+            if !card.number.isEmpty || !card.uuid.isEmpty {
+                Button("Message") { model.openContactChat(message) }
+                    .buttonStyle(.bordered)
+                    .help("Open a chat with \(card.name)")
+            }
+        }
+        .foregroundStyle(foreground)
+        .frame(minWidth: 220)
+    }
+}
+
 /// A poll in its bubble: question, options with their share of the votes; a click votes (or takes it back).
 private struct PollBubble: View {
     @Environment(AppModel.self) private var model
@@ -633,6 +663,7 @@ private struct Bubble: View {
                         if showSender { senderLabel }
                         if m.quote.valid { QuoteView(quote: m.quote, foreground: fg, outgoing: m.outgoing) }
                         if m.hasPoll { PollBubble(message: m, foreground: fg) }
+                        if m.hasContact { ContactCardView(message: m, foreground: fg) }
                         if m.viewOnce {
                             ViewOnceBox(message: m, foreground: fg)
                         } else {
