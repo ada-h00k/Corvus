@@ -246,17 +246,36 @@ public struct ChatState {
     /// A delivery/read receipt for our message sent at `ts`. Receipts carry no conversation, so
     /// `preferredKey` (the sender's 1:1 chat) is searched first, then every chat (group messages).
     /// The state only ever goes up. Returns the record to persist, nil if nothing changed.
-    public mutating func applyReceipt(ts: Int64, level: ReceiptStatus, preferredKey: String = "") -> JSON? {
+    /// `recipient` (who sent the receipt) and `timeMs` fill the per-recipient state shown in Message details.
+    public mutating func applyReceipt(ts: Int64, level: ReceiptStatus, preferredKey: String = "",
+                                      recipient: String = "", timeMs: Int64 = 0) -> JSON? {
         guard ts > 0, level > .sent else { return nil }
         var keys = convs.keys.sorted()
         if let i = keys.firstIndex(of: preferredKey) { keys.swapAt(0, i) }
+        let who = recipient.isEmpty ? "" : resolveKey(recipient)
         for key in keys {
             guard let i = findMessage(convs[key]!, ts: ts, authors: [account]) else { continue }
             let m = convs[key]!.msgs[i]
             guard m.outgoing, !isPendingPreview(key, ts: m.ts) else { continue }
-            if m.deleted || m.receipt >= level { return nil }
-            convs[key]!.msgs[i].receipt = level
-            return Records.receiptUpdate(key, convs[key]!.msgs[i])
+            if m.deleted { return nil }
+            var changed = false
+            if !who.isEmpty && who != account {
+                var r = m.recipientReceipts[who] ?? RecipientReceipt()
+                let old = r
+                r.status = max(r.status, level.rawValue)
+                let at = timeMs > 0 ? timeMs : nowMs()
+                if level == .delivered && r.deliveredAtMs <= 0 { r.deliveredAtMs = at }
+                if level == .read && r.readAtMs <= 0 { r.readAtMs = at }
+                if r != old {
+                    convs[key]!.msgs[i].recipientReceipts[who] = r
+                    changed = true
+                }
+            }
+            if m.receipt < level {
+                convs[key]!.msgs[i].receipt = level
+                changed = true
+            }
+            return changed ? Records.receiptUpdate(key, convs[key]!.msgs[i]) : nil
         }
         if earlyReceipts[ts].map({ $0 < level }) ?? true {
             if earlyReceipts.count >= ChatState.earlyReceiptLimit, let oldest = earlyReceipts.keys.min() {

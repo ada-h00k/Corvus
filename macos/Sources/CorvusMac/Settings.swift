@@ -48,6 +48,7 @@ struct ChatPrivacy: Equatable {
     var sendReadReceipts = true       // tell senders when their messages were read
     var sendTypingIndicators = true   // tell the chat partner while you type
     var generateLinkPreviews = true   // fetch HTTPS pages to attach a preview when sending (as in the Qt app)
+    var showDeliveryStatus = true     // sent / delivered / read ticks on your messages
 
     private static let prefix = "privacy."
 
@@ -57,6 +58,7 @@ struct ChatPrivacy: Equatable {
         p.sendReadReceipts = bool("readReceipts", p.sendReadReceipts)
         p.sendTypingIndicators = bool("typingIndicators", p.sendTypingIndicators)
         p.generateLinkPreviews = bool("linkPreviews", p.generateLinkPreviews)
+        p.showDeliveryStatus = bool("showDeliveryStatus", p.showDeliveryStatus)
         return p
     }
 
@@ -64,6 +66,7 @@ struct ChatPrivacy: Equatable {
         d.set(sendReadReceipts, forKey: ChatPrivacy.prefix + "readReceipts")
         d.set(sendTypingIndicators, forKey: ChatPrivacy.prefix + "typingIndicators")
         d.set(generateLinkPreviews, forKey: ChatPrivacy.prefix + "linkPreviews")
+        d.set(showDeliveryStatus, forKey: ChatPrivacy.prefix + "showDeliveryStatus")
     }
 }
 

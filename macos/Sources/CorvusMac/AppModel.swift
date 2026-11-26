@@ -30,6 +30,17 @@ enum GroupSheet: Identifiable, Equatable {
     }
 }
 
+/// Dialogs about the open chat or one of its messages, shown as sheets on the main window.
+enum ChatSheet: Identifiable, Equatable {
+    case messageDetails(String) // Message.id
+
+    var id: String {
+        switch self {
+        case .messageDetails(let m): return "details:" + m
+        }
+    }
+}
+
 /// A person who can be added to a group: key (number / UUID / username) and display name.
 struct GroupContact: Identifiable, Hashable {
     var id: String
@@ -163,6 +174,7 @@ final class AppModel {
 
     // groups
     var groupSheet: GroupSheet?
+    var chatSheet: ChatSheet?
     var groupInvitations: [GroupInfo] = []  // groups we are invited to (not yet a member)
 
     // sheets
@@ -1231,8 +1243,11 @@ final class AppModel {
             return
         case .receipt:
             var recs: [JSON] = []
+            // Like the Qt app (and Signal): without sending read receipts, nobody's read state is shown.
+            if pe.receiptLevel == .read && !privacy.sendReadReceipts { return }
             for ts in pe.receiptTimestamps {
-                if let rec = chats.applyReceipt(ts: ts, level: pe.receiptLevel, preferredKey: key) { recs.append(rec) }
+                if let rec = chats.applyReceipt(ts: ts, level: pe.receiptLevel, preferredKey: key,
+                                                recipient: srcKey, timeMs: pe.receiptTimeMs) { recs.append(rec) }
             }
             persist(recs)
             return
@@ -1428,6 +1443,17 @@ final class AppModel {
 
     private func addRecipient(_ params: inout JSON, _ c: Conversation) {
         if c.isGroup { params["groupId"] = String(c.key.dropFirst(2)) } else { params["recipient"] = [c.key] }
+    }
+
+    /// Recipients of an outgoing message for Message details: the chat partner or the group's members,
+    /// plus anyone who sent a receipt for it; sorted by name. Same rules as the Qt app.
+    func detailRecipients(_ m: Message, in c: Conversation) -> [String] {
+        var keys = c.isGroup ? (groupMembers[c.key] ?? []) : [c.key]
+        for k in m.recipientReceipts.keys.sorted() where !keys.contains(k) { keys.append(k) }
+        keys.removeAll { $0 == account || chats.resolveKey($0) == account }
+        var seen = Set<String>()
+        keys = keys.filter { seen.insert($0).inserted }
+        return keys.sorted { displayName($0).localizedStandardCompare(displayName($1)) == .orderedAscending }
     }
 
     func message(withId id: String) -> (index: Int, message: Message)? {

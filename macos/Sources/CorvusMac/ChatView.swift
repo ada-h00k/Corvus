@@ -522,6 +522,7 @@ extension Message {
 
 /// Timer, "edited", time and delivery state.
 private struct MetaRow: View {
+    @Environment(AppModel.self) private var model
     let message: Message
     let pending: Bool
     let color: Color
@@ -534,7 +535,7 @@ private struct MetaRow: View {
             if message.outgoing {
                 if pending || message.deleted {
                     if pending { Image(systemName: "circle.dotted").help("Sending") }
-                } else {
+                } else if model.privacy.showDeliveryStatus {
                     ReceiptIcon(status: message.receipt)
                 }
             }
@@ -748,6 +749,7 @@ private struct MessageMenu: View {
             } label: { Label("React", systemImage: "face.smiling") }
             Divider()
         }
+        Button { model.chatSheet = .messageDetails(m.id) } label: { Label("Message details …", systemImage: "info.circle") }
         if !m.text.isEmpty {
             Button {
                 NSPasteboard.general.clearContents()

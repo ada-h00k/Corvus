@@ -51,6 +51,9 @@ struct ContentView: View {
         .sheet(item: $model.groupSheet) { sheet in
             GroupSheetView(sheet: sheet)
         }
+        .sheet(item: $model.chatSheet) { sheet in
+            ChatSheetView(sheet: sheet)
+        }
         .sheet(isPresented: Binding(get: { model.giphyApiKey != nil }, set: { if !$0 { model.giphyApiKey = nil } })) {
             if let key = model.giphyApiKey {
                 GiphyPicker(apiKey: key) { url, analytics in model.sendGif(url: url, analytics: analytics) }

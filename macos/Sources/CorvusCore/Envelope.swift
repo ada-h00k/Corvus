@@ -29,6 +29,7 @@ public struct ParsedEnvelope {
     // Receipt: delivery/read state reached by the sender for our messages with these timestamps
     public var receiptLevel = ReceiptStatus.sent
     public var receiptTimestamps: [Int64] = []
+    public var receiptTimeMs: Int64 = 0      // when the recipient's device sent the receipt
 
     // Typing indicator (groupId is set for groups)
     public var typingStarted = false
@@ -213,6 +214,7 @@ public func parseEnvelope(_ env: JSON) -> ParsedEnvelope {
         out.receiptTimestamps = jsonArray(rc["timestamps"]).map(jsonInt64).filter { $0 > 0 }
         out.receiptLevel = jsonBool(rc["isRead"]) || jsonBool(rc["isViewed"]) ? .read
             : jsonBool(rc["isDelivery"]) ? .delivered : .sent
+        out.receiptTimeMs = envTs > 0 ? envTs : nowMs()
         if !out.receiptTimestamps.isEmpty && out.receiptLevel > .sent { out.kind = .receipt }
         return out
     }

@@ -352,6 +352,24 @@ final class ChatStateTests: XCTestCase {
         XCTAssertNil(jsonObject(Records.message("+49bob", outgoing(1))["d"])["rs"])
     }
 
+    func testPerRecipientReceipts() {
+        var s = makeState()
+        s.addMessage("g:G1", outgoing(200), group: true)
+        XCTAssertNotNil(s.applyReceipt(ts: 200, level: .delivered, recipient: "+49alice", timeMs: 210))
+        XCTAssertNotNil(s.applyReceipt(ts: 200, level: .delivered, recipient: "+49bob", timeMs: 215))
+        // The aggregate is already "delivered", but Bob's read state is new.
+        XCTAssertNotNil(s.applyReceipt(ts: 200, level: .read, recipient: "+49bob", timeMs: 230))
+        XCTAssertNil(s.applyReceipt(ts: 200, level: .delivered, recipient: "+49bob", timeMs: 240)) // nothing new
+        let m = s.convs["g:G1"]!.msgs[0]
+        XCTAssertEqual(m.receipt, .read)
+        XCTAssertEqual(m.recipientReceipts["+49alice"], RecipientReceipt(status: 1, deliveredAtMs: 210, readAtMs: 0))
+        XCTAssertEqual(m.recipientReceipts["+49bob"], RecipientReceipt(status: 2, deliveredAtMs: 215, readAtMs: 230))
+        // Survives the update record and a reload.
+        var r = makeState()
+        r.loadHistory([Records.message("g:G1", outgoing(200)), Records.receiptUpdate("g:G1", m)])
+        XCTAssertEqual(r.convs["g:G1"]!.msgs[0].recipientReceipts, m.recipientReceipts)
+    }
+
     func testEarlyReceiptAppliedOnConfirmation() {
         var s = makeState()
         s.ensure("+49bob")

@@ -63,6 +63,10 @@ private struct GeneralSettings: View {
                     get: { model.privacy.generateLinkPreviews },
                     set: { v in var p = model.privacy; p.generateLinkPreviews = v; model.applyPrivacy(p) }))
                     .help("Fetch the page of an HTTPS link you type (title, description, image) and attach a preview when sending")
+                Toggle("Show delivery status", isOn: Binding(
+                    get: { model.privacy.showDeliveryStatus },
+                    set: { v in var p = model.privacy; p.showDeliveryStatus = v; model.applyPrivacy(p) }))
+                    .help("Show the sent, delivered and read ticks on your messages")
             }
             Section("GIPHY") {
                 Button("GIPHY API key …") { Task { await model.configureGiphyApiKey() } }
