@@ -16,6 +16,10 @@ struct ChatSheetView: View {
         case .createPoll(let key): CreatePollView(key: key)
         case .pollVotes(let id): PollVotesView(messageId: id)
         case .shareContact(let key): ShareContactView(key: key)
+        case .react(let id):
+            // Any emoji as a reaction (the Qt app's React → More …).
+            EmojiPicker { emoji in model.sendReaction(id, emoji) } // remembers it as recent and closes itself
+            .padding(8)
         }
     }
 }

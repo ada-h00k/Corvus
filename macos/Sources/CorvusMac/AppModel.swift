@@ -39,6 +39,7 @@ enum ChatSheet: Identifiable, Equatable {
     case createPoll(String)     // conversation key
     case pollVotes(String)      // Message.id in the open chat
     case shareContact(String)   // conversation key
+    case react(String)          // Message.id in the open chat: pick any emoji
 
     var id: String {
         switch self {
@@ -48,6 +49,7 @@ enum ChatSheet: Identifiable, Equatable {
         case .createPoll(let k): return "poll:" + k
         case .pollVotes(let m): return "votes:" + m
         case .shareContact(let k): return "contact:" + k
+        case .react(let m): return "react:" + m
         case .safetyNumber(let k): return "safety:" + k
         }
     }

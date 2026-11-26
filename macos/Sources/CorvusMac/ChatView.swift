@@ -1015,6 +1015,11 @@ private struct MessageMenu: View {
                 ForEach(EmojiCatalog.quickReactions, id: \.self) { e in
                     Button(m.reactions[model.account] == e ? "\(e)  (remove)" : e) { model.sendReaction(m.id, e) }
                 }
+                if let mine = m.reactions[model.account], !EmojiCatalog.quickReactions.contains(mine) {
+                    Button("\(mine)  (remove)") { model.sendReaction(m.id, mine) }
+                }
+                Divider()
+                Button("More …") { model.chatSheet = .react(m.id) }
             } label: { Label("React", systemImage: "face.smiling") }
             if !m.viewOnce {
                 if model.isPinned(m) {
