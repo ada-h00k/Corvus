@@ -990,6 +990,11 @@ final class AppModel {
     func sendWithPreview(_ key: String, method: String = "send", params: JSON, preview template: Message, failure: String,
                          cleanup: URL? = nil, done: ((Int64?) -> Void)? = nil) {
         guard chats.convs[key] != nil else { return }
+        if ProcessInfo.processInfo.environment["CORVUS_DEBUG_ROUTING"] != nil {
+            let to = jsonArray(params["recipient"]).map { SignalCli.maskNumbers(jsonString($0)) }
+            FileHandle.standardError.write(Data(("send \(method) to=\(to) group=\(params["groupId"] != nil) preview in chat "
+                + SignalCli.maskNumbers(key) + (chats.isNoteToSelf(key) ? " (Note to Self)" : "") + "\n").utf8))
+        }
         var preview = template
         preview.ts = nowMs()
         while chats.findMessage(chats.convs[key]!, ts: preview.ts, authors: []) != nil { preview.ts += 1 }
@@ -1107,6 +1112,16 @@ final class AppModel {
         let body = notify.content == .nameAndText ? "\(displayName(voter)) voted in the poll “\(c.msgs[i].poll.question)”" : "New vote"
         notifier.notify(key: key, title: notify.content == .hidden ? "Corvus" : c.title, body: body,
                         icon: notify.content == .hidden ? nil : avatarImage(c))
+    }
+
+    /// The routing-relevant fields of an envelope (debug log only).
+    static func envelopeSummary(_ env: JSON) -> String {
+        let sent = jsonObject(jsonObject(env["syncMessage"])["sentMessage"])
+        var parts: [String] = []
+        for k in ["source", "sourceNumber", "sourceUuid"] where env[k] != nil { parts.append("\(k)=\(jsonString(env[k]))") }
+        for k in ["destination", "destinationNumber", "destinationUuid"] where sent[k] != nil { parts.append("sent.\(k)=\(jsonString(sent[k]))") }
+        parts.append(env["dataMessage"] != nil ? "dataMessage" : (sent.isEmpty ? "other" : "syncSent"))
+        return parts.joined(separator: " ")
     }
 
     // MARK: - Contact cards
@@ -1917,6 +1932,13 @@ final class AppModel {
         }
         let srcKey = chats.resolveKey(pe.src)
         let key = group ? "g:" + pe.groupId : (pe.outgoing ? chats.resolveKey(pe.destination) : srcKey)
+        if ProcessInfo.processInfo.environment["CORVUS_DEBUG_ROUTING"] != nil, pe.kind == .message {
+            // Diagnostics only (stderr, numbers masked): which chat a message is put in, and why.
+            let what = pe.msg.hasContact ? "contact card" : pe.msg.hasPoll ? "poll" : "message"
+            FileHandle.standardError.write(Data(("route \(what) ts=\(pe.msg.ts) outgoing=\(pe.outgoing) src=\(SignalCli.maskNumbers(pe.src)) "
+                + "destination=\(SignalCli.maskNumbers(pe.destination)) group=\(group) -> chat \(SignalCli.maskNumbers(key))"
+                + (chats.isNoteToSelf(key) ? " (Note to Self)" : "") + " raw=\(SignalCli.maskNumbers(Self.envelopeSummary(env)))\n").utf8))
+        }
         if key.isEmpty { return }
         if !pe.outgoing {
             // Nothing from a blocked contact; in a group a blocked member's messages, receipts and
