@@ -929,3 +929,131 @@ final class MentionComposeTests: XCTestCase {
         XCTAssertEqual(MentionCompose.prepare("   ", mentions: []).text, "")
     }
 }
+
+/// The Swift app shares history.corvus with the Qt app: records written by src/Records.cpp
+/// must survive a load + compaction here unchanged.
+final class QtRecordParityTests: XCTestCase {
+    /// Records exactly as the Qt app writes them (tags from src/Records.cpp).
+    func qtRecords() -> [JSON] {
+        [
+            ["t": "b", "c": "+49eve", "v": true],
+            ["t": "m", "c": "+49eve", "ts": 50, "s": "Eve", "x": "hi", "o": false, "au": "+49eve"],
+            ["t": "m", "c": "g:G1", "ts": 100, "s": "Alice", "x": "bold \u{FFFC}", "o": false, "au": "+49alice",
+             "d": ["st": ["0:4:BOLD", "5:1:SPOILER"], "mn": [["s": 5, "l": 1, "u": "uuid-bob"]]] as JSON],
+            ["t": "m", "c": "g:G1", "ts": 200, "s": "You", "x": "", "o": true, "au": "+49me",
+             "d": ["pl": ["q": "Lunch?", "m": true, "o": ["Pizza", "Sushi", "Salad"]] as JSON,
+                   "rs": 2,
+                   "rr": ["+49alice": ["s": 2, "d": 210, "r": 220] as JSON, "+49bob": ["s": 1, "d": 215, "r": 0] as JSON] as JSON] as JSON],
+            ["t": "pv", "c": "g:G1", "ts": 200, "au": "+49me", "by": "+49alice", "oi": [0, 2], "vc": 1, "vt": 230],
+            ["t": "pv", "c": "g:G1", "ts": 200, "au": "+49me", "by": "+49alice", "oi": [1], "vc": 2, "vt": 240],
+            ["t": "pv", "c": "g:G1", "ts": 200, "au": "+49me", "by": "+49bob", "oi": [0], "vc": 1, "vt": 235],
+            ["t": "u", "c": "g:G1", "ts": 200, "au": "+49me", "d": ["pt": true] as JSON],
+            ["t": "m", "c": "g:G1", "ts": 300, "s": "Bob", "x": "", "o": false, "au": "+49bob",
+             "d": ["cc": ["n": "Carol", "num": "+49carol", "u": "uuid-carol", "av": "avatar1"] as JSON] as JSON],
+            ["t": "m", "c": "g:G1", "ts": 400, "s": "Bob", "x": "", "o": false, "au": "+49bob",
+             "d": ["vo": true, "at": [["id": "vo1", "ct": "image/jpeg"] as JSON]] as JSON],
+            ["t": "m", "c": "g:G1", "ts": 500, "s": "Bob", "x": "", "o": false, "au": "+49bob",
+             "d": ["vo": true, "at": [["id": "vo2", "ct": "image/jpeg"] as JSON]] as JSON],
+            ["t": "u", "c": "g:G1", "ts": 500, "au": "+49bob", "d": ["vv": true, "ve": false, "at": [Any]()] as JSON],
+            ["t": "pi", "c": "g:G1", "ts": 100, "au": "+49alice", "by": "+49bob", "at": nowMs(), "d": -1],
+            ["t": "pi", "c": "g:G1", "ts": 300, "au": "+49bob", "by": "+49me", "at": 1, "d": 86400], // long expired
+            ["t": "j", "c": "+49stranger"],
+        ]
+    }
+
+    func testLoadQtRecords() {
+        var s = ChatState()
+        s.account = "+49me"
+        s.loadHistory(qtRecords())
+
+        XCTAssertTrue(s.convs["+49eve"]!.blocked)
+        XCTAssertEqual(s.declined, ["+49stranger"])
+        XCTAssertNil(s.convs["+49stranger"])
+
+        let g = s.convs["g:G1"]!
+        let styled = g.msgs[0]
+        XCTAssertEqual(styled.textStyles, [TextStyleRange(start: 0, length: 4, style: "BOLD"),
+                                           TextStyleRange(start: 5, length: 1, style: "SPOILER")])
+        XCTAssertEqual(styled.mentions, [MentionRange(start: 5, length: 1, uuid: "uuid-bob")])
+
+        let poll = g.msgs[1]
+        XCTAssertTrue(poll.hasPoll)
+        XCTAssertEqual(poll.poll.options, ["Pizza", "Sushi", "Salad"])
+        XCTAssertTrue(poll.poll.allowMultiple)
+        XCTAssertTrue(poll.poll.terminated)
+        XCTAssertEqual(poll.poll.voteOf("+49alice"), [1]) // the later vote (vc 2) wins
+        XCTAssertEqual(poll.poll.optionCounts, [1, 1, 0])
+        XCTAssertEqual(poll.recipientReceipts["+49alice"], RecipientReceipt(status: 2, deliveredAtMs: 210, readAtMs: 220))
+        XCTAssertEqual(poll.receipt, .read)
+
+        let card = g.msgs[2]
+        XCTAssertTrue(card.hasContact)
+        XCTAssertEqual(card.contact.name, "Carol")
+        XCTAssertEqual(card.contact.number, "+49carol")
+        XCTAssertEqual(card.contact.avatarId, "avatar1")
+
+        XCTAssertTrue(g.msgs[3].viewOnce)
+        XCTAssertEqual(g.msgs[3].attachments.map(\.id), ["vo1"])
+        XCTAssertTrue(g.msgs[4].viewOnceViewed)
+        XCTAssertTrue(g.msgs[4].attachments.isEmpty, "an opened View Once item keeps no attachment")
+
+        XCTAssertEqual(g.pins.map(\.ts), [100], "the expired 24 h pin is dropped")
+    }
+
+    func testCompactionKeepsQtFields() {
+        var s = ChatState()
+        s.account = "+49me"
+        s.loadHistory(qtRecords())
+        let compacted = s.allRecords()
+
+        var r = ChatState()
+        r.account = "+49me"
+        r.loadHistory(compacted)
+        XCTAssertEqual(r.convs["g:G1"]!.msgs, s.convs["g:G1"]!.msgs)
+        XCTAssertEqual(r.convs["g:G1"]!.pins, s.convs["g:G1"]!.pins)
+        XCTAssertTrue(r.convs["+49eve"]!.blocked)
+        XCTAssertEqual(r.declined, ["+49stranger"])
+
+        // Same tags as the Qt writer.
+        let pollRec = compacted.first { jsonString($0["t"]) == "m" && jsonInt64($0["ts"]) == 200 }!
+        let d = jsonObject(pollRec["d"])
+        XCTAssertEqual(jsonBool(d["pt"]), true)
+        XCTAssertEqual(jsonObject(d["pl"])["q"] as? String, "Lunch?")
+        XCTAssertNotNil(jsonObject(d["rr"])["+49bob"])
+        XCTAssertEqual(compacted.filter { jsonString($0["t"]) == "pv" }.count, 2)
+        XCTAssertEqual(compacted.filter { jsonString($0["t"]) == "pi" }.count, 1)
+        let styled = jsonObject(compacted.first { jsonInt64($0["ts"]) == 100 && jsonString($0["t"]) == "m" }!["d"])
+        XCTAssertEqual(styled["st"] as? [String], ["0:4:BOLD", "5:1:SPOILER"])
+        // A viewed View Once item is written without its attachment reference.
+        let viewed = jsonObject(compacted.first { jsonInt64($0["ts"]) == 500 && jsonString($0["t"]) == "m" }!["d"])
+        XCTAssertNil(viewed["at"])
+        XCTAssertEqual(jsonBool(viewed["vv"]), true)
+    }
+
+    func testDeletionClearsQtFields() {
+        var m = Message()
+        m.hasPoll = true
+        m.poll.options = ["a", "b"]
+        m.hasContact = true
+        m.textStyles = [TextStyleRange(start: 0, length: 1, style: "BOLD")]
+        Records.applyExtras(&m, ["dl": true])
+        XCTAssertFalse(m.hasPoll)
+        XCTAssertFalse(m.hasContact)
+        XCTAssertTrue(m.textStyles.isEmpty)
+    }
+
+    func testThumbnailsAreCappedPerRecord() {
+        var m = Message()
+        for i in 0..<3 {
+            var a = Attachment()
+            a.id = "a\(i)"
+            a.thumb = Data(count: 4 * 1024 * 1024) // ~5.3 MiB as base64
+            m.attachments.append(a)
+        }
+        let at = jsonArray(jsonObject(Records.message("+49x", m)["d"])["at"]).map { jsonObject($0) }
+        XCTAssertEqual(at.count, 3)
+        XCTAssertNotNil(at[0]["th"])
+        XCTAssertNil(at[1]["th"])
+        XCTAssertNil(at[2]["th"])
+    }
+}

@@ -19,6 +19,8 @@ public struct ChatState {
     public var contactNames: [String: String] = [:]   // key -> contact name from signal-cli
     public var pendingSends: [String: PendingSend] = [:]
     public var account = ""
+    /// Declined message requests (Qt record "j"): they outlive a deleted conversation.
+    public var declined: Set<String> = []
     /// Receipts for timestamps not (yet) in any chat: the send RPC may still be running. Applied on confirmation.
     public var earlyReceipts: [Int64: ReceiptStatus] = [:]
     static let earlyReceiptLimit = 200
@@ -104,6 +106,30 @@ public struct ChatState {
                     if e.isEmpty { convs[key]!.msgs[i].reactions.removeValue(forKey: by) }
                     else { convs[key]!.msgs[i].reactions[by] = e }
                 }
+            case "pv":
+                // A poll vote; the poll message is written before its votes, like reactions.
+                guard let c = convs[key] else { continue }
+                let au = jsonString(o["au"]), by = jsonString(o["by"])
+                guard !by.isEmpty, let i = findMessage(c, ts: jsonInt64(o["ts"]), authors: au.isEmpty ? [] : [au]),
+                      c.msgs[i].hasPoll else { continue }
+                let vote = PollVote(optionIndexes: jsonArray(o["oi"]).map { jsonInt($0) },
+                                    voteCount: jsonInt64(o["vc"]), voteTs: jsonInt64(o["vt"]))
+                convs[key]!.msgs[i].poll.apply(vote, by: by)
+            case "pi":
+                guard let c = convs[key] else { continue }
+                let ts = jsonInt64(o["ts"]), au = jsonString(o["au"])
+                if jsonBool(o["rm"]) {
+                    convs[key]!.pins.removeAll { $0.ts == ts && (au.isEmpty || $0.authorKey == au) }
+                    continue
+                }
+                guard findMessage(c, ts: ts, authors: au.isEmpty ? [] : [au]) != nil else { continue }
+                addPin(key, PinInfo(ts: ts, authorKey: au, by: jsonString(o["by"]),
+                                    pinnedAtMs: jsonInt64(o["at"]), durationSeconds: jsonInt64(o["d"])))
+            case "b":
+                ensure(key, title: key, group: group)
+                convs[key]!.blocked = jsonBool(o["v"])
+            case "j":
+                declined.insert(key) // declined message request: no conversation is created
             case "k":
                 ensure(key, title: key, group: group)
                 convs[key]!.muted = jsonBool(o["v"])
@@ -118,6 +144,29 @@ public struct ChatState {
                 break
             }
         }
+        pruneExpiredPins(now: nowMs()) // a pin that ran out while Corvus was closed is not restored
+    }
+
+    // MARK: - Pins
+
+    /// Adds a pin; a re-applied pin replaces itself, and like the official clients a fourth pin
+    /// replaces the oldest one.
+    public mutating func addPin(_ key: String, _ pin: PinInfo) {
+        guard convs[key] != nil else { return }
+        convs[key]!.pins.removeAll { $0.ts == pin.ts && ($0.authorKey == pin.authorKey || pin.authorKey.isEmpty) }
+        while convs[key]!.pins.count >= PinInfo.maxPerChat { convs[key]!.pins.removeFirst() }
+        convs[key]!.pins.append(pin)
+    }
+
+    /// Drops pins whose duration ran out. Returns the keys of the chats that changed.
+    @discardableResult
+    public mutating func pruneExpiredPins(now: Int64) -> [String] {
+        var changed: [String] = []
+        for key in convs.keys where convs[key]!.pins.contains(where: { $0.isExpired(now: now) }) {
+            convs[key]!.pins.removeAll { $0.isExpired(now: now) }
+            changed.append(key)
+        }
+        return changed
     }
 
     /// Everything that is needed to recreate the current state (for compaction).
@@ -128,6 +177,7 @@ public struct ChatState {
             if !c.storedName.isEmpty { out.append(Records.name(c.key, c.storedName)) }
             if !c.localNickname.isEmpty { out.append(Records.nickname(c.key, c.localNickname)) }
             if c.archived || c.sigArchived { out.append(Records.archive(c.key, archived: c.archived, sigArchived: c.sigArchived)) }
+            if c.blocked { out.append(Records.blocked(c.key, true)) }
             if c.muted { out.append(Records.mute(c.key, true)) }
             out.append(Records.expiration(c.key, c.expirationSeconds))
             for m in c.msgs where !isPendingPreview(c.key, ts: m.ts) {
@@ -135,8 +185,14 @@ public struct ChatState {
                 for (by, e) in m.reactions.sorted(by: { $0.key < $1.key }) {
                     out.append(Records.reaction(c.key, ts: m.ts, author: effectiveAuthor(c, m), by: by, emoji: e))
                 }
+                for (by, v) in m.poll.votes.sorted(by: { $0.key < $1.key }) {
+                    out.append(Records.pollVote(c.key, ts: m.ts, author: effectiveAuthor(c, m), by: by, vote: v))
+                }
             }
+            // Pins come after the messages they reference; their order is kept.
+            for p in c.pins { out.append(Records.pin(c.key, p)) }
         }
+        for k in declined.sorted() { out.append(Records.requestDeclined(k)) }
         return out
     }
 

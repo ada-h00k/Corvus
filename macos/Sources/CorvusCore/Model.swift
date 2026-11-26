@@ -95,6 +95,137 @@ public struct Quote: Equatable, Hashable {
     public init() {}
 }
 
+/// A text style range from Signal's bodyRanges: BOLD, ITALIC, STRIKETHROUGH, MONOSPACE or SPOILER.
+/// Offsets are UTF-16 units, as signal-cli reports them.
+public struct TextStyleRange: Equatable, Hashable {
+    public var start = 0
+    public var length = 0
+    public var style = ""
+
+    public init(start: Int = 0, length: Int = 0, style: String = "") {
+        self.start = start
+        self.length = length
+        self.style = style
+    }
+
+    public static let styles = ["BOLD", "ITALIC", "STRIKETHROUGH", "MONOSPACE", "SPOILER"]
+}
+
+/// A stored @mention (Qt record "mn"): the U+FFFC placeholder at `start` in the raw text names `uuid`.
+public struct MentionRange: Equatable, Hashable {
+    public var start = 0
+    public var length = 0
+    public var uuid = ""
+
+    public init(start: Int = 0, length: Int = 0, uuid: String = "") {
+        self.start = start
+        self.length = length
+        self.uuid = uuid
+    }
+}
+
+/// Delivery state of an outgoing message for one recipient (status 0 sent, 1 delivered, 2 read).
+public struct RecipientReceipt: Equatable, Hashable {
+    public var status = 0
+    public var deliveredAtMs: Int64 = 0
+    public var readAtMs: Int64 = 0
+
+    public init(status: Int = 0, deliveredAtMs: Int64 = 0, readAtMs: Int64 = 0) {
+        self.status = status
+        self.deliveredAtMs = deliveredAtMs
+        self.readAtMs = readAtMs
+    }
+}
+
+/// One vote on a poll: the vote with the highest voteCount wins (on a tie the later voteTs);
+/// an empty optionIndexes list takes the vote back.
+public struct PollVote: Equatable, Hashable {
+    public var optionIndexes: [Int] = []
+    public var voteCount: Int64 = 0
+    public var voteTs: Int64 = 0
+
+    public init(optionIndexes: [Int] = [], voteCount: Int64 = 0, voteTs: Int64 = 0) {
+        self.optionIndexes = optionIndexes
+        self.voteCount = voteCount
+        self.voteTs = voteTs
+    }
+
+    /// Whether `self` replaces `old` (same rule as the Qt app and the official clients).
+    public func wins(over old: PollVote?) -> Bool {
+        guard let old else { return true }
+        return voteCount > old.voteCount || (voteCount == old.voteCount && voteTs >= old.voteTs)
+    }
+}
+
+/// A Signal poll: question with 2...10 options, single or multiple choice.
+public struct PollData: Equatable {
+    public var question = ""
+    public var options: [String] = []
+    public var allowMultiple = false
+    public var terminated = false
+    public var votes: [String: PollVote] = [:] // voter key -> current vote
+
+    public init() {}
+
+    public func voteOf(_ voter: String) -> [Int] { votes[voter]?.optionIndexes ?? [] }
+
+    public var optionCounts: [Int] {
+        var counts = Array(repeating: 0, count: options.count)
+        for v in votes.values { for i in v.optionIndexes where i >= 0 && i < counts.count { counts[i] += 1 } }
+        return counts
+    }
+
+    public var topCount: Int { optionCounts.max() ?? 0 }
+
+    /// Applies a vote; returns false if an older one was ignored.
+    @discardableResult
+    public mutating func apply(_ vote: PollVote, by voter: String) -> Bool {
+        guard vote.wins(over: votes[voter]) else { return false }
+        let valid = vote.optionIndexes.filter { $0 >= 0 && $0 < options.count }
+        if valid.isEmpty { votes.removeValue(forKey: voter) }
+        else { votes[voter] = PollVote(optionIndexes: valid, voteCount: vote.voteCount, voteTs: vote.voteTs) }
+        return true
+    }
+}
+
+/// A shared contact card (Qt record "cc").
+public struct ContactCard: Equatable {
+    public var name = ""
+    public var number = ""
+    public var uuid = ""
+    public var avatarId = ""   // attachment id of the avatar image (persisted)
+    public var avatar = ""     // avatar bytes, base64 (runtime cache or own-card preview)
+
+    public init(name: String = "", number: String = "", uuid: String = "") {
+        self.name = name
+        self.number = number
+        self.uuid = uuid
+    }
+}
+
+/// A pinned message: at most three per chat, oldest first; a pin with a duration expires locally.
+public struct PinInfo: Equatable {
+    public var ts: Int64 = 0             // target timestamp of the pinned message
+    public var authorKey = ""            // author of the pinned message
+    public var by = ""                   // who pinned it
+    public var pinnedAtMs: Int64 = 0     // local clock, for expiry
+    public var durationSeconds: Int64 = -1 // -1 = forever
+
+    public init(ts: Int64 = 0, authorKey: String = "", by: String = "", pinnedAtMs: Int64 = 0, durationSeconds: Int64 = -1) {
+        self.ts = ts
+        self.authorKey = authorKey
+        self.by = by
+        self.pinnedAtMs = pinnedAtMs
+        self.durationSeconds = durationSeconds
+    }
+
+    public static let maxPerChat = 3
+
+    public func isExpired(now: Int64) -> Bool {
+        durationSeconds >= 0 && pinnedAtMs > 0 && now - pinnedAtMs >= durationSeconds * 1000
+    }
+}
+
 /// Delivery state of an outgoing message (the best state any recipient has reached).
 public enum ReceiptStatus: Int, Comparable {
     case sent = 0, delivered = 1, read = 2
@@ -151,6 +282,17 @@ public struct Message: Equatable, Identifiable {
     public var deleted = false        // deleted for everyone: only a placeholder is left
     public var receipt = ReceiptStatus.sent // outgoing only: delivered / read by a recipient
     public var linkPreview = LinkPreview()
+    public var textStyles: [TextStyleRange] = []
+    public var mentions: [MentionRange] = []   // stored mention placeholders (messages written by the Qt app)
+    public var recipientReceipts: [String: RecipientReceipt] = [:] // outgoing only: per recipient
+    // Signal View Once media: the attachment reference is kept only until it is opened.
+    public var viewOnce = false
+    public var viewOnceViewed = false
+    public var viewOnceExpired = false
+    public var hasPoll = false
+    public var poll = PollData()
+    public var hasContact = false
+    public var contact = ContactCard()
 
     public init() {}
 
@@ -174,6 +316,15 @@ public struct Message: Equatable, Identifiable {
         reactions = [:]
         editTs = 0
         editCount = 0
+        textStyles = []
+        mentions = []
+        hasPoll = false
+        poll = PollData()
+        hasContact = false
+        contact = ContactCard()
+        viewOnce = false
+        viewOnceViewed = false
+        viewOnceExpired = false
     }
 
     public func canEdit(nowMs: Int64) -> Bool {
@@ -192,6 +343,8 @@ public struct Conversation: Identifiable {
     public var archived = false       // shown in the "Archived chats" folder
     public var sigArchived = false    // archive state last reported by signal-cli
     public var muted = false          // local "mute notifications"
+    public var blocked = false        // corvus-cli "block" state (synced to the phone)
+    public var pins: [PinInfo] = []   // oldest first, at most PinInfo.maxPerChat
     public var expirationSeconds = 0  // Signal disappearing-message timer; 0 = disabled
 
     public init(key: String = "", title: String = "", isGroup: Bool = false) {
