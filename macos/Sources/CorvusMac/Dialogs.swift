@@ -69,7 +69,7 @@ enum Dialogs {
         return r == .alertFirstButtonReturn ? popup.indexOfSelectedItem : nil
     }
 
-    enum PassphraseMode { case create, unlock, change }
+    enum PassphraseMode { case create, unlock, change, previousBackend }
     static let minPassphraseLength = 8
 
     /// Returns (old, new); old is only set for .change.
@@ -86,6 +86,11 @@ enum Dialogs {
         case .change:
             alert.messageText = "Change passphrase"
             alert.informativeText = "Choose a new passphrase for the chat history (at least \(minPassphraseLength) characters)."
+        case .previousBackend:
+            alert.messageText = "Unlock Signal data"
+            alert.informativeText = "corvus-cli's data (sessions, contacts, attachments) is still locked with the passphrase you used "
+                + "before the history protection was changed. Enter that previous passphrase once; corvus-cli then switches it "
+                + "over to the current protection."
         }
         let ok = alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
@@ -102,8 +107,8 @@ enum Dialogs {
             return f
         }
         let old = mode == .change ? field("Current passphrase:") : nil
-        let pass = field(mode == .change ? "New passphrase:" : "Passphrase:")
-        let confirm = mode == .unlock ? nil : field("Repeat passphrase:")
+        let pass = field(mode == .change ? "New passphrase:" : mode == .previousBackend ? "Previous passphrase:" : "Passphrase:")
+        let confirm = mode == .unlock || mode == .previousBackend ? nil : field("Repeat passphrase:")
         let errorLabel = NSTextField(wrappingLabelWithString: error)
         errorLabel.textColor = .systemRed
         errorLabel.preferredMaxLayoutWidth = 300

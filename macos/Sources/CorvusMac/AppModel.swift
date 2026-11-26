@@ -382,6 +382,18 @@ final class AppModel {
 
         let (ar, accounts) = await cli.queryAccounts()
         guard gen == connectGen else { return }
+        // corvus-cli's data is still wrapped with the secret from before a protection change (it re-wraps
+        // only on a start that gets both): ask for the previous passphrase once and try again with it.
+        if !ar.ok && accounts.isEmpty && ar.err.contains("CORVUS_CLI_SECRET does not open it") {
+            let retried = !cli.previousSecret.isEmpty
+            setConnected(false, info: "Signal data locked")
+            guard let pw = await Dialogs.passphrase(.previousBackend,
+                                                    error: retried ? "That passphrase did not open it either." : ""),
+                  gen == connectGen, !pw.new.isEmpty else { return }
+            cli.previousSecret = pw.new
+            await connectAccount()
+            return
+        }
         // A failing command is NOT "no account": report what actually went wrong.
         if !ar.ok && accounts.isEmpty {
             await showCliProblem("The accounts could not be listed.", ar)
@@ -823,6 +835,9 @@ final class AppModel {
         if error == nil {
             cli.previousSecret = old // until corvus-cli has re-wrapped its keyring with the new one
             historySecret = new
+            // Restart corvus-cli now, while both secrets are known: it re-wraps its keyring on this start.
+            // Waiting for the next app start would lose the old secret and lock its data (it is kept in memory only).
+            if cli.isRunning || connected { Task { await connectAccount() } }
         }
         return error
     }
