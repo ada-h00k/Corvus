@@ -413,6 +413,11 @@ private struct ConversationMenu: View {
                 .disabled(!model.connected)
             Divider()
         }
+        Button {
+            if model.current != c.key { model.openConversation(c.key) }
+            model.chatSheet = .gallery(c.key)
+        } label: { Label("Media gallery …", systemImage: "photo.on.rectangle") }
+        Divider()
         Button { model.setArchived(c.key, !c.archived) } label: {
             Label(c.archived ? "Unarchive" : "Archive", systemImage: c.archived ? "tray.and.arrow.up" : "archivebox")
         }

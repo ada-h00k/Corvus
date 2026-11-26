@@ -35,11 +35,13 @@ enum ChatSheet: Identifiable, Equatable {
     case messageDetails(String) // Message.id
     case safetyNumber(String)   // conversation key (1:1)
     case forward(String)        // Message.id in the open chat
+    case gallery(String)        // conversation key
 
     var id: String {
         switch self {
         case .messageDetails(let m): return "details:" + m
         case .forward(let m): return "forward:" + m
+        case .gallery(let k): return "gallery:" + k
         case .safetyNumber(let k): return "safety:" + k
         }
     }

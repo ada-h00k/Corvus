@@ -12,6 +12,7 @@ struct ChatSheetView: View {
         case .messageDetails(let id): MessageDetailsView(messageId: id)
         case .safetyNumber(let key): SafetyNumberView(key: key)
         case .forward(let id): ForwardView(messageId: id)
+        case .gallery(let key): GalleryView(key: key)
         }
     }
 }
@@ -312,5 +313,137 @@ struct ForwardView: View {
         }
         .padding(20)
         .frame(width: 440, height: 560)
+    }
+}
+
+/// "Media gallery": a chat's photos and videos, audio, links and files (port of the Qt gallery).
+/// Clicking follows the same attachment rules as in the chat: files that can run code are only saved.
+struct GalleryView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let key: String
+    @State private var tab = Gallery.Tab.media
+
+    var body: some View {
+        let c = model.chats.convs[key]
+        let all = Gallery.items(c?.msgs ?? [])
+        let items = all.filter { $0.tab == tab }
+        VStack(spacing: 10) {
+            HStack {
+                Text("Media gallery – \(c?.title ?? "")").font(.headline).lineLimit(1)
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            Picker("", selection: $tab) {
+                ForEach(Gallery.Tab.allCases) { t in Text("\(t.rawValue) (\(all.filter { $0.tab == t }.count))").tag(t) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            if items.isEmpty {
+                Spacer()
+                Text(tab == .media ? "No media" : tab == .audio ? "No audio files" : tab == .links ? "No links" : "No files")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else if tab == .media {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 6)], spacing: 6) {
+                        ForEach(items) { item in
+                            MediaTile(item: item)
+                                .onTapGesture { activate(item) }
+                                .contextMenu { menu(item) }
+                        }
+                    }
+                }
+            } else {
+                List(items) { item in
+                    row(item)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { activate(item) }
+                        .contextMenu { menu(item) }
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 640, height: 540)
+    }
+
+    @ViewBuilder private func row(_ item: Gallery.Item) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: item.tab == .links ? "link" : item.tab == .audio ? "waveform" : "doc")
+                .frame(width: 22).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                if item.tab == .links {
+                    Text(verbatim: item.title.isEmpty ? item.url : item.title).lineLimit(1)
+                    if !item.title.isEmpty { Text(verbatim: item.url).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                } else {
+                    Text(verbatim: item.attachment.filename.isEmpty ? "Attachment" : item.attachment.filename).lineLimit(1)
+                    Text(ByteCountFormatter.string(fromByteCount: item.attachment.size, countStyle: .file))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Text(Date(timeIntervalSince1970: TimeInterval(item.messageTs) / 1000).formatted(date: .abbreviated, time: .omitted))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private func menu(_ item: Gallery.Item) -> some View {
+        if item.tab == .links {
+            Button("Open link") { activate(item) }
+            Button("Copy link") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(item.url, forType: .string)
+            }
+        } else {
+            Button(item.tab == .media ? (item.attachment.isImage ? "View" : "Play") : item.tab == .audio ? "Play / pause" : "Open") {
+                activate(item)
+            }
+            Button("Save as …") {
+                if let (_, m) = model.message(withId: item.messageId) { model.saveAttachment(m, item.attachmentIndex) }
+            }
+        }
+        Divider()
+        Button("Show in chat") {
+            if let (i, _) = model.message(withId: item.messageId) {
+                dismiss()
+                model.scrollToMessage(index: i)
+            }
+        }
+    }
+
+    private func activate(_ item: Gallery.Item) {
+        if item.tab == .links {
+            if let u = URL(string: item.url) { NSWorkspace.shared.open(u) }
+            return
+        }
+        guard let (i, m) = model.message(withId: item.messageId) else { return }
+        if item.attachment.isVideo || item.attachment.isAudio {
+            // Videos and audio play inside their bubble: go there first.
+            dismiss()
+            model.scrollToMessage(index: i)
+        }
+        model.openAttachment(m, item.attachmentIndex)
+    }
+}
+
+private struct MediaTile: View {
+    let item: Gallery.Item
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(Theme.field)
+            if let img = NSImage(data: item.attachment.thumb) {
+                Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: item.attachment.isVideo ? "film" : "photo").font(.title).foregroundStyle(.secondary)
+            }
+            if item.attachment.isVideo {
+                Image(systemName: "play.circle.fill").font(.system(size: 28)).foregroundStyle(.white).shadow(radius: 2)
+            }
+        }
+        .frame(width: 110, height: 110)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .help(item.attachment.filename)
     }
 }

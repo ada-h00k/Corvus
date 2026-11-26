@@ -1330,3 +1330,20 @@ final class SafetyNumberTests: XCTestCase {
         XCTAssertEqual(SafetyNumber.identityFailures(in: result), ["u-b"])
     }
 }
+
+final class GalleryTests: XCTestCase {
+    func testItemsByTab() {
+        func att(_ name: String, _ ct: String) -> Attachment { var a = Attachment(); a.filename = name; a.contentType = ct; return a }
+        var m1 = Message(); m1.ts = 1; m1.text = "see https://example.com/a and http://x.org"
+        m1.attachments = [att("a.jpg", "image/jpeg"), att("v.mp4", "video/mp4"), att("s.mp3", "audio/mpeg"), att("doc.pdf", "application/pdf")]
+        var m2 = Message(); m2.ts = 2; m2.attachments = [Attachment.sticker(packId: "p", stickerId: 1)]
+        var m3 = Message(); m3.ts = 3; m3.viewOnce = true; m3.attachments = [att("o.jpg", "image/jpeg")]
+        var m4 = Message(); m4.ts = 4; m4.linkPreview = LinkPreview(url: "https://p.example", title: "P")
+        let items = Gallery.items([m1, m2, m3, m4])
+        XCTAssertEqual(items.filter { $0.tab == .media }.map(\.attachment.filename), ["a.jpg", "v.mp4"])
+        XCTAssertEqual(items.filter { $0.tab == .audio }.count, 1)
+        XCTAssertEqual(items.filter { $0.tab == .files }.map(\.attachment.filename), ["doc.pdf"])
+        XCTAssertEqual(items.filter { $0.tab == .links }.map(\.url), ["https://p.example", "https://example.com/a", "http://x.org"])
+        XCTAssertEqual(items.first { $0.tab == .links }?.title, "P")
+    }
+}
