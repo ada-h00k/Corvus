@@ -9,7 +9,25 @@ public enum AttachmentPolicy: Equatable {
     case ask     // anything else: opened in the default app only after confirmation
 
     /// `isMedia`: the app would only decode the data itself (audio, video, an image that decoded).
-    public static func classify(filename: String, contentType: String, isMedia: Bool) -> AttachmentPolicy {
+    /// Bidi override / isolate controls (U+202A…U+202E, U+2066…U+2069, U+200E, U+200F, U+061C) make text render
+    /// reversed: "invoice\u{202E}gpj.exe" displays as "invoiceexe.jpg". They mean nothing in a file name, so they
+    /// are dropped before a name is shown, checked or written (L3, as in the Qt app).
+    public static func stripBidiControls(_ name: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        var stripped = false
+        for u in name.unicodeScalars {
+            let v = u.value
+            if (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v) || v == 0x200E || v == 0x200F || v == 0x061C {
+                stripped = true
+            } else {
+                scalars.append(u)
+            }
+        }
+        return stripped ? String(scalars) : name
+    }
+
+    public static func classify(filename rawName: String, contentType: String, isMedia: Bool) -> AttachmentPolicy {
+        let filename = stripBidiControls(rawName)
         if isRiskyName(filename) || isRiskyMime(contentType) { return .risky }
         if isMedia { return .inApp }
         // A file without an extension could be a Unix executable or a script with a shebang.

@@ -21,7 +21,7 @@ public enum Records {
         var a = Attachment()
         a.id = jsonString(o["id"])
         a.contentType = jsonString(o["ct"])
-        a.filename = jsonString(o["fn"])
+        a.filename = AttachmentPolicy.stripBidiControls(jsonString(o["fn"])) // also for names stored by older versions
         a.path = jsonString(o["p"])
         a.size = jsonInt64(o["sz"])
         a.width = jsonInt(o["w"])

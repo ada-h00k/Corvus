@@ -1262,7 +1262,7 @@ final class AppModel {
                     let data = try await fetchAttachmentData(sourceKey, att)
                     total += Int64(data.count)
                     if data.isEmpty || total > Media.maxAttachment { throw RpcError("The attachment could not be loaded.") }
-                    var name = (att.filename as NSString).lastPathComponent
+                    var name = AttachmentPolicy.stripBidiControls((att.filename as NSString).lastPathComponent)
                     if att.isSticker { name = "sticker.webp" }
                     if name.isEmpty || name == "." || name == ".." { name = "attachment" }
                     let dir = stage.appendingPathComponent("named-\(i)")
@@ -3142,7 +3142,7 @@ final class AppModel {
 
     /// The name a file attachment is written under (the sender's name without any directories).
     private func attachmentFileName(_ att: Attachment) -> String {
-        let name = (att.filename as NSString).lastPathComponent
+        let name = AttachmentPolicy.stripBidiControls((att.filename as NSString).lastPathComponent)
         return name.isEmpty ? "attachment." + Media.preferredSuffix(forMime: att.contentType) : name
     }
 

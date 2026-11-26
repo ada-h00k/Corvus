@@ -1484,3 +1484,17 @@ final class GalleryTests: XCTestCase {
         XCTAssertEqual(items.first { $0.tab == .links }?.title, "P")
     }
 }
+
+final class BidiFileNameTests: XCTestCase {
+    func testBidiControlsAreStripped() {
+        XCTAssertEqual(AttachmentPolicy.stripBidiControls("invoice\u{202E}gpj.exe"), "invoicegpj.exe")
+        XCTAssertEqual(AttachmentPolicy.stripBidiControls("a\u{2066}b\u{2069}\u{200F}.pdf"), "ab.pdf")
+        XCTAssertEqual(AttachmentPolicy.stripBidiControls("plain.txt"), "plain.txt")
+        // the reversed-looking name is checked as what it really is
+        XCTAssertEqual(AttachmentPolicy.classify(filename: "photo\u{202E}gpj.command", contentType: "image/jpeg", isMedia: true), .risky)
+        let env: JSON = ["sourceNumber": "+49a", "timestamp": 1,
+                         "dataMessage": ["timestamp": 1, "attachments": [["id": "x", "filename": "invoice\u{202E}txt.exe",
+                                                                          "contentType": "application/octet-stream"] as JSON]] as JSON]
+        XCTAssertEqual(parseEnvelope(env).msg.attachments.first?.filename, "invoicetxt.exe")
+    }
+}

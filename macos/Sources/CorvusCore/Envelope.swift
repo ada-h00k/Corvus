@@ -86,7 +86,7 @@ private func parseAttachments(_ dm: JSON) -> [Attachment] {
         var a = Attachment()
         a.id = jsonString(o["id"])
         a.contentType = jsonString(o["contentType"])
-        a.filename = jsonString(o["filename"])
+        a.filename = AttachmentPolicy.stripBidiControls(jsonString(o["filename"]))
         a.size = jsonInt64(o["size"])
         a.width = jsonInt(o["width"])
         a.height = jsonInt(o["height"])
