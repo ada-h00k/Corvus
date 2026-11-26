@@ -1,3 +1,4 @@
+import CoreImage.CIFilterBuiltins
 import CorvusCore
 import SwiftUI
 
@@ -9,6 +10,7 @@ struct ChatSheetView: View {
     var body: some View {
         switch sheet {
         case .messageDetails(let id): MessageDetailsView(messageId: id)
+        case .safetyNumber(let key): SafetyNumberView(key: key)
         }
     }
 }
@@ -128,5 +130,126 @@ struct MessageRequestsView: View {
             do { try await action() } catch { self.error = "Could not complete the request: \(error.localizedDescription)" }
             busy.remove(key)
         }
+    }
+}
+
+/// "Safety number with …": compare the 60 digits (or the QR code) with the contact, then mark them as verified.
+struct SafetyNumberView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let key: String
+    @State private var identity: SafetyNumber.Identity?
+    @State private var status = "Loading …"
+    @State private var statusIsError = false
+    @State private var compare = ""
+    @State private var busy = false
+
+    private var name: String { model.displayName(key) }
+    private var recipient: String { model.chats.resolveKey(key) }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Safety number with \(name)").font(.headline)
+            Text("To check that your messages with \(name) are end-to-end encrypted, compare this number with the one on their device, in person or over a channel you trust. If the numbers match, mark the contact as verified.")
+                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if let id = identity {
+                if let qr = Self.qrImage(SafetyNumber.scannableBytes(id.scannable)) {
+                    Image(nsImage: qr).interpolation(.none).resizable().frame(width: 180, height: 180)
+                        .help("Scan this code with Signal on \(name)'s phone (conversation → View safety number → Scan).")
+                }
+                Text(SafetyNumber.format(id.safetyNumber))
+                    .font(.system(.title3, design: .monospaced))
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+                Text("Status: \(SafetyNumber.trustLabel(id.trustLevel))").foregroundStyle(id.isVerified ? .green : .secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Optional: paste the number from their device to compare it here:").font(.callout)
+                    TextField("60 digits", text: $compare).textFieldStyle(.roundedBorder)
+                    compareResult(id)
+                }
+            }
+            if !status.isEmpty { Text(status).font(.callout).foregroundStyle(statusIsError ? .red : .secondary) }
+            HStack {
+                Button("Copy number") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(identity?.digits ?? "", forType: .string)
+                }
+                .disabled(identity == nil)
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(identity?.isVerified == true ? "Verified ✓" : "Mark as verified") { Task { await verify() } }
+                    .disabled(!canVerify)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+        .task { await reload() }
+    }
+
+    private var typed: String { SafetyNumber.digitsOnly(compare) }
+
+    private var canVerify: Bool {
+        guard let id = identity, !busy, !id.isVerified else { return false }
+        return typed.isEmpty || SafetyNumber.matches(id.safetyNumber, typed)
+    }
+
+    @ViewBuilder private func compareResult(_ id: SafetyNumber.Identity) -> some View {
+        if typed.isEmpty {
+            EmptyView()
+        } else if SafetyNumber.matches(id.safetyNumber, typed) {
+            Text("✓ The numbers match.").foregroundStyle(.green)
+        } else if typed.count < SafetyNumber.digitCount {
+            Text("\(typed.count) of \(SafetyNumber.digitCount) digits entered.").foregroundStyle(.secondary)
+        } else {
+            Text("✗ The numbers do NOT match. Do not verify this contact.").bold().foregroundStyle(.red)
+        }
+    }
+
+    private func reload() async {
+        do {
+            let res = try await model.cli.call("listIdentities", ["number": recipient])
+            identity = SafetyNumber.pick(SafetyNumber.parse(res), recipient: recipient)
+            status = identity == nil ? "No safety number is available for this contact yet. It appears after you have exchanged messages." : ""
+            statusIsError = false
+        } catch {
+            status = "Could not load the safety number: \(error.localizedDescription)"
+            statusIsError = true
+        }
+    }
+
+    private func verify() async {
+        guard let id = identity, canVerify else { return }
+        // Without a pasted number the user compared by eye: ask once.
+        if typed.isEmpty {
+            guard await Dialogs.confirm("Mark as verified",
+                                        "Did you compare this safety number with the one on \(name)'s device, and do both match?",
+                                        ok: "Mark as verified") else { return }
+        }
+        busy = true
+        status = "Saving …"
+        defer { busy = false }
+        do {
+            _ = try await model.cli.call("trust", ["recipient": recipient, "verifiedSafetyNumber": id.digits])
+            model.safetyVerified(key, recipient: recipient, digits: id.digits)
+            await reload()
+        } catch {
+            status = "Could not mark the contact as verified: \(error.localizedDescription)"
+            statusIsError = true
+        }
+    }
+
+    /// The QR code of the official apps: the raw bytes, in byte mode (Core Image, no qrencode needed).
+    static func qrImage(_ data: Data) -> NSImage? {
+        guard !data.isEmpty else { return nil }
+        let f = CIFilter.qrCodeGenerator()
+        f.message = data
+        f.correctionLevel = "L"
+        guard let out = f.outputImage?.transformed(by: CGAffineTransform(scaleX: 6, y: 6)) else { return nil }
+        let rep = NSCIImageRep(ciImage: out)
+        let img = NSImage(size: rep.size)
+        img.addRepresentation(rep)
+        return img
     }
 }

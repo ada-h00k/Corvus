@@ -523,6 +523,22 @@ final class SignalCliProcessTests: XCTestCase {
         XCTAssertFalse(cli.isRunning)
     }
 
+    func testSafetyNumberAndTrustAgainstMock() async throws {
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: "/usr/bin/python3"), "python3 missing")
+        let cli = SignalCli()
+        cli.executable = try mockPath()
+        defer { try? FileManager.default.removeItem(atPath: cli.executable) }
+        cli.start(account: "+491234567")
+        defer { cli.stop() }
+        let res = try await cli.call("listIdentities", ["number": "+49111"])
+        let id = try XCTUnwrap(SafetyNumber.pick(SafetyNumber.parse(res), recipient: "+49111"))
+        XCTAssertEqual(id.trustLevel, "TRUSTED_UNVERIFIED")
+        XCTAssertFalse(SafetyNumber.scannableBytes(id.scannable).isEmpty)
+        _ = try await cli.call("trust", ["recipient": "+49111", "verifiedSafetyNumber": id.digits])
+        let after = SafetyNumber.pick(SafetyNumber.parse(try await cli.call("listIdentities", ["number": "+49111"])), recipient: "+49111")
+        XCTAssertEqual(after?.isVerified, true)
+    }
+
     /// The calls behind Block contact and Message requests, with the parameters the app sends.
     func testBlockAndAcceptRequestAgainstMock() async throws {
         try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: "/usr/bin/python3"), "python3 missing")
@@ -1210,5 +1226,51 @@ final class TextStyleTests: XCTestCase {
         let after = TextStyles.resolveMentions("\u{FFFC} x", [(start: 0, length: 1, name: "Al")], styles: [bold(2, 1)])
         XCTAssertEqual(after.text, "@Al x")
         XCTAssertEqual(after.styles, [bold(4, 1)])
+    }
+}
+
+final class SafetyNumberTests: XCTestCase {
+    let sixty = "123456789012345678901234567890123456789012345678901234567890"
+
+    func identity(_ digits: String, trust: String = "TRUSTED_UNVERIFIED", number: String = "+49a", added: Int64 = 1) -> SafetyNumber.Identity {
+        var id = SafetyNumber.Identity()
+        id.number = number
+        id.safetyNumber = digits
+        id.trustLevel = trust
+        id.addedMs = added
+        return id
+    }
+
+    func testFormatAndMatch() {
+        XCTAssertEqual(SafetyNumber.format(sixty),
+                       "12345 67890 12345 67890\n12345 67890 12345 67890\n12345 67890 12345 67890")
+        XCTAssertEqual(SafetyNumber.format("123"), "123")
+        XCTAssertTrue(SafetyNumber.matches(SafetyNumber.format(sixty), sixty))
+        XCTAssertFalse(SafetyNumber.matches(String(sixty.dropLast()), String(sixty.dropLast())))
+    }
+
+    func testChangeDetection() {
+        XCTAssertFalse(SafetyNumber.changed(stored: "", now: identity(sixty)))          // first sight: baseline
+        XCTAssertTrue(SafetyNumber.changed(stored: "", now: identity(sixty, trust: "UNTRUSTED")))
+        XCTAssertFalse(SafetyNumber.changed(stored: sixty, now: identity(sixty)))
+        let other = String(sixty.reversed())
+        XCTAssertTrue(SafetyNumber.changed(stored: sixty, now: identity(other)))
+        XCTAssertFalse(SafetyNumber.changed(stored: sixty, now: identity("12")))         // no usable number
+    }
+
+    func testPickPrefersOwnNewestIdentity() {
+        let other = String(sixty.reversed())
+        let list = [identity(sixty, number: "+49x", added: 9), identity(sixty, added: 1), identity(other, added: 5)]
+        XCTAssertEqual(SafetyNumber.pick(list, recipient: "+49a")?.digits, other)
+        XCTAssertNil(SafetyNumber.pick([identity("1")], recipient: "+49a"))
+    }
+
+    func testSendFailures() {
+        XCTAssertTrue(SafetyNumber.isUntrustedIdentityError("Failed to send message: Untrusted Identity for \"+49\""))
+        let result: JSON = ["timestamp": 1, "results": [
+            ["type": "SUCCESS", "recipientAddress": ["number": "+49a"]] as JSON,
+            ["type": "IDENTITY_FAILURE", "recipientAddress": ["uuid": "u-b"]] as JSON,
+        ]]
+        XCTAssertEqual(SafetyNumber.identityFailures(in: result), ["u-b"])
     }
 }

@@ -12,6 +12,9 @@ struct ChatPane: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.searchVisible { SearchBar() }
+            if let change = model.safetyChanged[conversation.key], !conversation.isGroup {
+                SafetyBar(conversation: conversation, change: change)
+            }
             MessageList(conversation: conversation)
                 .overlay {
                     if dropTargeted {
@@ -96,6 +99,32 @@ private struct SearchBar: View {
         .background(Theme.chrome)
         .overlay(alignment: .bottom) { Divider() }
         .onAppear { focused = true }
+    }
+}
+
+/// Warning shown while a contact's safety number changed and the change is not accepted yet.
+private struct SafetyBar: View {
+    @Environment(AppModel.self) private var model
+    let conversation: Conversation
+    let change: SafetyChange
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.orange).font(.title3)
+            Text("Your safety number with \(conversation.title) has changed. They may have reinstalled Signal or switched phones, but it can also mean that someone is intercepting your chat. Compare the number with them before you rely on this chat."
+                 + (change.blocked ? " Messages cannot be sent until you verify it." : ""))
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 6) {
+                Button("Verify …") { model.chatSheet = .safetyNumber(conversation.key) }
+                    .disabled(!model.connected)
+                if !change.blocked { Button("Dismiss") { model.dismissSafetyChange(conversation.key) } }
+            }
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.14))
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 

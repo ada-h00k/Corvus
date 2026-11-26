@@ -33,12 +33,21 @@ enum GroupSheet: Identifiable, Equatable {
 /// Dialogs about the open chat or one of its messages, shown as sheets on the main window.
 enum ChatSheet: Identifiable, Equatable {
     case messageDetails(String) // Message.id
+    case safetyNumber(String)   // conversation key (1:1)
 
     var id: String {
         switch self {
         case .messageDetails(let m): return "details:" + m
+        case .safetyNumber(let k): return "safety:" + k
         }
     }
+}
+
+/// An unacknowledged change of a contact's safety number (shown as a bar in the chat).
+struct SafetyChange: Equatable {
+    var recipient: String
+    var digits: String
+    var blocked: Bool // corvus-cli refuses to send until the new key is verified
 }
 
 /// A person who can be added to a group: key (number / UUID / username) and display name.
@@ -177,6 +186,10 @@ final class AppModel {
     /// Contacts corvus-cli marks as hidden: the senders of message requests (key -> name).
     var hiddenContacts: [String: String] = [:]
     var messageRequestsShown = false
+    var safetyChanged: [String: SafetyChange] = [:]   // conversation key -> unacknowledged change
+    @ObservationIgnored private var knownSafety: [String: String] = [:] // recipient -> accepted digits
+    @ObservationIgnored private var knownSafetyAccount = ""
+    @ObservationIgnored private var identityCheckedMs: [String: Int64] = [:]
     var chatSheet: ChatSheet?
     var groupInvitations: [GroupInfo] = []  // groups we are invited to (not yet a member)
 
@@ -479,6 +492,7 @@ final class AppModel {
                     }
                 }
                 listChanged()
+                checkIdentities() // any safety number that changed while Corvus was not running
             } catch {
                 showFlash("Could not load contacts: \(error.localizedDescription)", seconds: 8)
             }
@@ -799,6 +813,73 @@ final class AppModel {
         }
     }
 
+    // MARK: - Safety numbers
+
+    private func loadKnownSafetyNumbers() {
+        guard knownSafetyAccount != account else { return }
+        knownSafetyAccount = account
+        knownSafety = UserDefaults.standard.dictionary(forKey: "knownSafetyNumbers." + account) as? [String: String] ?? [:]
+    }
+
+    private func setKnownSafetyNumber(_ recipient: String, _ digits: String) {
+        guard !recipient.isEmpty, !digits.isEmpty, !account.isEmpty else { return }
+        loadKnownSafetyNumbers()
+        knownSafety[recipient] = digits
+        UserDefaults.standard.set(knownSafety, forKey: "knownSafetyNumbers." + account)
+    }
+
+    /// Compares the contacts' safety numbers with the ones accepted before (all contacts, or one chat).
+    func checkIdentities(_ key: String = "", force: Bool = false) {
+        guard cli.isRunning, !account.isEmpty else { return }
+        loadKnownSafetyNumbers()
+        var p: JSON = [:]
+        if !key.isEmpty {
+            guard let c = chats.convs[key], !c.isGroup, !chats.isNoteToSelf(key) else { return }
+            let now = nowMs()
+            if !force && now - (identityCheckedMs[key] ?? 0) < 20_000 { return }
+            identityCheckedMs[key] = now
+            p["number"] = chats.resolveKey(key)
+        }
+        Task {
+            guard let res = try? await cli.call("listIdentities", p) else { return } // unknown contact: nothing to compare
+            handleIdentities(SafetyNumber.parse(res), force: force)
+        }
+    }
+
+    private func handleIdentities(_ all: [SafetyNumber.Identity], force: Bool) {
+        let byRecipient = Dictionary(grouping: all.filter { !$0.recipient.isEmpty && $0.recipient != account && $0.uuid != account },
+                                     by: \.recipient)
+        for (recipient, ids) in byRecipient {
+            guard let id = SafetyNumber.pick(ids, recipient: recipient) else { continue }
+            let stored = knownSafety[recipient] ?? ""
+            if SafetyNumber.changed(stored: stored, now: id) || (force && id.isUntrusted) {
+                guard let key = [id.number, id.uuid].first(where: { !$0.isEmpty && chats.convs[$0].map { !$0.isGroup } ?? false })
+                else { continue }
+                let change = SafetyChange(recipient: recipient, digits: id.digits, blocked: id.isUntrusted)
+                if safetyChanged[key] != change { safetyChanged[key] = change }
+            } else if stored.isEmpty {
+                setKnownSafetyNumber(recipient, id.digits) // first sight: this is the baseline
+            }
+        }
+    }
+
+    /// Accepted from the bar: only a further change warns again.
+    func dismissSafetyChange(_ key: String) {
+        guard let change = safetyChanged.removeValue(forKey: key) else { return }
+        setKnownSafetyNumber(change.recipient, change.digits)
+    }
+
+    func safetyVerified(_ key: String, recipient: String, digits: String) {
+        setKnownSafetyNumber(recipient, digits)
+        safetyChanged.removeValue(forKey: key)
+    }
+
+    /// A send was refused for a changed key, or a group send reported recipients whose key changed.
+    private func checkSendOutcome(_ key: String, result: Any?, error: String?) {
+        if let error, SafetyNumber.isUntrustedIdentityError(error) { checkIdentities(key, force: true) }
+        for who in SafetyNumber.identityFailures(in: result) { checkIdentities(chats.resolveKey(who), force: true) }
+    }
+
     // MARK: - Blocking, message requests
 
     /// Blocks or unblocks a contact on the backend (synced to the phone); the chat follows on success.
@@ -919,6 +1000,7 @@ final class AppModel {
         notifier.close(key) // the notification for this chat is obsolete now
         composerFocusRequest += 1
         listChanged()
+        checkIdentities(key)
     }
 
     private func saveDraft() {
@@ -1313,6 +1395,9 @@ final class AppModel {
 
         // corvus-cli saw an identity key it could not verify (L6): a warning until the
         // contact is checked (listIdentities / trust) or the flash times out.
+        if !pe.outgoing && pe.kind == .message && !group {
+            checkIdentities(srcKey, force: pe.untrustedIdentity) // a new key becomes known with its first message
+        }
         if pe.untrustedIdentity && !pe.outgoing && pe.kind == .message {
             showFlash("The safety number with \(displayName(key)) changed and is not verified. Check it before you rely on this chat.", seconds: 15)
         }
@@ -1696,6 +1781,7 @@ final class AppModel {
             var result: Any?
             var err: String?
             do { result = try await cli.call("send", p) } catch { err = error.localizedDescription }
+            checkSendOutcome(key, result: result, error: err)
             try? FileManager.default.removeItem(at: staged.dir)
             guard let pendingNow = chats.pendingSends[pendingId] else { return }
 
@@ -1961,6 +2047,7 @@ final class AppModel {
             var result: Any?
             var err: String?
             do { result = try await cli.call("send", p) } catch { err = error.localizedDescription }
+            checkSendOutcome(key, result: result, error: err)
             guard let pendingNow = chats.pendingSends[pendingId] else { return }
             if let err, !pendingNow.echoReceived {
                 chats.removePendingPreview(pendingNow)
@@ -2136,12 +2223,14 @@ final class AppModel {
         Task { [p] in
             do {
                 let res = try await cli.call("send", p)
+                checkSendOutcome(key, result: res, error: nil)
                 clearFlash()
                 var ts = jsonInt64(jsonObject(res)["timestamp"])
                 if ts <= 0 { ts = nowMs() }
                 if let rec = chats.applyEdit(key, targetTs: origTs, authors: [account], text: text, newTs: ts,
                                              styles: styles) { persist(rec) }
             } catch {
+                checkSendOutcome(key, result: nil, error: error.localizedDescription)
                 showFlash("Editing failed: \(error.localizedDescription)")
             }
         }

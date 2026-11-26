@@ -325,6 +325,10 @@ private struct ConversationRow: View {
                         .font(.system(size: 13, weight: c.unread > 0 ? .bold : .semibold))
                         .lineLimit(1)
                     if c.muted { Image(systemName: "bell.slash.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
+                    if model.safetyChanged[c.key] != nil {
+                        Image(systemName: "exclamationmark.shield.fill").font(.system(size: 9)).foregroundStyle(.orange)
+                            .help("The safety number has changed")
+                    }
                     if c.blocked {
                         Image(systemName: "nosign").font(.system(size: 9)).foregroundStyle(.red).help("Blocked contact")
                     }
@@ -432,6 +436,10 @@ private struct ConversationMenu: View {
         }
         if !c.isGroup && !selfChat { // contact management, as in the Qt app's conversation menu
             Divider()
+            Button { model.chatSheet = .safetyNumber(c.key) } label: {
+                Label("View safety number …", systemImage: "checkmark.shield")
+            }
+            .disabled(!model.connected)
             if c.blocked {
                 Button { model.setBlocked(c.key, false) } label: { Label("Unblock contact", systemImage: "hand.raised.slash") }
                     .disabled(!model.connected)
