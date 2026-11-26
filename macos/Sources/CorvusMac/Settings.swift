@@ -13,6 +13,7 @@ struct NotificationSettings: Equatable {
     var trayIcon = true               // show the menu bar icon
     var closeToTray = true            // closing the window keeps the app running in the menu bar
     var startMinimizedInTray = false  // start with the window hidden
+    var bounceDock = true             // bounce the Dock icon once for a new message (Qt: flash the taskbar)
 
     private static let prefix = "notifications."
 
@@ -27,6 +28,7 @@ struct NotificationSettings: Equatable {
         n.trayIcon = bool("trayIcon", n.trayIcon)
         n.closeToTray = bool("closeToTray", n.closeToTray)
         n.startMinimizedInTray = bool("startMinimizedInTray", n.startMinimizedInTray)
+        n.bounceDock = bool("bounceDock", n.bounceDock)
         return n
     }
 
@@ -40,6 +42,7 @@ struct NotificationSettings: Equatable {
         d.set(trayIcon, forKey: p + "trayIcon")
         d.set(closeToTray, forKey: p + "closeToTray")
         d.set(startMinimizedInTray, forKey: p + "startMinimizedInTray")
+        d.set(bounceDock, forKey: p + "bounceDock")
     }
 }
 

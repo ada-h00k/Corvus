@@ -2051,7 +2051,7 @@ final class AppModel {
         if !m.outgoing {
             if key == current && userIsLooking() { sendReadReceipts(key) } else { chats.convs[key]!.unread += 1 }
         }
-        if !m.outgoing && !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+        if !m.outgoing && !NSApp.isActive && notify.bounceDock { NSApp.requestUserAttention(.informationalRequest) }
         if key == current { updateSearch() }
         listChanged()
         return true

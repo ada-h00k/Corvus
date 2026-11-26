@@ -172,6 +172,8 @@ private struct NotificationSettingsView: View {
                     Text("Notifications need the app bundle (run it via scripts/build-app.sh, not swift run).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Toggle("Bounce the Dock icon for new messages", isOn: $n.bounceDock)
+                    .help("While Corvus is in the background, the Dock icon bounces once when a message arrives")
                 Button("Notification settings in System Settings …") {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                 }
