@@ -11,6 +11,7 @@ struct Draft {
     var files: [String] = []
     var gifAnalyticsUrl: URL?
     var mentions: [ComposerMention] = []
+    var styles: [TextStyleRange] = []
     var isEmpty: Bool { text.isEmpty && !reply.valid && files.isEmpty }
 }
 
@@ -88,6 +89,7 @@ final class AppModel {
     var editKey = ""                // message being edited (conversation); empty = not editing
     var editTs: Int64 = 0
     private var editDraft = ""
+    private var editDraftStyles: [TextStyleRange] = []
     var composerFocusRequest = 0    // incremented to put the caret into the composer
     // voice messages
     var recording = false           // a voice message is being recorded (the record bar replaces the field)
@@ -104,6 +106,7 @@ final class AppModel {
     var mentionSelection = 0
     @ObservationIgnored var mentionTrigger: (start: Int, end: Int)?  // "@query" being replaced (UTF-16)
     @ObservationIgnored var composerMentions: [ComposerMention] = []  // kept up to date by the message field
+    @ObservationIgnored var composerStyles: [TextStyleRange] = []     // bold, italic, … (kept up to date by the message field)
     @ObservationIgnored private var groupMembers: [String: [String]] = [:] // "g:<id>" -> member keys (without us)
 
     // chat list search (⌘K) and keyboard navigation
@@ -819,7 +822,7 @@ final class AppModel {
     private func saveDraft() {
         guard let key = current else { return }
         let d = Draft(text: composerText, reply: replyQuote, files: pendingFiles, gifAnalyticsUrl: pendingGifAnalyticsUrl,
-                      mentions: MentionCompose.valid(composerMentions, in: composerText))
+                      mentions: MentionCompose.valid(composerMentions, in: composerText), styles: composerStyles)
         if d.isEmpty { drafts.removeValue(forKey: key) } else { drafts[key] = d }
     }
 
@@ -827,6 +830,7 @@ final class AppModel {
         let d = drafts.removeValue(forKey: key) ?? Draft() // the composer owns it while the chat is open
         composerText = d.text
         composerMentions = d.mentions
+        composerStyles = d.styles
         hideMentionSuggestions()
         replyQuote = d.reply
         pendingFiles = d.files
@@ -1163,16 +1167,29 @@ final class AppModel {
         }
     }
 
+    /// Text and styles as shown: messages written by the Qt app keep their mention placeholders (with the
+    /// mentions stored next to them), those are shown as "@Name" like the ones received here.
+    func displayText(_ m: Message) -> (text: String, styles: [TextStyleRange]) {
+        guard !m.mentions.isEmpty else { return (m.text, m.textStyles) }
+        return TextStyles.resolveMentions(m.text, m.mentions.map { r in
+            let n = r.uuid.isEmpty ? "" : mentionName(r.uuid)
+            return (r.start, r.length, n.isEmpty || n == r.uuid ? "mentioned member" : n)
+        }, styles: m.textStyles)
+    }
+
     // MARK: - Receiving
 
     private func onEnvelope(_ env: JSON) {
         var pe = parseEnvelope(env)
         if pe.kind == .none { return }
         if !pe.mentions.isEmpty {
-            pe.msg.text = applyMentions(pe.msg.text, pe.mentions) { m in
+            // "@Name" in place of each placeholder; the text styles move with the text.
+            let resolved = TextStyles.resolveMentions(pe.msg.text, pe.mentions.map { m in
                 let n = mentionName(m.number.isEmpty ? m.uuid : m.number)
-                return n.isEmpty ? (m.name.isEmpty ? m.number : m.name) : n
-            }
+                return (m.start, m.length, n.isEmpty ? (m.name.isEmpty ? m.number : m.name) : n)
+            }, styles: pe.msg.textStyles)
+            pe.msg.text = resolved.text
+            pe.msg.textStyles = resolved.styles
         }
 
         let group = !pe.groupId.isEmpty
@@ -1203,7 +1220,8 @@ final class AppModel {
         case .edit:
             // Like the official clients: an edit is only applied to a known message written by the same author.
             let author = pe.outgoing ? account : srcKey
-            if let rec = chats.applyEdit(key, targetTs: pe.targetTs, authors: [author], text: pe.msg.text, newTs: pe.msg.ts) {
+            if let rec = chats.applyEdit(key, targetTs: pe.targetTs, authors: [author], text: pe.msg.text, newTs: pe.msg.ts,
+                                         styles: pe.msg.textStyles) {
                 persist(rec)
             }
             return
@@ -1430,7 +1448,8 @@ final class AppModel {
 
     func sendMessage() {
         if !editKey.isEmpty {
-            sendEdit(composerText.trimmingCharacters(in: .whitespacesAndNewlines))
+            sendEdit(composerText.trimmingCharacters(in: .whitespacesAndNewlines),
+                     styles: TextStyles.map(composerStyles, in: composerText))
             return
         }
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1462,6 +1481,10 @@ final class AppModel {
             let prepared = c.isGroup ? MentionCompose.prepare(composerText, mentions: composerMentions) : (text: text, mentions: [ComposerMention]())
             p["message"] = prepared.text
             if !prepared.mentions.isEmpty { p["mention"] = MentionCompose.cliArguments(prepared.mentions) }
+            // Formatting: the offsets of what signal-cli gets (trimmed, without the "@" of each mention).
+            let removeAt = MentionCompose.removedAtSigns(composerText, mentions: c.isGroup ? composerMentions : [])
+            let cliStyles = TextStyles.map(composerStyles, in: composerText, removeAt: removeAt)
+            if !cliStyles.isEmpty { p["textStyle"] = TextStyles.cliArguments(cliStyles) }
         }
         var atts: [Attachment] = []
         for f in files {
@@ -1509,6 +1532,7 @@ final class AppModel {
         while chats.findMessage(chats.convs[key]!, ts: preview.ts, authors: []) != nil { preview.ts += 1 }
         preview.orderTs = max(preview.ts, (chats.convs[key]!.msgs.last?.sortTs ?? 0) + 1)
         preview.text = text
+        preview.textStyles = TextStyles.map(composerStyles, in: composerText) // offsets of the stored (trimmed) text
         preview.outgoing = true
         preview.authorKey = account
         preview.expiresInSeconds = c.expirationSeconds
@@ -1517,6 +1541,7 @@ final class AppModel {
         preview.linkPreview = previewForSend
         preview.linkPreview.imagePath = ""
 
+        let localStyles = preview.textStyles
         let pendingId = UUID().uuidString
         var pending = PendingSend()
         pending.conversationKey = key
@@ -1527,6 +1552,7 @@ final class AppModel {
 
         composerText = ""
         composerMentions = []
+        composerStyles = []
         hideMentionSuggestions()
         dismissedPreviewUrl = ""
         pendingFiles = []
@@ -1555,6 +1581,7 @@ final class AppModel {
                 }
                 if composerText.isEmpty { // don't overwrite a newer draft
                     composerText = text
+                    composerStyles = localStyles
                     if pendingFiles.isEmpty { pendingFiles = files }
                     if !replyQuote.valid { replyQuote = quote }
                     composerCursorToEnd += 1
@@ -1908,10 +1935,14 @@ final class AppModel {
             return
         }
         stopTyping()
-        if editKey.isEmpty { editDraft = composerText } // keep an already running edit's draft
+        if editKey.isEmpty { // keep an already running edit's draft
+            editDraft = composerText
+            editDraftStyles = composerStyles
+        }
         editKey = c.key
         editTs = m.ts
         composerText = m.text
+        composerStyles = m.textStyles
         composerCursorToEnd += 1
         composerFocusRequest += 1
     }
@@ -1931,12 +1962,14 @@ final class AppModel {
         editTs = 0
         if restoreDraft {
             composerText = editDraft
+            composerStyles = editDraftStyles
             composerCursorToEnd += 1
         }
         editDraft = ""
+        editDraftStyles = []
     }
 
-    private func sendEdit(_ text: String) {
+    private func sendEdit(_ text: String, styles: [TextStyleRange]) {
         guard let c = chats.convs[editKey], let i = chats.findMessage(c, ts: editTs, authors: [account]) else {
             cancelEdit()
             return
@@ -1946,7 +1979,7 @@ final class AppModel {
             showFlash("A message cannot be empty.", seconds: 6)
             return
         }
-        if text == m.text { // nothing changed
+        if text == m.text && styles == m.textStyles { // nothing changed
             cancelEdit()
             return
         }
@@ -1957,6 +1990,7 @@ final class AppModel {
         }
         // signal-cli: `send --edit-timestamp <ts>`; the target is the latest revision the peers know.
         var p: JSON = ["message": text, "editTimestamp": m.latestTs]
+        if !styles.isEmpty { p["textStyle"] = TextStyles.cliArguments(styles) }
         if m.quote.valid && !m.quote.authorKey.isEmpty { // an edit keeps the reply it belongs to
             p["quoteTimestamp"] = m.quote.id
             p["quoteAuthor"] = m.quote.authorKey
@@ -1973,7 +2007,8 @@ final class AppModel {
                 clearFlash()
                 var ts = jsonInt64(jsonObject(res)["timestamp"])
                 if ts <= 0 { ts = nowMs() }
-                if let rec = chats.applyEdit(key, targetTs: origTs, authors: [account], text: text, newTs: ts) { persist(rec) }
+                if let rec = chats.applyEdit(key, targetTs: origTs, authors: [account], text: text, newTs: ts,
+                                             styles: styles) { persist(rec) }
             } catch {
                 showFlash("Editing failed: \(error.localizedDescription)")
             }

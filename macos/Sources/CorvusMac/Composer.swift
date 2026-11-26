@@ -306,8 +306,42 @@ private struct AttachmentTray: View {
 struct MessageInput: NSViewRepresentable {
     static let insertText = Notification.Name("MessageInput.insertText")
     static let acceptMention = Notification.Name("MessageInput.acceptMention") // object: index into the suggestions
+    static let toggleStyle = Notification.Name("MessageInput.toggleStyle")     // object: "BOLD", "ITALIC", …
 
     static let spellCheckKey = "composer.spellCheck"
+
+    struct FormatItem {
+        let title: String
+        let style: String
+        let key: KeyEquivalent
+        let modifiers: EventModifiers
+    }
+
+    static let formatItems = [
+        FormatItem(title: "Bold", style: "BOLD", key: "b", modifiers: .command),
+        FormatItem(title: "Italic", style: "ITALIC", key: "i", modifiers: .command),
+        FormatItem(title: "Strikethrough", style: "STRIKETHROUGH", key: "x", modifiers: [.command, .shift]),
+        FormatItem(title: "Monospace", style: "MONOSPACE", key: "m", modifiers: [.command, .shift]),
+        FormatItem(title: "Spoiler", style: "SPOILER", key: "p", modifiers: [.command, .shift]),
+    ]
+
+    /// `font` with a Signal style (BOLD, ITALIC, MONOSPACE) added to the traits it already has.
+    static func styled(_ font: NSFont, _ style: String) -> NSFont {
+        let fm = NSFontManager.shared
+        switch style {
+        case "BOLD": return fm.convert(font, toHaveTrait: .boldFontMask)
+        case "ITALIC": return fm.convert(font, toHaveTrait: .italicFontMask)
+        case "MONOSPACE":
+            let mono = NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
+            let traits = fm.traits(of: font)
+            var f = mono
+            if traits.contains(.boldFontMask) { f = fm.convert(f, toHaveTrait: .boldFontMask) }
+            if traits.contains(.italicFontMask) { f = fm.convert(f, toHaveTrait: .italicFontMask) }
+            return f
+        default: return font
+        }
+    }
+
 
     @Environment(AppModel.self) private var model
     @AppStorage(MessageInput.spellCheckKey) private var spellCheck = false
@@ -356,6 +390,9 @@ struct MessageInput: NSViewRepresentable {
             tv.string = text
             // Replaced from outside (sent, chat switched, draft restored): keep only mentions that still stand.
             model.composerMentions = MentionCompose.valid(model.composerMentions, in: text)
+            let length = (text as NSString).length
+            model.composerStyles = model.composerStyles.filter { $0.start + $0.length <= length }
+            c.applyStyles()
             c.highlightMentions()
             tv.needsDisplay = true
         }
@@ -387,6 +424,7 @@ struct MessageInput: NSViewRepresentable {
         private var heightConstraint: NSLayoutConstraint?
         private var observer: NSObjectProtocol?
         private var mentionObserver: NSObjectProtocol?
+        private var styleObserver: NSObjectProtocol?
 
         init(_ parent: MessageInput) {
             self.parent = parent
@@ -401,6 +439,12 @@ struct MessageInput: NSViewRepresentable {
                     tv.window?.makeFirstResponder(tv)
                 }
             }
+            styleObserver = NotificationCenter.default.addObserver(forName: MessageInput.toggleStyle, object: nil, queue: .main) { [weak self] n in
+                MainActor.assumeIsolated {
+                    guard let self, let style = n.object as? String else { return }
+                    self.toggleStyle(style)
+                }
+            }
             mentionObserver = NotificationCenter.default.addObserver(forName: MessageInput.acceptMention, object: nil, queue: .main) { [weak self] n in
                 MainActor.assumeIsolated {
                     guard let self, let i = n.object as? Int else { return }
@@ -410,14 +454,57 @@ struct MessageInput: NSViewRepresentable {
             }
         }
 
+        // MARK: Formatting
+
+        /// Bold / italic / strikethrough / monospace / spoiler on the selection, or off if all of it has it.
+        func toggleStyle(_ style: String) {
+            guard let tv = textView, tv.window?.firstResponder === tv else { return }
+            let sel = tv.selectedRange()
+            guard sel.length > 0 else { return }
+            parent.model.composerStyles = TextStyles.toggle(parent.model.composerStyles, sel, style: style)
+            applyStyles()
+            parent.onUserEdit?()
+        }
+
+        /// Draws the styles into the (plain text) field: the text stays a string, the styles live in the model.
+        func applyStyles() {
+            guard let tv = textView, let storage = tv.textStorage else { return }
+            let base = NSFont.systemFont(ofSize: NSFont.systemFontSize + 1)
+            let full = NSRange(location: 0, length: storage.length)
+            storage.beginEditing()
+            storage.setAttributes([.font: base, .foregroundColor: NSColor.textColor], range: full)
+            for st in parent.model.composerStyles {
+                let r = NSRange(location: st.start, length: st.length)
+                guard st.length > 0, NSMaxRange(r) <= storage.length else { continue }
+                switch st.style {
+                case "BOLD", "ITALIC", "MONOSPACE":
+                    storage.enumerateAttribute(.font, in: r) { value, sub, _ in
+                        let f = (value as? NSFont) ?? base
+                        storage.addAttribute(.font, value: MessageInput.styled(f, st.style), range: sub)
+                    }
+                case "STRIKETHROUGH":
+                    storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: r)
+                case "SPOILER":
+                    storage.addAttribute(.backgroundColor, value: NSColor.tertiaryLabelColor, range: r)
+                default: break
+                }
+            }
+            storage.endEditing()
+            tv.typingAttributes = [.font: base, .foregroundColor: NSColor.textColor]
+        }
+
         // MARK: @mentions
 
-        /// Mentions move with the text in front of them; one that an edit touches becomes plain text.
+        /// Mentions and styles move with the text in front of them; a mention that an edit touches becomes plain text.
         func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
             let model = parent.model
+            let replacementLength = ((replacementString ?? "") as NSString).length
             if !model.composerMentions.isEmpty {
                 model.composerMentions = MentionCompose.adjust(model.composerMentions, editing: range,
-                                                               replacementLength: ((replacementString ?? "") as NSString).length)
+                                                               replacementLength: replacementLength)
+            }
+            if !model.composerStyles.isEmpty {
+                model.composerStyles = TextStyles.adjust(model.composerStyles, editing: range, replacementLength: replacementLength)
             }
             return true
         }
@@ -468,6 +555,7 @@ struct MessageInput: NSViewRepresentable {
                 parent.text = tv.string
                 parent.onUserEdit?()
             }
+            if !tv.hasMarkedText() { applyStyles() }
             highlightMentions()
             let sel = tv.selectedRange()
             if sel.length == 0 && !tv.hasMarkedText() { parent.model.updateMentionSuggestions(text: tv.string, cursor: sel.location) }
@@ -576,6 +664,29 @@ final class InputTextView: NSTextView {
         let attrs: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.placeholderTextColor, .font: font ?? .systemFont(ofSize: 13)]
         let origin = NSPoint(x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 5), y: textContainerInset.height)
         (placeholder as NSString).draw(at: origin, withAttributes: attrs)
+    }
+
+    // Right-click on selected text: the Signal formatting options on top of the usual items.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        guard selectedRange().length > 0 else { return menu }
+        let format = NSMenu(title: "Format")
+        for item in MessageInput.formatItems {
+            let mi = NSMenuItem(title: item.title, action: #selector(toggleFormat(_:)), keyEquivalent: "")
+            mi.representedObject = item.style
+            mi.target = self
+            format.addItem(mi)
+        }
+        let top = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
+        top.submenu = format
+        menu.insertItem(top, at: 0)
+        menu.insertItem(.separator(), at: 1)
+        return menu
+    }
+
+    @objc private func toggleFormat(_ sender: NSMenuItem) {
+        guard let style = sender.representedObject as? String else { return }
+        NotificationCenter.default.post(name: MessageInput.toggleStyle, object: style)
     }
 
     override func becomeFirstResponder() -> Bool {

@@ -230,10 +230,13 @@ public struct ChatState {
         return Records.reaction(key, ts: m.ts, author: effectiveAuthor(c, m), by: reactor, emoji: emoji) // original ts = stable identity
     }
 
-    public mutating func applyEdit(_ key: String, targetTs: Int64, authors: [String], text: String, newTs: Int64) -> JSON? {
+    public mutating func applyEdit(_ key: String, targetTs: Int64, authors: [String], text: String, newTs: Int64,
+                                   styles: [TextStyleRange] = []) -> JSON? {
         guard let c = convs[key], let i = findMessage(c, ts: targetTs, authors: authors) else { return nil }
         if c.msgs[i].deleted || newTs <= c.msgs[i].latestTs { return nil } // deleted / already applied / outdated revision
         convs[key]!.msgs[i].text = text
+        convs[key]!.msgs[i].textStyles = styles
+        convs[key]!.msgs[i].mentions = [] // the new text has its mentions written out
         convs[key]!.msgs[i].linkPreview = LinkPreview() // it belonged to the old text; edits do not regenerate it
         convs[key]!.msgs[i].editTs = newTs
         convs[key]!.msgs[i].editCount += 1

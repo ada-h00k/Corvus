@@ -78,7 +78,7 @@ public enum MentionCompose {
         if end <= lead { return ("", []) }
 
         let included = valid(mentions, in: raw).filter { $0.start > lead && $0.end <= end }
-        let removeAt = Set(included.map { $0.start - 1 }).sorted()
+        let removeAt = removedAtSigns(raw, mentions: mentions)
         let out = NSMutableString(string: s.substring(with: NSRange(location: lead, length: end - lead)))
         for at in removeAt.reversed() { out.deleteCharacters(in: NSRange(location: at - lead, length: 1)) }
         let mapped: [ComposerMention] = included.map { m in
@@ -87,6 +87,18 @@ public enum MentionCompose {
             return n
         }.filter { $0.start >= 0 && $0.end <= out.length }
         return (out as String, mapped.sorted { $0.start < $1.start })
+    }
+
+    /// Offsets in `raw` of the "@" signs that `prepare` removes (one in front of each mention it keeps).
+    public static func removedAtSigns(_ raw: String, mentions: [ComposerMention]) -> [Int] {
+        let s = raw as NSString
+        var lead = 0, end = s.length
+        let ws = CharacterSet.whitespacesAndNewlines
+        while lead < end, let u = UnicodeScalar(s.character(at: lead)), ws.contains(u) { lead += 1 }
+        while end > lead, let u = UnicodeScalar(s.character(at: end - 1)), ws.contains(u) { end -= 1 }
+        if end <= lead { return [] }
+        let included = valid(mentions, in: raw).filter { $0.start > lead && $0.end <= end }
+        return Set(included.map { $0.start - 1 }).sorted()
     }
 
     /// signal-cli's "mention" parameter: ["start:length:recipient", …]

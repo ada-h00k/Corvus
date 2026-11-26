@@ -334,6 +334,7 @@ private struct Bubble: View {
     let message: Message
     let isGroup: Bool
     let grouping: MessageGrouping
+    @State private var revealed = false // spoilers of this message shown
 
     var body: some View {
         let m = message
@@ -402,7 +403,12 @@ private struct Bubble: View {
                             AttachmentView(message: m, index: i, attachment: att, foreground: fg, edgeToEdge: false)
                         }
                         if !m.text.isEmpty {
-                            Text(Bubble.linkified(m.text, emojiOnly: Bubble.isEmojiOnly(m.text)))
+                            let shown = model.displayText(m)
+                            let spoilers = shown.styles.contains { $0.style == "SPOILER" }
+                            Text(Bubble.formatted(shown.text, styles: shown.styles, emojiOnly: Bubble.isEmojiOnly(shown.text),
+                                                  revealSpoilers: revealed, spoilerColor: fg))
+                                .onTapGesture { if spoilers { revealed.toggle() } }
+                                .help(spoilers && !revealed ? "Click to show the spoiler" : "")
                                 .textSelection(.enabled)
                                 .foregroundStyle(fg)
                                 .tint(m.outgoing ? fg : Theme.signalBlue)
@@ -456,6 +462,43 @@ private struct Bubble: View {
 
     /// Created once: building a detector is expensive and `linkified` runs on every redraw of a bubble.
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    /// Message text with Signal formatting (SwiftUI attributes, so `Text` draws them); spoilers are
+    /// covered with `spoilerColor` until `revealSpoilers`.
+    static func formatted(_ text: String, styles: [TextStyleRange], emojiOnly: Bool = false,
+                          revealSpoilers: Bool = false, spoilerColor: Color = .primary) -> AttributedString {
+        let valid = styles.filter { $0.length > 0 && $0.start >= 0 && $0.start + $0.length <= (text as NSString).length }
+        guard !valid.isEmpty, !emojiOnly else { return linkified(text, emojiOnly: emojiOnly) }
+        let ns = text as NSString
+        var cuts: Set<Int> = [0, ns.length]
+        for st in valid { cuts.insert(st.start); cuts.insert(st.start + st.length) }
+        let points = cuts.sorted()
+        let size = NSFont.systemFontSize + 1
+        var out = AttributedString()
+        for (a, b) in zip(points, points.dropFirst()) where b > a {
+            let active = Set(valid.filter { $0.start <= a && $0.start + $0.length >= b }.map(\.style))
+            var seg = AttributedString(ns.substring(with: NSRange(location: a, length: b - a)))
+            var font = Font.system(size: size, design: active.contains("MONOSPACE") ? .monospaced : .default)
+            if active.contains("BOLD") { font = font.bold() }
+            if active.contains("ITALIC") { font = font.italic() }
+            seg.font = font
+            if active.contains("STRIKETHROUGH") { seg.strikethroughStyle = .single }
+            if active.contains("SPOILER") && !revealSpoilers {
+                seg.foregroundColor = spoilerColor
+                seg.backgroundColor = spoilerColor
+            }
+            out += seg
+        }
+        guard let detector = linkDetector else { return out }
+        let plain = String(out.characters)
+        for match in detector.matches(in: plain, range: NSRange(location: 0, length: (plain as NSString).length)) {
+            guard let url = match.url, ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? ""),
+                  let r = Range(match.range, in: plain), let ar = Range(r, in: out) else { continue }
+            out[ar].link = url
+            out[ar].underlineStyle = .single
+        }
+        return out
+    }
 
     static func linkified(_ text: String, emojiOnly: Bool = false) -> AttributedString {
         var s = AttributedString(text)

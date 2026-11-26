@@ -71,11 +71,11 @@ public enum Records {
     }
 
     // Text styles ("st"): "start:length:STYLE" strings.
-    static func textStylesToJson(_ styles: [TextStyleRange]) -> [String] {
+    public static func textStylesToJson(_ styles: [TextStyleRange]) -> [String] {
         styles.filter { $0.start >= 0 && $0.length > 0 && !$0.style.isEmpty }.map { "\($0.start):\($0.length):\($0.style)" }
     }
 
-    static func textStylesFromJson(_ v: Any?) -> [TextStyleRange] {
+    public static func textStylesFromJson(_ v: Any?) -> [TextStyleRange] {
         jsonArray(v).compactMap { item in
             let p = jsonString(item).split(separator: ":", omittingEmptySubsequences: false)
             guard p.count == 3, let start = Int(p[0]), let length = Int(p[1]), start >= 0, length > 0, !p[2].isEmpty

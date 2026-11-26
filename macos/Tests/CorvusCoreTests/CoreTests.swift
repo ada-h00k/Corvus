@@ -1057,3 +1057,75 @@ final class QtRecordParityTests: XCTestCase {
         XCTAssertNil(at[2]["th"])
     }
 }
+
+final class TextStyleTests: XCTestCase {
+    let bold = { (s: Int, l: Int) in TextStyleRange(start: s, length: l, style: "BOLD") }
+
+    func testEnvelopeStylesForMessagesAndEdits() {
+        let msg: JSON = ["sourceNumber": "+49alice", "timestamp": 10,
+                         "dataMessage": ["timestamp": 10, "message": "hello world",
+                                         "textStyle": ["0:5:BOLD", "6:5:SPOILER", "bad"]] as JSON]
+        XCTAssertEqual(parseEnvelope(msg).msg.textStyles,
+                       [bold(0, 5), TextStyleRange(start: 6, length: 5, style: "SPOILER")])
+        let edit: JSON = ["sourceNumber": "+49alice", "timestamp": 20,
+                          "editMessage": ["targetSentTimestamp": 10,
+                                          "dataMessage": ["timestamp": 20, "message": "hi",
+                                                          "textStyle": ["0:2:ITALIC"]] as JSON] as JSON]
+        let pe = parseEnvelope(edit)
+        XCTAssertEqual(pe.kind, .edit)
+        XCTAssertEqual(pe.msg.textStyles, [TextStyleRange(start: 0, length: 2, style: "ITALIC")])
+    }
+
+    func testAdjustFollowsTheQtRules() {
+        let styles = [bold(2, 3)] // "ab[cde]f"
+        // typing in front of or right after the run does not take its style
+        XCTAssertEqual(TextStyles.adjust(styles, editing: NSRange(location: 2, length: 0), replacementLength: 1), [bold(3, 3)])
+        XCTAssertEqual(TextStyles.adjust(styles, editing: NSRange(location: 5, length: 0), replacementLength: 1), [bold(2, 3)])
+        // typing inside extends it
+        XCTAssertEqual(TextStyles.adjust(styles, editing: NSRange(location: 3, length: 0), replacementLength: 2), [bold(2, 5)])
+        // deleting part of it shrinks it, deleting all of it drops it
+        XCTAssertEqual(TextStyles.adjust(styles, editing: NSRange(location: 1, length: 2), replacementLength: 0), [bold(1, 2)])
+        XCTAssertEqual(TextStyles.adjust(styles, editing: NSRange(location: 2, length: 3), replacementLength: 0), [])
+        // replacing selected styled text keeps the style for the new text
+        XCTAssertEqual(TextStyles.adjust(styles, editing: NSRange(location: 2, length: 3), replacementLength: 1), [bold(2, 1)])
+        // edits before it move it
+        XCTAssertEqual(TextStyles.adjust(styles, editing: NSRange(location: 0, length: 1), replacementLength: 0), [bold(1, 3)])
+    }
+
+    func testToggle() {
+        var s = TextStyles.toggle([], NSRange(location: 0, length: 4), style: "BOLD")
+        XCTAssertEqual(s, [bold(0, 4)])
+        s = TextStyles.toggle(s, NSRange(location: 2, length: 4), style: "BOLD") // partly bold -> all bold, merged
+        XCTAssertEqual(s, [bold(0, 6)])
+        s = TextStyles.toggle(s, NSRange(location: 2, length: 2), style: "BOLD") // fully bold -> off, split
+        XCTAssertEqual(s, [bold(0, 2), bold(4, 2)])
+        s = TextStyles.toggle(s, NSRange(location: 0, length: 6), style: "ITALIC")
+        XCTAssertEqual(s.filter { $0.style == "ITALIC" }, [TextStyleRange(start: 0, length: 6, style: "ITALIC")])
+        XCTAssertTrue(TextStyles.covers(s, NSRange(location: 1, length: 1), style: "BOLD"))
+        XCTAssertFalse(TextStyles.covers(s, NSRange(location: 1, length: 3), style: "BOLD"))
+    }
+
+    func testMapTrimsAndDropsMentionAtSigns() {
+        // "  hi @Bob bold  " with "bold" bold and a mention of Bob
+        let raw = "  hi @Bob bold  "
+        let mention = ComposerMention(start: 6, length: 3, id: "uuid-bob", name: "Bob")
+        let styles = [bold(10, 4)]
+        XCTAssertEqual(TextStyles.map(styles, in: raw), [bold(8, 4)]) // stored text: "hi @Bob bold"
+        let removeAt = MentionCompose.removedAtSigns(raw, mentions: [mention])
+        XCTAssertEqual(removeAt, [5])
+        let prepared = MentionCompose.prepare(raw, mentions: [mention])
+        let cli = TextStyles.map(styles, in: raw, removeAt: removeAt)
+        XCTAssertEqual(prepared.text, "hi Bob bold")
+        XCTAssertEqual((prepared.text as NSString).substring(with: NSRange(location: cli[0].start, length: cli[0].length)), "bold")
+    }
+
+    func testResolveMentionsMovesStyles() {
+        // "hey \u{FFFC} you": "\u{FFFC} you" bold
+        let r = TextStyles.resolveMentions("hey \u{FFFC} you", [(start: 4, length: 1, name: "Alice")], styles: [bold(4, 5)])
+        XCTAssertEqual(r.text, "hey @Alice you")
+        XCTAssertEqual(r.styles, [bold(4, 10)])
+        let after = TextStyles.resolveMentions("\u{FFFC} x", [(start: 0, length: 1, name: "Al")], styles: [bold(2, 1)])
+        XCTAssertEqual(after.text, "@Al x")
+        XCTAssertEqual(after.styles, [bold(4, 1)])
+    }
+}

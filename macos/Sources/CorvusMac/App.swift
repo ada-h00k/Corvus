@@ -206,6 +206,13 @@ struct AppCommands: Commands {
                 .keyboardShortcut("f")
                 .disabled(model.current == nil)
         }
+        CommandMenu("Format") {
+            // Signal formatting for the selected text in the message field (Qt app: the formatting bar).
+            ForEach(MessageInput.formatItems, id: \.style) { item in
+                Button(item.title) { NotificationCenter.default.post(name: MessageInput.toggleStyle, object: item.style) }
+                    .keyboardShortcut(item.key, modifiers: item.modifiers)
+            }
+        }
         CommandMenu("Conversation") {
             // ⌘↑ / ⌘↓ move the caret in the message field, so previous / next chat is ⌥⌘↑ / ⌥⌘↓ (as in Signal Desktop).
             Button("Previous chat") { model.stepConversation(-1) }
