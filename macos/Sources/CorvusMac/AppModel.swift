@@ -34,10 +34,12 @@ enum GroupSheet: Identifiable, Equatable {
 enum ChatSheet: Identifiable, Equatable {
     case messageDetails(String) // Message.id
     case safetyNumber(String)   // conversation key (1:1)
+    case forward(String)        // Message.id in the open chat
 
     var id: String {
         switch self {
         case .messageDetails(let m): return "details:" + m
+        case .forward(let m): return "forward:" + m
         case .safetyNumber(let k): return "safety:" + k
         }
     }
@@ -811,6 +813,157 @@ final class AppModel {
                 showFlash("Could not change disappearing-message timer: \(error.localizedDescription)")
             }
         }
+    }
+
+    // MARK: - Sending a prepared message
+
+    /// Shows `preview` in chat `key` right away and sends `params`; the preview is confirmed (and written to
+    /// the history) when the send succeeds, removed when it fails. Used by forwarding, polls and contact cards.
+    func sendWithPreview(_ key: String, params: JSON, preview template: Message, failure: String,
+                         cleanup: URL? = nil, done: ((Int64?) -> Void)? = nil) {
+        guard chats.convs[key] != nil else { return }
+        var preview = template
+        preview.ts = nowMs()
+        while chats.findMessage(chats.convs[key]!, ts: preview.ts, authors: []) != nil { preview.ts += 1 }
+        preview.orderTs = max(preview.ts, (chats.convs[key]!.msgs.last?.sortTs ?? 0) + 1)
+        preview.outgoing = true
+        preview.authorKey = account
+        preview.expiresInSeconds = chats.convs[key]!.expirationSeconds
+        let pendingId = UUID().uuidString
+        var pending = PendingSend()
+        pending.conversationKey = key
+        pending.temporaryTimestamp = preview.ts
+        pending.message = preview
+        chats.pendingSends[pendingId] = pending
+        chats.convs[key]!.insertSorted(preview)
+        if key == current { scrollToMessage(index: chats.convs[key]!.msgs.firstIndex { $0.id == preview.id } ?? 0) }
+        listChanged()
+
+        Task { [params] in
+            var result: Any?
+            var err: String?
+            do { result = try await cli.call("send", params) } catch { err = error.localizedDescription }
+            checkSendOutcome(key, result: result, error: err)
+            if let cleanup { try? FileManager.default.removeItem(at: cleanup) }
+            guard let pendingNow = chats.pendingSends[pendingId] else { return }
+            if let err, !pendingNow.echoReceived {
+                chats.removePendingPreview(pendingNow)
+                chats.pendingSends.removeValue(forKey: pendingId)
+                showFlash("\(failure): \(err)", seconds: 9)
+                listChanged()
+                done?(nil)
+                return
+            }
+            var ts = jsonInt64(jsonObject(result)["timestamp"])
+            if pendingNow.echoReceived {
+                chats.pendingSends.removeValue(forKey: pendingId)
+            } else {
+                if ts <= 0 { ts = nowMs() }
+                persist(chats.finalizePendingSend(pendingId, timestamp: ts))
+                listChanged()
+            }
+            done?(ts)
+        }
+    }
+
+    // MARK: - Forwarding
+
+    /// Chats a message can be forwarded to (not blocked ones), by name.
+    var forwardDestinations: [Conversation] {
+        chats.convs.values.filter { !$0.blocked }.sorted {
+            let c = $0.title.localizedCaseInsensitiveCompare($1.title)
+            return c == .orderedSame ? $0.key < $1.key : c == .orderedAscending
+        }
+    }
+
+    static let maxForwardTargets = 5
+
+    func canForward(_ m: Message) -> Bool {
+        // A View Once item is never re-uploaded from the desktop (as in the Qt app).
+        !m.deleted && !m.viewOnce && !m.hasPoll && (!m.text.isEmpty || !m.attachments.isEmpty)
+    }
+
+    /// Forwards a message of the open chat to up to five chats, with an optional note above it (port of the
+    /// Qt app's forwardMessage): attachments are fetched once and sent again as new uploads.
+    func forward(_ id: String, to targets: [String], note: String) async {
+        guard let sourceKey = current, let (_, source) = message(withId: id), canForward(source),
+              !targets.isEmpty, targets.count <= AppModel.maxForwardTargets else { return }
+        let note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let directSticker = source.text.isEmpty && source.attachments.count == 1 && source.attachments[0].isValidSticker && note.isEmpty
+        let stage = FileManager.default.temporaryDirectory.appendingPathComponent("corvus-forward-" + UUID().uuidString)
+        var files: [String] = []
+        var datas: [Data] = []
+        if !directSticker {
+            do {
+                try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
+                var total: Int64 = 0
+                for (i, att) in source.attachments.enumerated() {
+                    if att.size > Media.maxAttachment { throw RpcError("The attachment is too large to forward.") }
+                    let data = try await fetchAttachmentData(sourceKey, att)
+                    total += Int64(data.count)
+                    if data.isEmpty || total > Media.maxAttachment { throw RpcError("The attachment could not be loaded.") }
+                    var name = (att.filename as NSString).lastPathComponent
+                    if att.isSticker { name = "sticker.webp" }
+                    if name.isEmpty || name == "." || name == ".." { name = "attachment" }
+                    let dir = stage.appendingPathComponent("named-\(i)")
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let file = dir.appendingPathComponent(name)
+                    try data.write(to: file)
+                    files.append(file.path)
+                    datas.append(data)
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: stage)
+                showFlash("Forwarding failed: \(error.localizedDescription)", seconds: 9)
+                return
+            }
+        }
+        let shown = displayText(source)
+        let prefix = note.isEmpty ? "" : note + "\n\n"
+        let prefixLength = (prefix as NSString).length
+        let text = prefix + shown.text
+        let styles = shown.styles.map { TextStyleRange(start: $0.start + prefixLength, length: $0.length, style: $0.style) }
+
+        var remaining = targets.filter { chats.convs[$0].map { !$0.blocked } ?? false }
+        if remaining.isEmpty { try? FileManager.default.removeItem(at: stage); return }
+        for key in remaining {
+            // Every destination gets its own staged copy: corvus-cli may move the files it uploads.
+            let staged = directSticker || files.isEmpty ? (paths: [String](), dir: stage) : Media.stageForSignalCli(files)
+            var p: JSON = [:]
+            if !text.isEmpty {
+                p["message"] = text
+                if !styles.isEmpty { p["textStyle"] = TextStyles.cliArguments(styles) }
+            }
+            if directSticker {
+                p["sticker"] = "\(source.attachments[0].stickerPackId):\(source.attachments[0].stickerId)"
+            } else if !staged.paths.isEmpty {
+                p["attachments"] = staged.paths
+            }
+            addRecipient(&p, chats.convs[key]!)
+            var preview = Message()
+            preview.text = text
+            preview.textStyles = styles
+            preview.attachments = source.attachments.enumerated().map { i, a in
+                var copy = a
+                copy.id = ""
+                copy.path = directSticker ? "" : (i < files.count ? files[i] : "")
+                if i < datas.count {
+                    copy.size = Int64(datas[i].count)
+                    if copy.isImage && copy.thumb.isEmpty {
+                        if let (w, h) = Media.pixelSize(datas[i]) { copy.width = w; copy.height = h }
+                        copy.thumb = Media.makeThumbnail(datas[i])
+                    }
+                }
+                if !directSticker && copy.isSticker { copy.filename = "sticker.webp" }
+                return copy
+            }
+            sendWithPreview(key, params: p, preview: preview, failure: "Forwarding failed",
+                            cleanup: staged.paths.isEmpty ? nil : staged.dir) { _ in
+                remaining.removeAll { $0 == key }
+                if remaining.isEmpty { try? FileManager.default.removeItem(at: stage) }
+            }
+        }
+        showFlash(targets.count == 1 ? "Forwarded." : "Forwarded to \(targets.count) chats.", seconds: 4)
     }
 
     // MARK: - Safety numbers

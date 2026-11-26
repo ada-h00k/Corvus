@@ -11,6 +11,7 @@ struct ChatSheetView: View {
         switch sheet {
         case .messageDetails(let id): MessageDetailsView(messageId: id)
         case .safetyNumber(let key): SafetyNumberView(key: key)
+        case .forward(let id): ForwardView(messageId: id)
         }
     }
 }
@@ -251,5 +252,65 @@ struct SafetyNumberView: View {
         let img = NSImage(size: rep.size)
         img.addRepresentation(rep)
         return img
+    }
+}
+
+/// "Forward message": up to five chats and an optional note (port of the Qt dialog).
+struct ForwardView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let messageId: String
+    @State private var query = ""
+    @State private var selected: [String] = []
+    @State private var note = ""
+
+    var body: some View {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let list = model.forwardDestinations.filter {
+            q.isEmpty || $0.title.localizedCaseInsensitiveContains(q) || $0.key.localizedCaseInsensitiveContains(q)
+        }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Forward message").font(.headline)
+            Text("Choose up to \(AppModel.maxForwardTargets) chats to forward this message to.").foregroundStyle(.secondary)
+            TextField("Search chats", text: $query).textFieldStyle(.roundedBorder)
+            List(list) { c in
+                let on = selected.contains(c.key)
+                Button {
+                    if on { selected.removeAll { $0 == c.key } }
+                    else if selected.count < AppModel.maxForwardTargets { selected.append(c.key) }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: on ? "checkmark.circle.fill" : "circle").foregroundStyle(on ? Theme.signalBlue : .secondary)
+                        AvatarView(image: model.avatarImage(c), size: 24)
+                        Text(verbatim: c.title.isEmpty ? c.key : c.title).lineLimit(1)
+                        if c.isGroup { Image(systemName: "person.3").foregroundStyle(.secondary).font(.caption) }
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!on && selected.count >= AppModel.maxForwardTargets)
+                .help(c.key)
+            }
+            .frame(minHeight: 260)
+            Text(selected.count >= AppModel.maxForwardTargets && selected.count > 0
+                 ? "\(selected.count) of \(AppModel.maxForwardTargets) chats selected (the maximum)."
+                 : "\(selected.count) of \(AppModel.maxForwardTargets) chats selected")
+                .font(.callout).foregroundStyle(.secondary)
+            TextField("Add a message (optional)", text: $note).textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Forward") {
+                    let targets = selected, text = note, id = messageId
+                    dismiss()
+                    Task { await model.forward(id, to: targets, note: text) }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selected.isEmpty || !model.connected)
+            }
+        }
+        .padding(20)
+        .frame(width: 440, height: 560)
     }
 }

@@ -835,6 +835,10 @@ private struct MessageMenu: View {
                     Button(m.reactions[model.account] == e ? "\(e)  (remove)" : e) { model.sendReaction(m.id, e) }
                 }
             } label: { Label("React", systemImage: "face.smiling") }
+            if model.canForward(m) {
+                Button { model.chatSheet = .forward(m.id) } label: { Label("Forward …", systemImage: "arrowshape.turn.up.right") }
+                    .disabled(!model.connected)
+            }
             Divider()
         }
         Button { model.chatSheet = .messageDetails(m.id) } label: { Label("Message details …", systemImage: "info.circle") }
