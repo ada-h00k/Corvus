@@ -247,7 +247,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/ada-h00k/Corvus.git
-        tag: v1.8.4
+        tag: v1.8.5
         commit: 379ed63930a0852eda6cadcf916e252d75fee282
         x-checker-data:
           type: git

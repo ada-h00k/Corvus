@@ -11,7 +11,7 @@
 # (pkgver below must match the version used for the tarball name/prefix.)
 
 pkgname=corvus
-pkgver=1.8.4
+pkgver=1.8.5
 pkgrel=1
 pkgdesc='Native Qt 6 GUI for Signal with an encrypted local chat history'
 arch=('x86_64')
