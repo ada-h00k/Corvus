@@ -1054,6 +1054,33 @@ private struct MessageMenu: View {
                 NSPasteboard.general.setString(m.text, forType: .string)
             } label: { Label("Copy text", systemImage: "doc.on.doc") }
         }
+        if !m.deleted && !m.viewOnce {
+            ForEach(Array(m.attachments.enumerated()).filter { $0.element.isImage && !$0.element.isSticker }, id: \.offset) { i, _ in
+                Button { model.copyImage(m, i) } label: { Label("Copy image", systemImage: "photo.on.rectangle") }
+            }
+            let urls = model.links(of: m)
+            if urls.count == 1, let u = urls.first {
+                Button { if let url = URL(string: u) { NSWorkspace.shared.open(url) } } label: { Label("Open link", systemImage: "safari") }
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(u, forType: .string)
+                } label: { Label("Copy link", systemImage: "link") }
+            } else if urls.count > 1 {
+                Menu {
+                    ForEach(urls, id: \.self) { u in
+                        Button(u) { if let url = URL(string: u) { NSWorkspace.shared.open(url) } }
+                    }
+                } label: { Label("Open link", systemImage: "safari") }
+                Menu {
+                    ForEach(urls, id: \.self) { u in
+                        Button(u) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(u, forType: .string)
+                        }
+                    }
+                } label: { Label("Copy link", systemImage: "link") }
+            }
+        }
         ForEach(Array((m.viewOnce ? [] : m.attachments).enumerated()), id: \.offset) { i, a in
             Button { model.saveAttachment(m, i) } label: {
                 Label("Save “\(a.filename.isEmpty ? "attachment" : a.filename)” …", systemImage: "square.and.arrow.down")

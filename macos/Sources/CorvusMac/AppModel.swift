@@ -3199,6 +3199,30 @@ final class AppModel {
     }
 
     /// Saved files are marked as downloaded, so Gatekeeper checks them when they are opened later.
+    /// Copies the full image of an attachment (not just its preview) to the clipboard.
+    func copyImage(_ m: Message, _ i: Int) {
+        guard let key = current, i < m.attachments.count, m.attachments[i].isImage, !m.viewOnce else { return }
+        let att = m.attachments[i]
+        Task {
+            var data = (try? await fetchAttachmentData(key, att)) ?? Data()
+            if NSImage(data: data) == nil { data = att.thumb } // the backend no longer has it: the preview at least
+            guard let image = NSImage(data: data) else {
+                showFlash("This image cannot be copied.", seconds: 5)
+                return
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.writeObjects([image])
+            showFlash("Image copied.", seconds: 3)
+        }
+    }
+
+    /// Web links of a message (its text and its link preview), for Open link / Copy link.
+    func links(of m: Message) -> [String] {
+        var urls = Gallery.links(in: displayText(m).text)
+        if m.linkPreview.isValid && !urls.contains(m.linkPreview.url) { urls.insert(m.linkPreview.url, at: 0) }
+        return urls
+    }
+
     private func presentSavePanel(data: Data, filename: String) {
         let panel = NSSavePanel()
         panel.title = "Save attachment"
