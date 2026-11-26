@@ -54,6 +54,9 @@ struct ContentView: View {
         .sheet(item: $model.chatSheet) { sheet in
             ChatSheetView(sheet: sheet)
         }
+        .sheet(isPresented: $model.messageRequestsShown) {
+            MessageRequestsView()
+        }
         .sheet(isPresented: Binding(get: { model.giphyApiKey != nil }, set: { if !$0 { model.giphyApiKey = nil } })) {
             if let key = model.giphyApiKey {
                 GiphyPicker(apiKey: key) { url, analytics in model.sendGif(url: url, analytics: analytics) }
@@ -190,6 +193,7 @@ private struct Sidebar: View {
             case "::archived": model.showArchived = true
             case "::back": model.showArchived = false
             case "::invitations": model.openGroupInvitations()
+            case "::requests": model.messageRequestsShown = true
             default: model.openConversation(key)
             }
         })
@@ -254,6 +258,20 @@ private struct Sidebar: View {
                     .padding(.vertical, 2)
                     .tag("::invitations")
                 }
+                let requests = model.messageRequests
+                if !model.showArchived && !requests.isEmpty && q.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .font(.system(size: 15))
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(Theme.field))
+                        Text("Message requests").fontWeight(.semibold)
+                        Spacer()
+                        Text("\(requests.count)").foregroundStyle(Theme.signalBlue)
+                    }
+                    .padding(.vertical, 2)
+                    .tag("::requests")
+                }
                 if !model.showArchived && !archived.isEmpty && q.isEmpty {
                     HStack(spacing: 10) {
                         Image(systemName: "archivebox")
@@ -307,6 +325,9 @@ private struct ConversationRow: View {
                         .font(.system(size: 13, weight: c.unread > 0 ? .bold : .semibold))
                         .lineLimit(1)
                     if c.muted { Image(systemName: "bell.slash.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
+                    if c.blocked {
+                        Image(systemName: "nosign").font(.system(size: 9)).foregroundStyle(.red).help("Blocked contact")
+                    }
                     Spacer(minLength: 4)
                     if let last = c.msgs.last {
                         Text(Self.shortTime(last.time))
@@ -407,6 +428,18 @@ private struct ConversationMenu: View {
             Divider()
             Button(role: .destructive) { Task { await model.deleteConversation(c.key) } } label: {
                 Label("Delete conversation …", systemImage: "trash")
+            }
+        }
+        if !c.isGroup && !selfChat { // contact management, as in the Qt app's conversation menu
+            Divider()
+            if c.blocked {
+                Button { model.setBlocked(c.key, false) } label: { Label("Unblock contact", systemImage: "hand.raised.slash") }
+                    .disabled(!model.connected)
+            } else {
+                Button(role: .destructive) { Task { await model.blockContact(c.key) } } label: {
+                    Label("Block contact …", systemImage: "hand.raised")
+                }
+                .disabled(!model.connected)
             }
         }
     }

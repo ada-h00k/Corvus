@@ -75,3 +75,58 @@ struct MessageDetailsView: View {
         .frame(minWidth: 560)
     }
 }
+
+/// "Message requests": people who wrote to you but are not accepted yet (port of the Qt dialog).
+struct MessageRequestsView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var busy: Set<String> = []
+    @State private var error = ""
+
+    var body: some View {
+        let requests = model.messageRequests
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Message requests").font(.headline)
+            Text("These people sent you a message but are not accepted yet. Accept to chat with them, decline to hide the request, or block them.")
+                .fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(.secondary)
+            List(requests, id: \.key) { r in
+                HStack {
+                    Text(verbatim: r.title).lineLimit(1).help(r.key) // a stranger's profile name: plain text
+                    Spacer()
+                    Button("Accept") { run(r.key) { try await model.acceptRequest(r.key); dismiss() } }
+                        .help("Accept the message request and show the conversation")
+                    Button("Decline") { model.declineRequest(r.key) }
+                        .help("Keep the conversation hidden and remove the request")
+                    Button("Block …", role: .destructive) {
+                        Task {
+                            guard await Dialogs.confirm("Block contact", "Block \(r.title)? You will no longer receive messages or calls from this contact.",
+                                                        ok: "Block", destructive: true) else { return }
+                            run(r.key) { try await model.blockRequest(r.key) }
+                        }
+                    }
+                    .help("Block this contact and remove the request")
+                }
+                .disabled(busy.contains(r.key) || !model.connected)
+            }
+            .frame(minHeight: 160)
+            if !error.isEmpty { Text(error).foregroundStyle(.red).font(.callout) }
+            HStack {
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 480)
+        .onChange(of: requests.isEmpty) { _, empty in if empty { dismiss() } } // nothing left to do
+    }
+
+    private func run(_ key: String, _ action: @escaping () async throws -> Void) {
+        busy.insert(key)
+        error = ""
+        Task {
+            do { try await action() } catch { self.error = "Could not complete the request: \(error.localizedDescription)" }
+            busy.remove(key)
+        }
+    }
+}

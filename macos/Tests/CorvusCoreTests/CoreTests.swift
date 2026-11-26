@@ -522,6 +522,30 @@ final class SignalCliProcessTests: XCTestCase {
         cli.stop()
         XCTAssertFalse(cli.isRunning)
     }
+
+    /// The calls behind Block contact and Message requests, with the parameters the app sends.
+    func testBlockAndAcceptRequestAgainstMock() async throws {
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: "/usr/bin/python3"), "python3 missing")
+        let cli = SignalCli()
+        cli.executable = try mockPath()
+        defer { try? FileManager.default.removeItem(atPath: cli.executable) }
+        cli.start(account: "+491234567")
+        defer { cli.stop() }
+        func contact(_ number: String) async throws -> JSON {
+            jsonArray(try await cli.call("listContacts")).map { jsonObject($0) }.first { jsonString($0["number"]) == number } ?? [:]
+        }
+        var dave = try await contact("+49444")
+        XCTAssertTrue(jsonBool(dave["isHidden"])) // an open request
+        _ = try await cli.call("removeContact", ["recipient": "+49444"])
+        dave = try await contact("+49444")
+        XCTAssertFalse(jsonBool(dave["isHidden"]))
+        _ = try await cli.call("block", ["recipient": ["+49111"]])
+        var alice = try await contact("+49111")
+        XCTAssertTrue(jsonBool(alice["isBlocked"]))
+        _ = try await cli.call("unblock", ["recipient": ["+49111"]])
+        alice = try await contact("+49111")
+        XCTAssertFalse(jsonBool(alice["isBlocked"]))
+    }
 }
 
 final class AttachmentPolicyTests: XCTestCase {
@@ -1063,6 +1087,30 @@ final class QtRecordParityTests: XCTestCase {
         let viewed = jsonObject(compacted.first { jsonInt64($0["ts"]) == 500 && jsonString($0["t"]) == "m" }!["d"])
         XCTAssertNil(viewed["at"])
         XCTAssertEqual(jsonBool(viewed["vv"]), true)
+    }
+
+    /// The Rust store (history-store) must accept every Qt record shape the Swift app now writes.
+    func testRustStoreAcceptsQtRecords() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("history.corvus").path
+        var s = ChatState()
+        s.account = "+49me"
+        s.loadHistory(qtRecords())
+        let records = s.allRecords()
+        let store = HistoryStore()
+        try store.create(path: path, passphrase: "pw")
+        for r in records { try store.append(r) }
+        try store.rewrite(records)
+        store.close()
+        var r = ChatState()
+        r.account = "+49me"
+        r.loadHistory(try HistoryStore().open(path: path, passphrase: "pw"))
+        XCTAssertEqual(r.convs["g:G1"]!.msgs, s.convs["g:G1"]!.msgs)
+        XCTAssertEqual(r.convs["g:G1"]!.pins, s.convs["g:G1"]!.pins)
+        XCTAssertEqual(r.declined, s.declined)
+        XCTAssertTrue(r.convs["+49eve"]!.blocked)
     }
 
     func testDeletionClearsQtFields() {

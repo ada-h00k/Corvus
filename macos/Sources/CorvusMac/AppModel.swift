@@ -174,6 +174,9 @@ final class AppModel {
 
     // groups
     var groupSheet: GroupSheet?
+    /// Contacts corvus-cli marks as hidden: the senders of message requests (key -> name).
+    var hiddenContacts: [String: String] = [:]
+    var messageRequestsShown = false
     var chatSheet: ChatSheet?
     var groupInvitations: [GroupInfo] = []  // groups we are invited to (not yet a member)
 
@@ -425,6 +428,8 @@ final class AppModel {
         Task {
             do {
                 let res = try await cli.call("listContacts")
+                var hidden: [String: String] = [:]
+                defer { hiddenContacts = hidden }
                 for cv in jsonArray(res) {
                     let c = jsonObject(cv)
                     let number = jsonString(c["number"]), uuid = jsonString(c["uuid"])
@@ -441,10 +446,20 @@ final class AppModel {
                     // we have chatted with. Only show a chat once there is one: local history, a new message,
                     // or an archived chat on the phone.
                     let sig = jsonBool(c["isArchived"])
-                    if jsonBool(c["isHidden"]) { continue }
+                    // Hidden contacts are the message requests (like the official client): offered in
+                    // the "Message requests" dialog until accepted, declined or blocked.
+                    if jsonBool(c["isHidden"]) {
+                        hidden[key] = title.isEmpty ? key : title
+                        continue
+                    }
                     if chats.convs[key] == nil && !sig { continue }
 
                     chats.ensure(key, title: key)
+                    let blocked = jsonBool(c["isBlocked"])
+                    if blocked != chats.convs[key]!.blocked { // e.g. blocked on the phone: follow corvus-cli
+                        chats.convs[key]!.blocked = blocked
+                        persist(Records.blocked(key, blocked))
+                    }
                     let expiration = jsonInt(c["messageExpirationTime"])
                     if chats.convs[key]!.expirationSeconds != expiration {
                         chats.convs[key]!.expirationSeconds = expiration
@@ -782,6 +797,76 @@ final class AppModel {
                 showFlash("Could not change disappearing-message timer: \(error.localizedDescription)")
             }
         }
+    }
+
+    // MARK: - Blocking, message requests
+
+    /// Blocks or unblocks a contact on the backend (synced to the phone); the chat follows on success.
+    func setBlocked(_ key: String, _ blocked: Bool) {
+        guard !chats.isNoteToSelf(key), let c = chats.convs[key], !c.isGroup, c.blocked != blocked else { return }
+        let recipient = chats.resolveKey(key)
+        Task {
+            do {
+                _ = try await cli.call(blocked ? "block" : "unblock", ["recipient": [recipient]])
+                guard chats.convs[key] != nil, chats.convs[key]!.blocked != blocked else { return }
+                chats.convs[key]!.blocked = blocked
+                persist(Records.blocked(key, blocked))
+                if blocked && typingKey == key { stopTyping() }
+                listChanged()
+            } catch {
+                await Dialogs.warn(blocked ? "Block contact" : "Unblock contact",
+                                   "Could not \(blocked ? "block" : "unblock") the contact: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func blockContact(_ key: String) async {
+        guard let c = chats.convs[key], !c.isGroup, !c.blocked, !chats.isNoteToSelf(key) else { return }
+        guard await Dialogs.confirm("Block contact",
+                                    "Block \(c.title)? You will no longer receive messages or calls from this contact.",
+                                    ok: "Block", destructive: true) else { return }
+        setBlocked(key, true)
+    }
+
+    /// Open message requests: hidden contacts that wrote to us, not yet declined or blocked.
+    var messageRequests: [(key: String, title: String)] {
+        hiddenContacts.compactMap { key, name in
+            guard !chats.declined.contains(key), let c = chats.convs[key], !c.blocked else { return nil }
+            return (key, c.title.isEmpty || c.title == key ? name : c.title)
+        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    /// Accept = clear the hidden state (corvus-cli "removeContact" without options): the messages and
+    /// the session stay, the request's parked attachments are fetched now.
+    func acceptRequest(_ key: String) async throws {
+        _ = try await cli.call("removeContact", ["recipient": key])
+        hiddenContacts.removeValue(forKey: key)
+        if chats.declined.remove(key) != nil { _ = rewriteHistory("update history") } // drop the stored "declined" record
+        if let c = chats.convs[key] {
+            for m in c.msgs where !m.attachments.isEmpty { fetchThumbnails(key, ts: m.ts, author: chats.effectiveAuthor(c, m)) }
+            showArchived = false
+            openConversation(key)
+        }
+        listChanged()
+    }
+
+    /// Decline is local only: the contact stays hidden on the backend, Corvus stops offering it.
+    func declineRequest(_ key: String) {
+        chats.declined.insert(key)
+        persist(Records.requestDeclined(key))
+        listChanged()
+    }
+
+    func blockRequest(_ key: String) async throws {
+        _ = try await cli.call("block", ["recipient": [key]])
+        hiddenContacts.removeValue(forKey: key)
+        chats.declined.insert(key)
+        persist(Records.requestDeclined(key))
+        if chats.convs[key] != nil {
+            chats.convs[key]!.blocked = true
+            persist(Records.blocked(key, true))
+        }
+        listChanged()
     }
 
     func deleteConversation(_ key: String) async {
@@ -1219,6 +1304,12 @@ final class AppModel {
         let srcKey = chats.resolveKey(pe.src)
         let key = group ? "g:" + pe.groupId : (pe.outgoing ? chats.resolveKey(pe.destination) : srcKey)
         if key.isEmpty { return }
+        if !pe.outgoing {
+            // Nothing from a blocked contact; in a group a blocked member's messages, receipts and
+            // typing are dropped too (their block state lives in their direct chat), as in the Qt app (L4).
+            if !group, chats.convs[key]?.blocked == true { return }
+            if let sender = chats.convs[srcKey], !sender.isGroup, sender.blocked { return }
+        }
 
         // corvus-cli saw an identity key it could not verify (L6): a warning until the
         // contact is checked (listIdentities / trust) or the flash times out.
@@ -1445,7 +1536,7 @@ final class AppModel {
     }
 
     private func sendTyping(_ key: String, stop: Bool) {
-        guard connected, let c = chats.convs[key] else { return }
+        guard connected, let c = chats.convs[key], stop || !c.blocked else { return }
         var p: JSON = [:]
         addRecipient(&p, c)
         if stop { p["stop"] = true }
@@ -1493,6 +1584,10 @@ final class AppModel {
         guard let key = current, let c = chats.convs[key], !(text.isEmpty && pendingFiles.isEmpty) else { return }
         guard connected else {
             showFlash("Not connected to \(backendName).", seconds: 5)
+            return
+        }
+        if c.blocked {
+            showFlash("You blocked \(c.title). Unblock the contact to send messages.", seconds: 6)
             return
         }
         // A preview for the link in this text is still being made: send once it is there (or failed).
@@ -2242,7 +2337,7 @@ final class AppModel {
                     // accepted): ask it to download it. A sticker without a pointer here (sent
                     // from another device) is served by an installed pack. Otherwise the
                     // backend may still be downloading it: retry a few times.
-                    if attempt == 0, !att.id.isEmpty, let d = try? await downloadParked(att.id) {
+                    if attempt == 0, !att.id.isEmpty, let d = try? await downloadParked(att.id, key: key) {
                         data = d
                     } else if att.isSticker && att.isValidSticker, let d = try? await fetchSticker(att.stickerPackId, att.stickerId) {
                         data = d
@@ -2285,7 +2380,7 @@ final class AppModel {
             return Data(base64Encoded: jsonString(jsonObject(res)["data"])) ?? Data()
         } catch {
             // The backend may have parked the file (F4): ask it to download it first.
-            if let d = try? await downloadParked(att.id) { return d }
+            if let d = try? await downloadParked(att.id, key: key) { return d }
             // A sticker without a pointer here (sent from another device, or swept): an
             // installed pack serves it instead.
             if att.isSticker && att.isValidSticker { return try await fetchSticker(att.stickerPackId, att.stickerId) }
@@ -2295,9 +2390,10 @@ final class AppModel {
 
     /// The backend parks the attachments (and sticker images) of senders it does not count as
     /// accepted (F4), and its contact sets can miss long-standing chat partners: nothing else
-    /// would ever fetch those pointers. This app shows no message requests (hidden contacts
-    /// are skipped), so every chat it fetches for is an established one.
-    private func downloadParked(_ id: String) async throws -> Data {
+    /// would ever fetch those pointers. An open message request is left alone: accepting it
+    /// fetches its attachments (as in the Qt app).
+    private func downloadParked(_ id: String, key: String) async throws -> Data {
+        if id.isEmpty || hiddenContacts[key] != nil { throw RpcError("The attachment is no longer available.") }
         let res = try await cli.call("downloadAttachment", ["id": id])
         guard let d = Data(base64Encoded: jsonString(jsonObject(res)["data"])), !d.isEmpty else {
             throw RpcError("The attachment is no longer available.")
