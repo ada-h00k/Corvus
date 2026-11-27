@@ -1075,8 +1075,7 @@ MainWindow::MainWindow()
     });
     connect(m_view, &ChatView::attachmentActivated, this, &MainWindow::openAttachment);
     connect(m_view, &ChatView::animatedAttachmentRequested, this, &MainWindow::loadAnimatedAttachment);
-    connect(m_view, &ChatView::videoPlaybackError, this, [this](const QString &error) {
-    });
+
     connect(m_view, &ChatView::linkClicked, this, [this](const QString &url) {
         const QUrl u(url);
         if (u.scheme() == QLatin1String("http") || u.scheme() == QLatin1String("https")) QDesktopServices::openUrl(u);
@@ -7435,10 +7434,6 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
     }
 
     if (att.isVideo()) {
-        if (m_view->isVideoActive(msgIdx, attIdx)) {
-            m_view->toggleVideoPlayback();
-            return;
-        }
         if (m_view->isVideoLoading(msgIdx, attIdx)) return;
         const Message message = c.msgs[msgIdx];
         const QString author = effectiveAuthor(c, message);
