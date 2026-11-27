@@ -1,6 +1,7 @@
 #include "SignalCli.h"
 
 #include <QCoreApplication>
+#include <algorithm>
 #include <QDir>
 #include <QDebug>
 #include <QElapsedTimer>
@@ -264,6 +265,11 @@ void SignalCli::start(const QString &account)
     p->setProcessEnvironment(backendEnvironment());
     m_proc = p;
     m_buf.clear();
+    m_searchFrom = 0;
+    m_drainQueued = false;
+    m_backlog.clear();
+    m_backlogQueued = false;
+    ++m_gen;
     m_lastErrLine.clear();
 
     connect(p, &QProcess::readyReadStandardOutput, this, &SignalCli::onStdout);
@@ -303,6 +309,14 @@ void SignalCli::stop()
     if (!m_proc) return;
     QProcess *p = m_proc;
     m_proc = nullptr;
+    m_buf.clear();
+    m_searchFrom = 0;
+    m_drainQueued = false;
+    const bool hadBacklog = !m_backlog.isEmpty();
+    m_backlog.clear();
+    m_backlogQueued = false;
+    ++m_gen;
+    if (hadBacklog) emit backlogChanged(0);
     p->disconnect(this);
     p->closeWriteChannel();
     p->terminate();
@@ -335,14 +349,109 @@ void SignalCli::onStdout()
 {
     if (!m_proc) return;
     m_buf += m_proc->readAllStandardOutput();
-    int nl;
-    while ((nl = m_buf.indexOf('\n')) >= 0) {
-        const QByteArray line = m_buf.left(nl).trimmed();
-        m_buf.remove(0, nl + 1);
-        if (line.isEmpty()) continue;
+    if (!m_drainQueued && !m_draining) drain();
+}
 
-        handleLine(line);
+void SignalCli::drain()
+{
+    // Budget per slice. Everything a line triggers (parsing, history, list, notifications)
+    // runs on the GUI thread, so the loop must hand control back regularly.
+    constexpr qint64 kSliceMs = 12;
+    if (m_draining) return; // a nested event loop (a dialog opened by a callback): the outer loop sees new data
+    m_draining = true;
+    struct Reset {
+        bool &flag;
+        ~Reset() { flag = false; }
+    } reset{m_draining};
+    m_drainQueued = false;
+    const quint64 gen = m_gen;
+    QElapsedTimer slice;
+    slice.start();
+
+    qsizetype pos = 0;
+    while (true) {
+        // No '\n' exists before m_searchFrom: a long line that arrives in many chunks
+        // (a base64 attachment) is not scanned from its start again for every chunk.
+        const qsizetype nl = m_buf.indexOf('\n', std::max(pos, m_searchFrom));
+        if (nl < 0) break;
+        const QByteArray line = m_buf.mid(pos, nl - pos).trimmed();
+        pos = nl + 1;
+        if (!line.isEmpty()) {
+            if (isReceiveLine(line)) {
+                m_backlog.append(line);
+            } else {
+                handleLine(line);
+                // A callback may have stopped or restarted the process; the buffer is new then.
+                if (gen != m_gen) return;
+            }
+        }
+        if (slice.elapsed() >= kSliceMs && m_buf.indexOf('\n', pos) >= 0) {
+            m_buf.remove(0, pos); // one removal per slice instead of one per line
+            m_searchFrom = 0;
+            scheduleBacklog();
+            m_drainQueued = true;
+            QTimer::singleShot(0, this, [this, gen] {
+                if (gen == m_gen) drain();
+            });
+            return;
+        }
     }
+    m_buf.remove(0, pos);
+    m_searchFrom = m_buf.size(); // the rest is one incomplete line
+    scheduleBacklog();
+}
+
+bool SignalCli::isReceiveLine(const QByteArray &line)
+{
+    // {"jsonrpc":"2.0","method":"receive","params":{...}}: recognised from the start of the line
+    // without parsing it (a parse is the expensive part). receiveTyping does not match.
+    const QByteArray head = line.left(200);
+    return head.contains("\"method\"") && head.contains("\"receive\"");
+}
+
+void SignalCli::scheduleBacklog()
+{
+    if (m_backlog.isEmpty()) return;
+    emit backlogChanged(int(m_backlog.size()));
+    if (m_backlogQueued || m_backlogRunning) return;
+    m_backlogQueued = true;
+    const quint64 gen = m_gen;
+    QTimer::singleShot(0, this, [this, gen] {
+        if (gen == m_gen) processBacklog();
+    });
+}
+
+void SignalCli::processBacklog()
+{
+    // The share of the GUI thread the backlog may take: a slice of work, then a pause in which
+    // painting, typing, opening chats and the answers handled in drain() come first.
+    constexpr qint64 kBacklogSliceMs = 8;
+    constexpr int kBacklogPauseMs = 8;
+    m_backlogQueued = false;
+    if (m_backlogRunning) return;
+    m_backlogRunning = true;
+    struct Reset {
+        bool &flag;
+        ~Reset() { flag = false; }
+    } reset{m_backlogRunning};
+    const quint64 gen = m_gen;
+    QElapsedTimer slice;
+    slice.start();
+
+    qsizetype done = 0;
+    while (done < m_backlog.size()) {
+        const QByteArray line = m_backlog.at(done++);
+        handleLine(line);
+        if (gen != m_gen) return; // stop()/start() in a callback cleared the queue
+        if (slice.elapsed() >= kBacklogSliceMs) break;
+    }
+    m_backlog.remove(0, done);
+    emit backlogChanged(int(m_backlog.size()));
+    if (m_backlog.isEmpty() || m_backlogQueued) return;
+    m_backlogQueued = true;
+    QTimer::singleShot(kBacklogPauseMs, this, [this, gen] {
+        if (gen == m_gen) processBacklog();
+    });
 }
 
 QJsonObject SignalCli::envelopeFromNotification(const QJsonObject &notification)

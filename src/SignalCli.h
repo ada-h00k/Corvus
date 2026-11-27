@@ -84,6 +84,8 @@ public:
     void start(const QString &account);
     void stop();
     bool isRunning() const { return m_proc != nullptr; }
+    // Incoming messages that have arrived but are not processed yet (the backlog after a start).
+    int pendingBacklog() const { return int(m_backlog.size()); }
     void call(const QString &method, const QJsonObject &params, Callback cb);
 
 signals:
@@ -93,10 +95,23 @@ signals:
     // corvus-cli finished downloading an attachment in its background worker (F4): the id
     // is the name the file is stored under (getAttachment / deleteAttachment).
     void attachmentDownloaded(const QString &id);
+    // The number of queued incoming messages changed (0: the backlog is through).
+    void backlogChanged(int pending);
     void logLine(const QString &line);
 
 private:
     void onStdout();
+    // Handles the buffered lines in slices of a few milliseconds and returns to the event
+    // loop in between, so a large backlog (hundreds of messages, big base64 attachment
+    // answers) does not freeze the window.
+    void drain();
+    // Incoming `receive` notifications are not handled in drain() but queued and worked off in
+    // the background with a small time budget. Answers to calls (contacts, groups, attachments,
+    // send results) and typing events are handled at once, so they no longer wait behind
+    // hundreds of old messages that sit in front of them on the same pipe.
+    static bool isReceiveLine(const QByteArray &line);
+    void scheduleBacklog();
+    void processBacklog();
     void handleLine(const QByteArray &line);
     void failPending(const QString &reason);
 
@@ -105,6 +120,13 @@ private:
     QString m_prevSecret;
     QProcess *m_proc = nullptr;
     QByteArray m_buf;
+    qsizetype m_searchFrom = 0;   // m_buf holds no '\n' before this offset (do not rescan a long partial line)
+    bool m_drainQueued = false;   // a continuation of drain() is already scheduled
+    QList<QByteArray> m_backlog;  // queued `receive` lines, oldest first
+    bool m_backlogQueued = false;
+    bool m_backlogRunning = false;
+    bool m_draining = false;      // drain() is running (a callback may spin a nested event loop)
+    quint64 m_gen = 0;            // changes on start()/stop(): drops stale continuations
     QString m_lastErrLine;
     int m_nextId = 1;
     QHash<int, Callback> m_pending;

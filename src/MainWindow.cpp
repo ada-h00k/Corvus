@@ -99,8 +99,11 @@
 #include <QUuid>
 #include <QVBoxLayout>
 #include <QVersionNumber>
+#include <QPointer>
+#include <QThreadPool>
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 static const QString kFolderKey = QStringLiteral("::archived");
 static const QString kBackKey = QStringLiteral("::back");
@@ -115,6 +118,9 @@ static bool isSpecialKey(const QString &key)
            || key.startsWith(kContactPrefix);
 }
 static const qint64 kMaxThumbSource = 30LL * 1024 * 1024;
+static constexpr int kCatchUpFirstMs = 8000; // wait for the first envelope of the backlog this long
+static constexpr int kCatchUpInlineAlerts = 3; // notifications shown one by one before the rest is summarised
+static constexpr int kCatchUpIdleMs = 2500;  // no envelope for this long: the backlog is through
 static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload limit
 static constexpr int kReadSyncBatchSize = 500; // corvus-cli rejects larger sync messages
 static constexpr int kMaxPendingReadSyncEntries = 5000;
@@ -1194,6 +1200,19 @@ MainWindow::MainWindow()
     // signal-cli
     connect(&m_cli, &SignalCli::envelopeReceived, this, &MainWindow::onEnvelope);
     connect(&m_cli, &SignalCli::attachmentDownloaded, this, &MainWindow::onAttachmentDownloaded);
+    m_catchUpTimer.setSingleShot(true); // started with kCatchUpFirstMs / kCatchUpIdleMs, see beginCatchUp()
+    connect(&m_catchUpTimer, &QTimer::timeout, this, [this] {
+        // Messages are still queued (they are worked off in the background): not through yet.
+        if (m_cli.pendingBacklog() > 0) m_catchUpTimer.start(kCatchUpIdleMs);
+        else endCatchUp();
+    });
+    connect(&m_cli, &SignalCli::backlogChanged, this, [this](int pending) {
+        setWindowTitle(pending > 0 ? tr("Corvus – receiving messages (%1)").arg(pending) : QStringLiteral("Corvus"));
+    });
+    m_refreshListTimer.setSingleShot(true);
+    connect(&m_refreshListTimer, &QTimer::timeout, this, &MainWindow::rebuildList);
+    m_downloadedScanTimer.setSingleShot(true);
+    connect(&m_downloadedScanTimer, &QTimer::timeout, this, &MainWindow::scanDownloadedAttachments);
     connect(&m_cli, &SignalCli::stopped, this, [this](const QString &reason) {
         m_localTypingTimer.stop();
         m_localTypingKey.clear();
@@ -1800,6 +1819,7 @@ void MainWindow::connectAccount()
             m_importActive = false;
             m_importSeen.clear();
             closeImportScreen();
+            beginCatchUp();
             m_cli.start(m_account);
             setConnected(true);
             loadContactsAndGroups();
@@ -1905,6 +1925,11 @@ bool MainWindow::resetForFreshStart()
     m_identityCheckedMs.clear();
     m_invitations.clear();
     m_pendingSends.clear();
+    ++m_thumbGen;
+    m_thumbQueue.clear();
+    m_thumbInFlight = 0;
+    m_thumbPending.clear();
+    m_downloadedIds.clear();
     m_alias.clear();
     m_contactNames.clear();
     m_contacts.clear();
@@ -3835,6 +3860,31 @@ void MainWindow::updateConversationRow(const QString &key)
 
 void MainWindow::refreshList()
 {
+    // During the catch-up hundreds of messages arrive within seconds, and every one of them
+    // used to rebuild the whole chat list (sort, clear, one item and icon per chat). Rebuild at
+    // most a few times per second instead; the end state is the same, endCatchUp() flushes it.
+    if (m_catchingUp) {
+        if (!m_refreshListTimer.isActive()) m_refreshListTimer.start(250);
+        return;
+    }
+    m_refreshListTimer.stop();
+    rebuildList();
+}
+
+void MainWindow::scheduleConversationRefresh(const QString &key)
+{
+    // Every finished thumbnail of the open chat used to re-render the whole chat view.
+    m_convRefreshKey = key;
+    if (m_convRefreshQueued) return;
+    m_convRefreshQueued = true;
+    QTimer::singleShot(150, this, [this] {
+        m_convRefreshQueued = false;
+        if (!m_convRefreshKey.isEmpty() && m_convRefreshKey == m_current) showConversation(true);
+    });
+}
+
+void MainWindow::rebuildList()
+{
     // Note to Self: exists as soon as the account is known and is always visible,
     // pinned at the top of the list (like the official Signal Desktop client).
     if (!m_account.isEmpty()) {
@@ -4824,7 +4874,7 @@ void MainWindow::fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const 
     m_thumbPending.insert(token);
     QJsonObject params{{QStringLiteral("id"), lp.imageId}};
     addRecipient(params, conversationIt.value());
-    m_cli.call(QStringLiteral("getAttachment"), params,
+    enqueueThumbCall(key, QStringLiteral("getAttachment"), params,
                [this, key, ts, author, attempt, token, previewUrl = lp.url](const QJsonValue &res, const QString &err) {
         m_thumbPending.remove(token);
         if (!err.isEmpty()) {
@@ -4837,19 +4887,19 @@ void MainWindow::fetchLinkPreviewThumbnail(const QString &key, qint64 ts, const 
         QString encoded = object.value(QStringLiteral("data")).toString();
         if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
         if (encoded.isEmpty() && res.isString()) encoded = res.toString();
-        const QByteArray data = QByteArray::fromBase64(encoded.toLatin1());
-        const QImage image = AttachmentUtil::imageFromData(data);
-        if (image.isNull()) return;
+        decodeThumbnailAsync(encoded, [this, key, ts, author, previewUrl](const DecodedThumb &d) {
+        if (!d.ok) return;
         auto it = m_convs.find(key);
         if (it == m_convs.end()) return;
         const int i = findMessage(it.value(), ts, QStringList{author});
         if (i < 0 || it.value().msgs[i].linkPreview.url != previewUrl) return;
         Message &m = it.value().msgs[i];
         if (key != m_current) m_view->invalidateConversation(key);
-        m.linkPreview.imageThumb = AttachmentUtil::makeThumbnail(image);
-        if (m.linkPreview.imageThumb.isEmpty()) m.linkPreview.imageThumb = data;
+        m.linkPreview.imageThumb = d.thumb;
+        if (m.linkPreview.imageThumb.isEmpty()) m.linkPreview.imageThumb = d.raw;
         persist(Records::linkPreviewUpdate(key, m));
-        if (key == m_current) showConversation(true);
+        if (key == m_current) scheduleConversationRefresh(key);
+        });
     });
 }
 
@@ -4891,7 +4941,7 @@ void MainWindow::fetchContactAvatar(const QString &key, qint64 ts, const QString
         Message &m = it.value().msgs[i];
         if (key != m_current) m_view->invalidateConversation(key);
         m.contactAvatar = QString::fromLatin1(AttachmentUtil::makeThumbnail(image).toBase64());
-        if (key == m_current) showConversation(true);
+        if (key == m_current) scheduleConversationRefresh(key);
     });
 }
 
@@ -5022,6 +5072,13 @@ void MainWindow::newConversation()
 
 void MainWindow::onEnvelope(const QJsonObject &env)
 {
+    if (m_catchingUp) {
+        // Still receiving the backlog: stay in catch-up while envelopes keep coming, but never
+        // longer than a minute, so a busy chat cannot hold back its notifications forever.
+        if (QDateTime::currentMSecsSinceEpoch() - m_connectedAtMs > 60 * 1000 && m_cli.pendingBacklog() == 0)
+            endCatchUp();
+        else m_catchUpTimer.start(kCatchUpIdleMs);
+    }
     ParsedEnvelope pe = parseEnvelope(env);
     if (pe.kind == ParsedEnvelope::None) return;
 
@@ -6940,6 +6997,65 @@ void MainWindow::showPinBannerMenu(const QPoint &globalPos)
 
 // ----------------------------------------------------------- Attachments
 
+void MainWindow::enqueueThumbCall(const QString &key, const QString &method, const QJsonObject &params,
+                                  SignalCli::Callback cb)
+{
+    ThumbJob job{key, method, params, std::move(cb)};
+    if (key == m_current) m_thumbQueue.prepend(std::move(job)); // what the person looks at comes first
+    else m_thumbQueue.append(std::move(job));
+    pumpThumbQueue();
+}
+
+void MainWindow::pumpThumbQueue()
+{
+    // Each answer is one big base64 line on the backend's single stdout pipe. A few at a time keep
+    // the pipe busy; hundreds at once (the photos of a backlog) would delay the messages
+    // behind them and pile up their decoded images in memory.
+    constexpr int kMaxThumbParallel = 6;
+    if (!m_cli.isRunning()) return; // the jobs wait for the next connection
+    while (m_thumbInFlight < kMaxThumbParallel && !m_thumbQueue.isEmpty()) {
+        // During the catch-up only the open chat is served; the rest follows in endCatchUp().
+        int index = -1;
+        for (int i = 0; i < m_thumbQueue.size(); ++i) {
+            if (!m_catchingUp || m_thumbQueue.at(i).key == m_current) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) return;
+        ThumbJob job = m_thumbQueue.takeAt(index);
+        ++m_thumbInFlight;
+        const int gen = m_thumbGen;
+        m_cli.call(job.method, job.params,
+                   [this, gen, cb = std::move(job.cb)](const QJsonValue &res, const QString &err) {
+                       if (gen == m_thumbGen && m_thumbInFlight > 0) --m_thumbInFlight;
+                       if (cb) cb(res, err);
+                       QTimer::singleShot(0, this, &MainWindow::pumpThumbQueue);
+                   });
+    }
+}
+
+void MainWindow::decodeThumbnailAsync(const QString &encoded, std::function<void(const DecodedThumb &)> done)
+{
+    QPointer<MainWindow> self(this);
+    QThreadPool::globalInstance()->start([self, encoded, done = std::move(done)]() mutable {
+        DecodedThumb d;
+        const QByteArray data = QByteArray::fromBase64(encoded.toLatin1());
+        const QImage img = AttachmentUtil::imageFromData(data);
+        if (!img.isNull()) {
+            d.ok = true;
+            d.size = img.size();
+            d.thumb = AttachmentUtil::makeThumbnail(img);
+            if (d.thumb.isEmpty()) d.raw = data;
+        }
+        QMetaObject::invokeMethod(
+            qApp, [self, d = std::move(d), done = std::move(done)] {
+                if (self) done(d); // the window may be gone when the worker finishes at shutdown
+            },
+            Qt::QueuedConnection);
+    });
+}
+
 void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &author, int attempt)
 {
     auto it = m_convs.find(key);
@@ -6983,26 +7099,27 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
             QString encoded = object.value(QStringLiteral("data")).toString();
             if (encoded.isEmpty()) encoded = object.value(QStringLiteral("base64")).toString();
             if (encoded.isEmpty() && res.isString()) encoded = res.toString();
-            const QByteArray data = QByteArray::fromBase64(encoded.toLatin1());
-            const QImage img = AttachmentUtil::imageFromData(data);
+            // Decoding and scaling a photo takes tens of milliseconds: not on the GUI thread.
+            decodeThumbnailAsync(encoded, [this, key, ts, author, a](const DecodedThumb &d) {
             auto cit = m_convs.find(key);
-            if (img.isNull() || cit == m_convs.end()) return;
+            if (!d.ok || cit == m_convs.end()) return;
             const int i = findMessage(cit.value(), ts, QStringList{author});
             if (i < 0 || a >= cit.value().msgs[i].attachments.size()) return;
             Message &mm = cit.value().msgs[i];
             if (key != m_current) m_view->invalidateConversation(key);
             Attachment &at = mm.attachments[a];
-            at.width = img.width();
-            at.height = img.height();
+            at.width = d.size.width();
+            at.height = d.size.height();
             // Never fall back to the raw attachment here: a record storing it
             // (up to 30 MB) would exceed the history store's 16 MiB record
             // limit and make the whole history file fail to open. A missing
             // thumbnail only means no preview until the image is opened.
-            at.thumb = AttachmentUtil::makeThumbnail(img);
+            at.thumb = d.thumb;
             persist(Records::attachmentsUpdate(key, mm));
-            if (key == m_current) showConversation(true);
+            if (key == m_current) scheduleConversationRefresh(key);
+            });
         };
-        m_cli.call(method, p,
+        enqueueThumbCall(key, method, p,
                    [this, key, ts, author, a, attempt, token, method, id = att.id, packFallback, apply](const QJsonValue &res, const QString &err) {
                        m_thumbPending.remove(token);
                        if (!err.isEmpty()) {
@@ -7040,19 +7157,36 @@ void MainWindow::fetchThumbnails(const QString &key, qint64 ts, const QString &a
 void MainWindow::onAttachmentDownloaded(const QString &id)
 {
     if (id.isEmpty()) return;
+    // The backend reports every attachment it finishes (photos and videos of the backlog:
+    // hundreds in a row). Searching the whole history for each one made the catch-up crawl, so
+    // the ids are collected and the history is searched once per interval for all of them.
+    m_downloadedIds.insert(id);
+    if (!m_downloadedScanTimer.isActive()) m_downloadedScanTimer.start(500);
+}
+
+void MainWindow::scanDownloadedAttachments()
+{
+    const QSet<QString> ids = std::exchange(m_downloadedIds, QSet<QString>());
+    if (ids.isEmpty()) return;
+    struct Target {
+        QString key;
+        qint64 ts;
+        QString author;
+    };
+    QList<Target> targets;
     for (auto it = m_convs.constBegin(); it != m_convs.constEnd(); ++it) {
         const Conversation &c = it.value();
         for (const Message &m : c.msgs) {
-            bool retry = false;
+            if (m.attachments.isEmpty()) continue;
             for (const Attachment &att : m.attachments) {
-                if (att.id == id && att.isImage() && att.thumb.isEmpty()) {
-                    retry = true;
+                if (att.isImage() && att.thumb.isEmpty() && ids.contains(att.id)) {
+                    targets.append({it.key(), m.ts(), effectiveAuthor(c, m)});
                     break;
                 }
             }
-            if (retry) fetchThumbnails(it.key(), m.ts(), effectiveAuthor(c, m));
         }
     }
+    for (const Target &t : std::as_const(targets)) fetchThumbnails(t.key, t.ts, t.author);
 }
 
 // A message request's attachments were parked on the backend (F4): nothing was downloaded
@@ -7685,7 +7819,52 @@ void MainWindow::updateTray()
     m_tray->setToolTip(unread > 0 ? tr("Corvus – %n unread message(s)", nullptr, unread) : tr("Corvus"));
 }
 
+void MainWindow::beginCatchUp()
+{
+    m_catchingUp = true;
+    m_connectedAtMs = QDateTime::currentMSecsSinceEpoch();
+    m_catchUpAlerts = 0;
+    // The backend needs a moment to reach the server before the first envelope of the backlog
+    // arrives (slow networks: several seconds). After that, a short pause means it is through.
+    m_catchUpTimer.start(kCatchUpFirstMs);
+}
+
+void MainWindow::endCatchUp()
+{
+    if (!m_catchingUp) return;
+    m_catchingUp = false;
+    m_catchUpTimer.stop();
+
+    // The first few messages were announced one by one; one notification covers all the others.
+    const int alerts = std::exchange(m_catchUpAlerts, 0);
+    if (alerts > kCatchUpInlineAlerts) {
+        const int more = alerts - kCatchUpInlineAlerts;
+        if (m_notify.notifications)
+            m_notifier->notify(QString(), tr("Corvus"), tr("%n more new message(s)", nullptr, more));
+        if (m_notify.sound) m_sound->play(m_notify);
+    }
+
+    m_refreshListTimer.stop();
+    refreshList();
+    pumpThumbQueue(); // the thumbnails of the other chats may start now
+}
+
 void MainWindow::alertIncoming(const QString &key, const Message &m)
+{
+    if (!m_catchingUp) {
+        alertIncomingNow(key, m);
+        return;
+    }
+    // Same early exits as alertIncomingNow: only what would really have been announced counts.
+    const auto it = m_convs.constFind(key);
+    if (it == m_convs.constEnd() || it->muted) return;
+    if (key == m_current && userIsLooking()) return;
+    // A few messages right after the start are normal live messages: announce them as usual.
+    // Everything beyond that is backlog and is only counted.
+    if (m_catchUpAlerts++ < kCatchUpInlineAlerts) alertIncomingNow(key, m);
+}
+
+void MainWindow::alertIncomingNow(const QString &key, const Message &m)
 {
     const auto it = m_convs.constFind(key);
     if (it == m_convs.constEnd() || it->muted) return;
@@ -7731,6 +7910,12 @@ void MainWindow::alertIncoming(const QString &key, const Message &m)
 
 void MainWindow::activateConversation(const QString &key)
 {
+    if (key.isEmpty()) { // the summary notification of a catch-up: just bring the window forward
+        showNormal();
+        raise();
+        activateWindow();
+        return;
+    }
     if (!m_convs.contains(key)) return;
     showNormal();
     raise();

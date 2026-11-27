@@ -246,6 +246,12 @@ private:
     void applyTheme(); // icons and chat colours follow a light / dark theme switch while running
     void refreshIcons(); // window and tray icon in the current variant (Settings → Appearance)
     void alertIncoming(const QString &key, const Message &m);
+    void alertIncomingNow(const QString &key, const Message &m); // the notification and sound itself
+    // Catch-up: after a (re)connect corvus-cli delivers everything that arrived while Corvus was
+    // not running. That backlog is handled quietly and cheaply (one summary notification, a
+    // coalesced chat list, thumbnails of the open chat first) until the stream has been idle.
+    void beginCatchUp();
+    void endCatchUp();
     void installInputWatcher();
     qint64 m_lastInputMs = 0; // last keyboard/mouse input inside this window
     bool userIsLooking() const; // window really in front of the user (not just "active" while covered)
@@ -254,6 +260,8 @@ private:
 
     // --- list / view
     void refreshList();
+    void rebuildList(); // the actual (expensive) rebuild behind refreshList()
+    void scheduleConversationRefresh(const QString &key); // showConversation(true), coalesced
     void updateConversationRow(const QString &key);
     // Avatars in the chat list (signal-cli getAvatar, cached in memory only).
     QIcon avatarIcon(const Conversation &c) const;
@@ -325,6 +333,20 @@ private:
     void addRecipient(QJsonObject &params, const Conversation &c) const;
     void fetchThumbnails(const QString &key, qint64 ts, const QString &author, int attempt = 0);
     void onAttachmentDownloaded(const QString &id);
+    void scanDownloadedAttachments();
+    // Thumbnail transfers go through a small queue: only a few getAttachment calls are in
+    // flight at once, the open chat first, the rest only after the catch-up is over.
+    void enqueueThumbCall(const QString &key, const QString &method, const QJsonObject &params,
+                          SignalCli::Callback cb);
+    void pumpThumbQueue();
+    struct DecodedThumb {
+        bool ok = false;
+        QSize size;
+        QByteArray thumb;
+        QByteArray raw; // only when no thumbnail could be made
+    };
+    // base64 decoding, image decoding and scaling happen on a worker thread; `done` runs on the GUI thread.
+    void decodeThumbnailAsync(const QString &encoded, std::function<void(const DecodedThumb &)> done);
     void fetchRequestAttachments(const QString &key);
     // Asks the backend to download an attachment it parked (F4) — only for chats that are not
     // an open message request; those wait for the explicit accept (fetchRequestAttachments).
@@ -449,6 +471,12 @@ private:
     bool m_restoreMaximized = false;
     bool m_restoreFullScreen = false;
     qint64 m_lastSoundMs = 0;
+    // catch-up state (see beginCatchUp)
+    bool m_catchingUp = false;
+    qint64 m_connectedAtMs = 0;
+    QTimer m_catchUpTimer;       // single shot: fires when no envelope arrived for a while
+    QTimer m_refreshListTimer;   // single shot: coalesced refreshList() during the catch-up
+    int m_catchUpAlerts = 0;     // messages that would have alerted during the catch-up
     int m_trayUnread = -1;
     QString m_audioKey;
     qint64 m_audioMessageTs = 0;
@@ -490,6 +518,19 @@ private:
     bool m_editExpandedInput = false; // the edit expanded the field itself (multi-line) and collapses it again
     QStringList m_pendingFiles;
     QSet<QString> m_thumbPending;
+    struct ThumbJob {
+        QString key;
+        QString method;
+        QJsonObject params;
+        SignalCli::Callback cb;
+    };
+    QList<ThumbJob> m_thumbQueue;
+    int m_thumbInFlight = 0;
+    int m_thumbGen = 0; // bumped when the queue is reset (account removed)
+    QSet<QString> m_downloadedIds; // attachments the backend finished; scanned once per interval
+    QTimer m_downloadedScanTimer;
+    bool m_convRefreshQueued = false;
+    QString m_convRefreshKey;
     QSet<QString> m_gifPending;
     QSet<QString> m_viewOnceOpening;
     QHash<QString, QPixmap> m_avatars;   // conversation key -> circular avatar (64 px)

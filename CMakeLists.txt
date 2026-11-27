@@ -485,6 +485,14 @@ if(CORVUS_TESTS)
         TIMEOUT 60
     )
 
+    add_executable(signalcli_drain_test tests/signalcli_drain_test.cpp)
+    target_link_libraries(signalcli_drain_test PRIVATE app_core Qt6::Test)
+    add_test(NAME signalcli_drain COMMAND signalcli_drain_test)
+    set_tests_properties(signalcli_drain PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 120
+    )
+
     add_executable(history_store_test tests/history_store_test.cpp)
     target_link_libraries(history_store_test PRIVATE app_core)
     add_test(NAME history_store COMMAND history_store_test)
