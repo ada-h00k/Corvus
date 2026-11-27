@@ -17,6 +17,7 @@
 #include <QMouseEvent>
 #include <QMediaPlayer>
 #include <QAudioOutput>
+#include <QImage>
 #include <QPainter>
 #include <QPainterPath>
 #include <QRegularExpression>
