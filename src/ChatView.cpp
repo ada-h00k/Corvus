@@ -31,8 +31,7 @@
 #include <QElapsedTimer>
 #include <QTimer>
 #include <QToolButton>
-#include <QVideoFrame>
-#include <QVideoSink>
+#include <QVideoWidget>
 #include <algorithm>
 #include <numeric>
 
@@ -872,8 +871,7 @@ void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const 
     stopVideoPlayback();
     m_videoPlayer = new QMediaPlayer(this);
     m_videoAudioOutput = new QAudioOutput(this);
-    m_videoSink = new QVideoSink(this);
-    m_videoFrame = QImage();
+    m_videoWidget = new QVideoWidget(viewport());
     m_videoToggle = new QToolButton(viewport());
     m_videoProgress = new SeekSlider(Qt::Horizontal, viewport());
     m_videoElapsed = new QLabel(QStringLiteral("00:00"), viewport());
@@ -901,17 +899,14 @@ void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const 
     }
     m_videoElapsed->setObjectName(QStringLiteral("videoElapsed"));
     m_videoRemaining->setObjectName(QStringLiteral("videoRemaining"));
+    // Keep frames in the multimedia backend: converting every frame to QImage
+    // forced a GPU-to-CPU copy before painting. The native surface is only shown
+    // while the whole attachment is inside the viewport (see updateVideoGeometry),
+    // so it cannot spill over the composer or the scroll area's edges.
+    m_videoWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
     m_videoPlayer->setAudioOutput(m_videoAudioOutput);
-    m_videoPlayer->setVideoOutput(m_videoSink);
-    // Frames are painted by the viewport itself (see paintEvent) instead of a
-    // QVideoWidget child: a native video surface is not clipped to the
-    // viewport and would poke out over the composer when scrolling.
-    connect(m_videoSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
-        if (!m_videoSink) return;
-        m_videoFrame = frame.isValid() ? frame.toImage() : QImage();
-        const QRect rect = attachmentRectForVideo();
-        if (rect.isValid()) viewport()->update(rect);
-    });
+    m_videoPlayer->setVideoOutput(m_videoWidget);
     connect(m_videoToggle, &QToolButton::clicked, this, &ChatView::toggleVideoPlayback);
     connect(m_videoProgress, &QSlider::sliderMoved, this, [this](int value) {
         if (m_videoPlayer && m_videoPlayer->duration() > 0)
@@ -969,7 +964,7 @@ void ChatView::stopVideoPlayback()
 {
     if (m_videoPlayer) m_videoPlayer->stop();
     if (m_videoPlayer) {
-        m_videoPlayer->setVideoOutput(static_cast<QVideoSink *>(nullptr));
+        m_videoPlayer->setVideoOutput(static_cast<QVideoWidget *>(nullptr));
         m_videoPlayer->setAudioOutput(static_cast<QAudioOutput *>(nullptr));
     }
     delete m_videoToggle;
@@ -978,13 +973,12 @@ void ChatView::stopVideoPlayback()
     delete m_videoRemaining;
     delete m_videoPlayer;
     delete m_videoAudioOutput;
-    delete m_videoSink;
+    delete m_videoWidget;
     m_videoToggle = nullptr;
     m_videoProgress = nullptr;
     m_videoElapsed = nullptr;
     m_videoRemaining = nullptr;
-    m_videoSink = nullptr;
-    m_videoFrame = QImage();
+    m_videoWidget = nullptr;
     m_videoPlayer = nullptr;
     m_videoAudioOutput = nullptr;
     m_videoMessageTs = 0;
@@ -1007,7 +1001,7 @@ QRect ChatView::attachmentRectForVideo() const
 
 void ChatView::updateVideoGeometry()
 {
-    if (!m_videoSink || !m_videoToggle || !m_videoProgress || !m_videoElapsed || !m_videoRemaining) return;
+    if (!m_videoWidget || !m_videoToggle || !m_videoProgress || !m_videoElapsed || !m_videoRemaining) return;
     int index = -1;
     for (int i = 0; i < m_msgs.size(); ++i) {
         if (m_msgs[i].ts() == m_videoMessageTs) { index = i; break; }
@@ -1019,12 +1013,19 @@ void ChatView::updateVideoGeometry()
     const QRect rect = attachmentRectForVideo();
     viewport()->update();
 
-    // The video itself is painted in paintEvent and clipped by the viewport.
-    // The small overlay controls are shown only while fully inside it.
+    // QVideoWidget may use a native video surface that is not clipped like an
+    // ordinary child widget. Only expose it when the complete video rectangle
+    // is inside the viewport; otherwise hide it before it can overlap the
+    // composer or the area outside the scroll view.
     const QRect viewRect = viewport()->rect();
-    const auto place = [&viewRect](QWidget *w, const QRect &geometry) {
+    const bool fullyVisible = viewRect.contains(rect);
+    m_videoWidget->setGeometry(rect);
+    m_videoWidget->setVisible(fullyVisible);
+    if (fullyVisible) m_videoWidget->lower();
+
+    const auto place = [&viewRect, fullyVisible](QWidget *w, const QRect &geometry) {
         w->setGeometry(geometry);
-        const bool inside = viewRect.contains(geometry);
+        const bool inside = fullyVisible && viewRect.contains(geometry);
         w->setVisible(inside);
         if (inside) w->raise();
     };
@@ -2193,24 +2194,6 @@ void ChatView::paintItem(QPainter &p, int i)
     } else for (int a = 0; a < m.attachments.size() && a < it.attRects.size(); ++a) {
         const QRect rc = it.attRects[a];
         const Attachment &att = m.attachments[a];
-        if (att.isVideo() && m_videoSink && m_videoMessageTs == m.ts() && m_videoAttachment == a) {
-            QPainterPath vp;
-            const qreal vr = qMin<qreal>(qMin(m_ap.radius, 14), qMin(rc.width(), rc.height()) / 2.0);
-            vp.addRoundedRect(QRectF(rc), vr, vr);
-            p.save();
-            p.setClipPath(vp);
-            p.fillRect(rc, Qt::black);
-            if (!m_videoFrame.isNull()) {
-                QSize target = m_videoFrame.size();
-                target.scale(rc.size(), Qt::KeepAspectRatio);
-                QRect dst(QPoint(0, 0), target);
-                dst.moveCenter(rc.center());
-                p.setRenderHint(QPainter::SmoothPixmapTransform);
-                p.drawImage(dst, m_videoFrame);
-            }
-            p.restore();
-            continue;
-        }
         if ((att.isGif() || att.isSticker()) && !it.movies[a] && !it.apngMovies[a] &&
             !it.animationRequested[a]) {
             it.animationRequested[a] = true;
