@@ -7464,7 +7464,7 @@ void MainWindow::openAttachment(int msgIdx, int attIdx)
                 return;
             }
             file.close();
-            m_view->playVideoAttachment(index, attIdx, path);
+            m_view->openVideoAttachment(index, attIdx, path);
         });
         return;
     }
