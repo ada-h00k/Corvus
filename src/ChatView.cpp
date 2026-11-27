@@ -903,6 +903,13 @@ void ChatView::setVideoLoading(int messageIndex, int attachmentIndex, bool loadi
                            .translated(0, m_items[messageIndex].y - verticalScrollBar()->value()));
 }
 
+bool ChatView::isVideoLoading(int messageIndex, int attachmentIndex) const
+{
+    return messageIndex >= 0 && messageIndex < m_msgs.size() && attachmentIndex >= 0 &&
+           attachmentIndex < m_msgs[messageIndex].attachments.size() &&
+           m_videoLoadingTs == m_msgs[messageIndex].ts() && m_videoLoadingAttachment == attachmentIndex;
+}
+
 void ChatView::openVideoAttachment(int messageIndex, int attachmentIndex, const QString &path)
 {
     if (messageIndex < 0 || messageIndex >= m_msgs.size() || attachmentIndex < 0 ||
