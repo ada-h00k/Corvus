@@ -17,6 +17,13 @@
 #include <QMouseEvent>
 #include <QMediaPlayer>
 #include <QAudioOutput>
+#include <QDialog>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QVideoWidget>
+#include <QVBoxLayout>
+#include <QUrl>
+#include <climits>
 #include <QImage>
 #include <QPainter>
 #include <QPainterPath>
@@ -25,13 +32,10 @@
 #include <QSet>
 #include <QVector>
 #include <QSlider>
-#include <QStyle>
-#include <QStyleOptionSlider>
 #include <QToolTip>
 #include <QTextDocument>
 #include <QElapsedTimer>
 #include <QTimer>
-#include <QToolButton>
 #include <QVideoWidget>
 #include <algorithm>
 #include <numeric>
@@ -185,38 +189,86 @@ QString videoTime(qint64 milliseconds)
         .arg(seconds, 2, 10, QLatin1Char('0'));
 }
 
-class SeekSlider final : public QSlider
+class ChatVideoViewer final : public QDialog
 {
 public:
-    using QSlider::QSlider;
+    ChatVideoViewer(const QString &path, const QString &title, QWidget *parent)
+        : QDialog(parent)
+    {
+        setWindowTitle(title);
+        setAttribute(Qt::WA_DeleteOnClose);
+        resize(820, 560);
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 8);
+        layout->setSpacing(6);
+        auto *video = new QVideoWidget;
+        video->setMinimumSize(320, 200);
+        layout->addWidget(video, 1);
+        auto *controls = new QHBoxLayout;
+        controls->setContentsMargins(10, 0, 10, 0);
+        auto *toggle = new QPushButton(QStringLiteral("⏸"));
+        toggle->setFixedWidth(40);
+        auto *slider = new QSlider(Qt::Horizontal);
+        auto *time = new QLabel(QStringLiteral("0:00 / 0:00"));
+        controls->addWidget(toggle);
+        controls->addWidget(slider, 1);
+        controls->addWidget(time);
+        layout->addLayout(controls);
+
+        m_player = new QMediaPlayer(this);
+        auto *audio = new QAudioOutput(this);
+        m_player->setAudioOutput(audio);
+        m_player->setVideoOutput(video);
+        connect(m_player, &QMediaPlayer::durationChanged, this, [slider](qint64 duration) {
+            slider->setRange(0, int(qMin<qint64>(duration, INT_MAX)));
+        });
+        connect(m_player, &QMediaPlayer::positionChanged, this, [this, slider, time](qint64 position) {
+            if (!slider->isSliderDown()) slider->setValue(int(qMin<qint64>(position, INT_MAX)));
+            time->setText(videoTime(position) + QStringLiteral(" / ") + videoTime(m_player->duration()));
+        });
+        connect(m_player, &QMediaPlayer::playbackStateChanged, this, [this, toggle] {
+            toggle->setText(m_player->playbackState() == QMediaPlayer::PlayingState
+                                ? QStringLiteral("⏸") : QStringLiteral("▶"));
+        });
+        connect(slider, &QSlider::sliderMoved, m_player, &QMediaPlayer::setPosition);
+        connect(toggle, &QPushButton::clicked, this, [this] { togglePlayback(); });
+        connect(m_player, &QMediaPlayer::errorOccurred, this, [time](QMediaPlayer::Error, const QString &error) {
+            time->setText(error);
+        });
+        m_player->setSource(QUrl::fromLocalFile(path));
+        m_player->play();
+    }
+
+    ~ChatVideoViewer() override
+    {
+        if (m_player) m_player->stop();
+    }
 
 protected:
-    void mousePressEvent(QMouseEvent *event) override
+    void keyPressEvent(QKeyEvent *event) override
     {
-        if (event->button() != Qt::LeftButton || width() <= 0) {
-            QSlider::mousePressEvent(event);
+        if (event->key() == Qt::Key_Space) {
+            togglePlayback();
             return;
         }
-        QStyleOptionSlider option;
-        initStyleOption(&option);
-        const QRect groove = style()->subControlRect(QStyle::CC_Slider, &option,
-                                                      QStyle::SC_SliderGroove, this);
-        const int handleLength = style()->pixelMetric(QStyle::PM_SliderLength, &option, this);
-        const int span = qMax(1, groove.width() - handleLength);
-        const int position = event->pos().x() - groove.left() - handleLength / 2;
-        setSliderDown(true);
-        setSliderPosition(QStyle::sliderValueFromPosition(minimum(), maximum(), position,
-                                                           span, option.upsideDown));
-        event->accept();
+        QDialog::keyPressEvent(event);
     }
+
+private:
+    void togglePlayback()
+    {
+        if (m_player->playbackState() == QMediaPlayer::PlayingState) {
+            m_player->pause();
+        } else {
+            if (m_player->duration() > 0 && m_player->position() >= m_player->duration())
+                m_player->setPosition(0);
+            m_player->play();
+        }
+    }
+
+    QMediaPlayer *m_player = nullptr;
 };
 
-void updateVideoTimes(QLabel *elapsed, QLabel *remaining, qint64 position, qint64 duration)
-{
-    if (!elapsed || !remaining) return;
-    elapsed->setText(videoTime(position));
-    remaining->setText(QStringLiteral("-%1").arg(videoTime(qMax<qint64>(0, duration - position))));
-}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -348,7 +400,6 @@ ChatView::ChatView(QWidget *parent) : QAbstractScrollArea(parent)
     setFocusPolicy(Qt::StrongFocus);
     m_ap = Appearance::defaults(palette());
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
-        updateVideoGeometry();
         updateToLatestButton();
         // The user scrolled while the off-screen rows are still being re-laid out: hold the
         // new position instead of the one captured when the resize started.
@@ -485,7 +536,6 @@ void ChatView::cacheCurrentConversation()
 {
     if (m_conversationKey.isEmpty()) return;
 
-    stopVideoPlayback();
     clearSelection();
     if (m_relayoutActive) {
         // Not every row has been laid out yet. Finishing that here would stall the switch, and
@@ -636,8 +686,9 @@ void ChatView::selectWordAt(int msg, int textPos)
 
 void ChatView::clearView()
 {
+    m_videoLoadingTs = 0;
+    m_videoLoadingAttachment = -1;
     cancelRelayout();
-    stopVideoPlayback();
     disposeItemResources(m_items);
     invalidateAllCachedConversations();
     m_conversationKey.clear();
@@ -711,7 +762,6 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll, const Q
                 updateScrollRange();
                 verticalScrollBar()->setValue(cached.scrollValue);
                 updateToLatestButton();
-                updateVideoGeometry();
                 viewport()->update();
                 return;
             }
@@ -737,7 +787,6 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll, const Q
     }
     if (!keepScroll) m_missed = 0; // another conversation: nothing is "new" here
     updateToLatestButton();
-    updateVideoGeometry();
 }
 
 void ChatView::appendMessage(const Message &m)
@@ -751,7 +800,6 @@ void ChatView::appendMessage(const Message &m)
     updateScrollRange();
     if (bottom || m.outgoing) verticalScrollBar()->setValue(verticalScrollBar()->maximum());
     updateToLatestButton();
-    updateVideoGeometry();
     viewport()->update();
 }
 
@@ -777,7 +825,6 @@ void ChatView::replaceLastMessage(const Message &m)
     updateScrollRange();
     verticalScrollBar()->setValue(bottom ? verticalScrollBar()->maximum() : oldScroll);
     updateToLatestButton();
-    updateVideoGeometry();
     viewport()->update();
 }
 
@@ -851,191 +898,17 @@ void ChatView::setVideoLoading(int messageIndex, int attachmentIndex, bool loadi
                            .translated(0, m_items[messageIndex].y - verticalScrollBar()->value()));
 }
 
-bool ChatView::isVideoActive(int messageIndex, int attachmentIndex) const
-{
-    return messageIndex >= 0 && messageIndex < m_msgs.size() && attachmentIndex >= 0 &&
-           attachmentIndex < m_msgs[messageIndex].attachments.size() &&
-           m_videoMessageTs == m_msgs[messageIndex].ts() && m_videoAttachment == attachmentIndex;
-}
-
-bool ChatView::isVideoLoading(int messageIndex, int attachmentIndex) const
-{
-    return messageIndex >= 0 && messageIndex < m_msgs.size() && attachmentIndex >= 0 &&
-           attachmentIndex < m_msgs[messageIndex].attachments.size() &&
-           m_videoLoadingTs == m_msgs[messageIndex].ts() && m_videoLoadingAttachment == attachmentIndex;
-}
-
 void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const QString &path)
 {
     if (messageIndex < 0 || messageIndex >= m_msgs.size() || attachmentIndex < 0 ||
         attachmentIndex >= m_msgs[messageIndex].attachments.size()) return;
-    stopVideoPlayback();
-    m_videoPlayer = new QMediaPlayer(this);
-    m_videoAudioOutput = new QAudioOutput(this);
-    m_videoWidget = new QVideoWidget(viewport());
-    m_videoToggle = new QToolButton(viewport());
-    m_videoProgress = new SeekSlider(Qt::Horizontal, viewport());
-    m_videoElapsed = new QLabel(QStringLiteral("00:00"), viewport());
-    m_videoRemaining = new QLabel(QStringLiteral("-00:00"), viewport());
-    m_videoToggle->setText(QStringLiteral("Ⅱ"));
-    m_videoToggle->setObjectName(QStringLiteral("videoPlayPause"));
-    m_videoToggle->setToolTip(tr("Pause video"));
-    m_videoToggle->setAccessibleName(tr("Pause video"));
-    m_videoToggle->setFixedSize(32, 28);
-    m_videoToggle->setStyleSheet(QStringLiteral("QToolButton { background: rgba(0,0,0,180); color: white; border: 0; }"));
-    m_videoProgress->setObjectName(QStringLiteral("videoProgress"));
-    m_videoProgress->setRange(0, 1000);
-    m_videoProgress->setToolTip(tr("Video position"));
-    m_videoProgress->setAccessibleName(tr("Video position"));
-    m_videoProgress->setFixedHeight(24);
-    m_videoProgress->setStyleSheet(QStringLiteral(
-        "QSlider { background: rgba(0,0,0,180); padding: 0 8px; }"
-        "QSlider::groove:horizontal { height: 4px; background: rgba(255,255,255,100); }"
-        "QSlider::sub-page:horizontal { background: white; }"
-        "QSlider::handle:horizontal { width: 12px; margin: -5px 0; border-radius: 6px; background: white; }"));
-    for (QLabel *timeLabel : {m_videoElapsed, m_videoRemaining}) {
-        timeLabel->setStyleSheet(QStringLiteral("QLabel { background: rgba(0,0,0,180); color: white; padding: 0 3px; }"));
-        timeLabel->setFixedSize(50, 16);
-        timeLabel->setAlignment(Qt::AlignCenter);
-    }
-    m_videoElapsed->setObjectName(QStringLiteral("videoElapsed"));
-    m_videoRemaining->setObjectName(QStringLiteral("videoRemaining"));
-    // Keep frames in the multimedia backend: converting every frame to QImage
-    // forced a GPU-to-CPU copy before painting. The native surface is only shown
-    // while the whole attachment is inside the viewport (see updateVideoGeometry),
-    // so it cannot spill over the composer or the scroll area's edges.
-    m_videoWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_videoWidget->setAspectRatioMode(Qt::KeepAspectRatio);
-    m_videoPlayer->setAudioOutput(m_videoAudioOutput);
-    m_videoPlayer->setVideoOutput(m_videoWidget);
-    connect(m_videoToggle, &QToolButton::clicked, this, &ChatView::toggleVideoPlayback);
-    connect(m_videoProgress, &QSlider::sliderMoved, this, [this](int value) {
-        if (m_videoPlayer && m_videoPlayer->duration() > 0)
-            m_videoPlayer->setPosition(qint64(value) * m_videoPlayer->duration() / 1000);
-    });
-    connect(m_videoPlayer, &QMediaPlayer::positionChanged, this, [this](qint64 position) {
-        if (!m_videoPlayer || !m_videoProgress) return;
-        const qint64 duration = m_videoPlayer->duration();
-        if (!m_videoProgress->isSliderDown() && duration > 0)
-            m_videoProgress->setValue(int(position * 1000 / duration));
-        updateVideoTimes(m_videoElapsed, m_videoRemaining, position, duration);
-    });
-    connect(m_videoPlayer, &QMediaPlayer::durationChanged, this, [this](qint64 duration) {
-        if (!m_videoPlayer || !m_videoProgress) return;
-        const qint64 position = m_videoPlayer->position();
-        if (duration > 0)
-            m_videoProgress->setValue(int(position * 1000 / duration));
-        updateVideoTimes(m_videoElapsed, m_videoRemaining, position, duration);
-    });
-    connect(m_videoPlayer, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
-        if (!m_videoToggle) return;
-        const bool playing = state == QMediaPlayer::PlayingState;
-        m_videoToggle->setText(playing ? QStringLiteral("Ⅱ") : QStringLiteral("▶"));
-        m_videoToggle->setToolTip(playing ? tr("Pause video") : tr("Play video"));
-        m_videoToggle->setAccessibleName(m_videoToggle->toolTip());
-    });
-    connect(m_videoPlayer, &QMediaPlayer::errorOccurred, this,
-            [this](QMediaPlayer::Error, const QString &error) { emit videoPlaybackError(error); });
-    m_videoMessageTs = m_msgs[messageIndex].ts();
-    m_videoAttachment = attachmentIndex;
-    m_videoLoadingTs = 0;
-    m_videoLoadingAttachment = -1;
-    m_videoToggle->show();
-    m_videoProgress->show();
-    m_videoElapsed->show();
-    m_videoRemaining->show();
-    updateVideoGeometry();
-    m_videoPlayer->setSource(QUrl::fromLocalFile(path));
-    m_videoPlayer->play();
-}
 
-void ChatView::toggleVideoPlayback()
-{
-    if (!m_videoPlayer) return;
-    if (m_videoPlayer->playbackState() == QMediaPlayer::PlayingState)
-        m_videoPlayer->pause();
-    else {
-        if (m_videoPlayer->duration() > 0 && m_videoPlayer->position() >= m_videoPlayer->duration())
-            m_videoPlayer->setPosition(0);
-        m_videoPlayer->play();
-    }
-}
-
-void ChatView::stopVideoPlayback()
-{
-    if (m_videoPlayer) m_videoPlayer->stop();
-    if (m_videoPlayer) {
-        m_videoPlayer->setVideoOutput(static_cast<QVideoWidget *>(nullptr));
-        m_videoPlayer->setAudioOutput(static_cast<QAudioOutput *>(nullptr));
-    }
-    delete m_videoToggle;
-    delete m_videoProgress;
-    delete m_videoElapsed;
-    delete m_videoRemaining;
-    delete m_videoPlayer;
-    delete m_videoAudioOutput;
-    delete m_videoWidget;
-    m_videoToggle = nullptr;
-    m_videoProgress = nullptr;
-    m_videoElapsed = nullptr;
-    m_videoRemaining = nullptr;
-    m_videoWidget = nullptr;
-    m_videoPlayer = nullptr;
-    m_videoAudioOutput = nullptr;
-    m_videoMessageTs = 0;
-    m_videoAttachment = -1;
-    m_videoLoadingTs = 0;
-    m_videoLoadingAttachment = -1;
-}
-
-QRect ChatView::attachmentRectForVideo() const
-{
-    if (m_videoAttachment < 0) return {};
-    for (int i = 0; i < m_msgs.size() && i < m_items.size(); ++i) {
-        if (m_msgs[i].ts() != m_videoMessageTs) continue;
-        if (m_videoAttachment >= m_items[i].attRects.size()) return {};
-        return m_items[i].attRects[m_videoAttachment]
-            .translated(0, m_items[i].y - verticalScrollBar()->value());
-    }
-    return {};
-}
-
-void ChatView::updateVideoGeometry()
-{
-    if (!m_videoWidget || !m_videoToggle || !m_videoProgress || !m_videoElapsed || !m_videoRemaining) return;
-    int index = -1;
-    for (int i = 0; i < m_msgs.size(); ++i) {
-        if (m_msgs[i].ts() == m_videoMessageTs) { index = i; break; }
-    }
-    if (index < 0 || m_videoAttachment < 0 || m_videoAttachment >= m_items[index].attRects.size()) {
-        stopVideoPlayback();
-        return;
-    }
-    const QRect rect = attachmentRectForVideo();
-    viewport()->update();
-
-    // QVideoWidget may use a native video surface that is not clipped like an
-    // ordinary child widget. Only expose it when the complete video rectangle
-    // is inside the viewport; otherwise hide it before it can overlap the
-    // composer or the area outside the scroll view.
-    const QRect viewRect = viewport()->rect();
-    const bool fullyVisible = viewRect.contains(rect);
-    m_videoWidget->setGeometry(rect);
-    m_videoWidget->setVisible(fullyVisible);
-    if (fullyVisible) m_videoWidget->lower();
-
-    const auto place = [&viewRect, fullyVisible](QWidget *w, const QRect &geometry) {
-        w->setGeometry(geometry);
-        const bool inside = fullyVisible && viewRect.contains(geometry);
-        w->setVisible(inside);
-        if (inside) w->raise();
-    };
-    const int controlsY = rect.bottom() - 46;
-    place(m_videoToggle, QRect(QPoint(rect.left() + 6, controlsY), m_videoToggle->size()));
-    place(m_videoProgress, QRect(rect.left() + 42, controlsY + 2, qMax(40, rect.width() - 50), 24));
-    place(m_videoElapsed, QRect(QPoint(rect.left() + 6, controlsY + 27), m_videoElapsed->size()));
-    place(m_videoRemaining, QRect(QPoint(rect.right() - m_videoRemaining->width() - 6, controlsY + 27),
-                                  m_videoRemaining->size()));
+    const Attachment &attachment = m_msgs[messageIndex].attachments[attachmentIndex];
+    const QString title = AttachmentUtil::displayFileName(attachment, m_msgs[messageIndex].time);
+    auto *viewer = new ChatVideoViewer(path, title, this);
+    viewer->show();
+    viewer->raise();
+    viewer->activateWindow();
 }
 
 void ChatView::setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data)
@@ -1606,7 +1479,6 @@ void ChatView::relayoutAll(bool cacheMeasureDocs)
     }
     updateScrollRange();
     viewport()->update();
-    updateVideoGeometry();
 }
 
 void ChatView::previewResize(int width)
@@ -1721,7 +1593,6 @@ void ChatView::resizeEvent(QResizeEvent *e)
         verticalScrollBar()->setValue(bottom ? verticalScrollBar()->maximum() : old);
     }
     updateToLatestButton();
-    updateVideoGeometry();
 }
 
 // ------------------------------------------------- incremental relayout (resize)
@@ -1776,7 +1647,6 @@ void ChatView::commitRelayout(bool repaint)
     applyResizeAnchor();
     --m_progScroll;
     m_quietScroll = false;
-    updateVideoGeometry();
     updateToLatestButton();
     // Rows above or below the screen changing height moves nothing that is visible (the
     // anchor sees to that), so the background pass does not repaint.
