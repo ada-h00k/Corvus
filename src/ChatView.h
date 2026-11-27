@@ -53,7 +53,7 @@ public:
                           qint64 positionMs, qint64 durationMs);
     void setVideoLoading(int messageIndex, int attachmentIndex, bool loading);
     bool isVideoLoading(int messageIndex, int attachmentIndex) const;
-    void playVideoAttachment(int messageIndex, int attachmentIndex, const QString &path);
+    void openVideoAttachment(int messageIndex, int attachmentIndex, const QString &path);
     void setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data);
     bool hasAnimatedAttachment(int messageIndex, int attachmentIndex) const;
     void clearView();
