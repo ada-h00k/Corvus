@@ -3,7 +3,6 @@
 #include <QAbstractScrollArea>
 #include <QFont>
 #include <QHash>
-#include <QImage>
 #include <QPixmap>
 #include <QSize>
 #include <QStringList>
@@ -17,12 +16,6 @@
 class QTextDocument;
 class ApngMovie;
 class QMovie;
-class QMediaPlayer;
-class QAudioOutput;
-class QVideoSink;
-class QToolButton;
-class QSlider;
-class QLabel;
 
 // Message list that paints rounded bubbles itself: quotes, inline images,
 // file rows, reactions, date separators, links and per-message text selection.
@@ -59,11 +52,8 @@ public:
     void setAudioPlayback(int messageIndex, int attachmentIndex, bool loading, bool playing,
                           qint64 positionMs, qint64 durationMs);
     void setVideoLoading(int messageIndex, int attachmentIndex, bool loading);
-    bool isVideoActive(int messageIndex, int attachmentIndex) const;
     bool isVideoLoading(int messageIndex, int attachmentIndex) const;
-    void playVideoAttachment(int messageIndex, int attachmentIndex, const QString &path);
-    void toggleVideoPlayback();
-    void stopVideoPlayback();
+    void openVideoAttachment(int messageIndex, int attachmentIndex, const QString &path);
     void setAnimatedAttachment(int messageIndex, int attachmentIndex, const QByteArray &data);
     bool hasAnimatedAttachment(int messageIndex, int attachmentIndex) const;
     void clearView();
@@ -112,7 +102,6 @@ signals:
     void attachmentActivated(int msgIdx, int attIdx);     // click: view / open
     void attachmentSaveRequested(int msgIdx, int attIdx); // context menu
     void animatedAttachmentRequested(int msgIdx, int attIdx);
-    void videoPlaybackError(const QString &error);
     void linkClicked(const QString &url);
 
 protected:
@@ -221,8 +210,6 @@ private:
     void stopAutoScroll();
     bool atBottom() const;
     void updateToLatestButton();
-    void updateVideoGeometry();
-    QRect attachmentRectForVideo() const;
 
     // Pinned-message banner (fixed strip at the top of the viewport).
     static constexpr int kBannerHeight = 44;
@@ -272,16 +259,6 @@ private:
     bool m_audioPlaying = false;
     qint64 m_audioPositionMs = 0;
     qint64 m_audioDurationMs = 0;
-    QMediaPlayer *m_videoPlayer = nullptr;
-    QAudioOutput *m_videoAudioOutput = nullptr;
-    QVideoSink *m_videoSink = nullptr;
-    QImage m_videoFrame;
-    QToolButton *m_videoToggle = nullptr;
-    QSlider *m_videoProgress = nullptr;
-    QLabel *m_videoElapsed = nullptr;
-    QLabel *m_videoRemaining = nullptr;
-    qint64 m_videoMessageTs = 0;
-    int m_videoAttachment = -1;
     qint64 m_videoLoadingTs = 0;
     int m_videoLoadingAttachment = -1;
 
