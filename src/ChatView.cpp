@@ -32,6 +32,8 @@
 #include <QSet>
 #include <QVector>
 #include <QSlider>
+#include <QStyle>
+#include <QStyleOptionSlider>
 #include <QToolTip>
 #include <QTextDocument>
 #include <QElapsedTimer>
@@ -188,6 +190,75 @@ QString videoTime(qint64 milliseconds)
         .arg(seconds, 2, 10, QLatin1Char('0'));
 }
 
+class ClickableVideoSlider final : public QSlider
+{
+public:
+    explicit ClickableVideoSlider(Qt::Orientation orientation, QWidget *parent = nullptr)
+        : QSlider(orientation, parent)
+    {
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            QStyleOptionSlider option;
+            initStyleOption(&option);
+            const QRect groove = style()->subControlRect(QStyle::CC_Slider, &option,
+                                                           QStyle::SC_SliderGroove, this);
+            const QRect handle = style()->subControlRect(QStyle::CC_Slider, &option,
+                                                          QStyle::SC_SliderHandle, this);
+            if (!handle.contains(event->pos())) {
+                const int span = groove.width() - handle.width();
+                if (span > 0) {
+                    const int position = event->pos().x() - handle.width() / 2 - groove.left();
+                    const int value = QStyle::sliderValueFromPosition(minimum(), maximum(),
+                                                                       position, span, option.upsideDown);
+                    setValue(value);
+                    emit sliderMoved(value);
+                    event->accept();
+                    return;
+                }
+            }
+        }
+        QSlider::mousePressEvent(event);
+    }
+};
+
+class ClickToToggleVideoWidget final : public QVideoWidget
+{
+public:
+    explicit ClickToToggleVideoWidget(QWidget *parent = nullptr) : QVideoWidget(parent) {}
+
+    std::function<void()> onClick;
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        m_leftPressed = event->button() == Qt::LeftButton;
+        if (m_leftPressed) m_pressPosition = event->pos();
+        QVideoWidget::mousePressEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        const bool clicked = event->button() == Qt::LeftButton && m_leftPressed &&
+                             (event->pos() - m_pressPosition).manhattanLength() <
+                                 QApplication::startDragDistance();
+        m_leftPressed = false;
+        if (clicked && onClick) {
+            onClick();
+            event->accept();
+            return;
+        }
+        QVideoWidget::mouseReleaseEvent(event);
+    }
+
+private:
+    QPoint m_pressPosition;
+    bool m_leftPressed = false;
+};
+
 class ChatVideoViewer final : public QDialog
 {
 public:
@@ -200,14 +271,14 @@ public:
         auto *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 8);
         layout->setSpacing(6);
-        auto *video = new QVideoWidget;
+        auto *video = new ClickToToggleVideoWidget;
         video->setMinimumSize(320, 200);
         layout->addWidget(video, 1);
         auto *controls = new QHBoxLayout;
         controls->setContentsMargins(10, 0, 10, 0);
         auto *toggle = new QPushButton(QStringLiteral("⏸"));
         toggle->setFixedWidth(40);
-        auto *slider = new QSlider(Qt::Horizontal);
+        auto *slider = new ClickableVideoSlider(Qt::Horizontal);
         auto *time = new QLabel(QStringLiteral("0:00 / 0:00"));
         controls->addWidget(toggle);
         controls->addWidget(slider, 1);
@@ -231,6 +302,7 @@ public:
         });
         connect(slider, &QSlider::sliderMoved, m_player, &QMediaPlayer::setPosition);
         connect(toggle, &QPushButton::clicked, this, [this] { togglePlayback(); });
+        video->onClick = [this] { togglePlayback(); };
         connect(m_player, &QMediaPlayer::errorOccurred, this, [time](QMediaPlayer::Error, const QString &error) {
             time->setText(error);
         });
