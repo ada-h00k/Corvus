@@ -36,7 +36,6 @@
 #include <QTextDocument>
 #include <QElapsedTimer>
 #include <QTimer>
-#include <QVideoWidget>
 #include <algorithm>
 #include <numeric>
 
@@ -898,7 +897,7 @@ void ChatView::setVideoLoading(int messageIndex, int attachmentIndex, bool loadi
                            .translated(0, m_items[messageIndex].y - verticalScrollBar()->value()));
 }
 
-void ChatView::playVideoAttachment(int messageIndex, int attachmentIndex, const QString &path)
+void ChatView::openVideoAttachment(int messageIndex, int attachmentIndex, const QString &path)
 {
     if (messageIndex < 0 || messageIndex >= m_msgs.size() || attachmentIndex < 0 ||
         attachmentIndex >= m_msgs[messageIndex].attachments.size()) return;
