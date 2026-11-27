@@ -726,8 +726,14 @@ void ChatView::showMessages(const QList<Message> &msgs, bool keepScroll, const Q
     const bool bottom = atBottom();
     const int old = verticalScrollBar()->value();
 
-    if (!conversationKey.isEmpty() && conversationKey != m_conversationKey)
+    if (!conversationKey.isEmpty() && conversationKey != m_conversationKey) {
+        // A pending video download belongs to the conversation being left. Its callback
+        // is ignored when the user has switched chats, so do not carry the loading marker
+        // into the next conversation (or a cached visit back to this one).
+        m_videoLoadingTs = 0;
+        m_videoLoadingAttachment = -1;
         cacheCurrentConversation();
+    }
 
     m_group = group;
     m_pins = pins;
