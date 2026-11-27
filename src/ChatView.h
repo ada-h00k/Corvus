@@ -3,7 +3,6 @@
 #include <QAbstractScrollArea>
 #include <QFont>
 #include <QHash>
-#include <QImage>
 #include <QPixmap>
 #include <QSize>
 #include <QStringList>
@@ -19,7 +18,7 @@ class ApngMovie;
 class QMovie;
 class QMediaPlayer;
 class QAudioOutput;
-class QVideoSink;
+class QVideoWidget;
 class QToolButton;
 class QSlider;
 class QLabel;
@@ -274,8 +273,7 @@ private:
     qint64 m_audioDurationMs = 0;
     QMediaPlayer *m_videoPlayer = nullptr;
     QAudioOutput *m_videoAudioOutput = nullptr;
-    QVideoSink *m_videoSink = nullptr;
-    QImage m_videoFrame;
+    QVideoWidget *m_videoWidget = nullptr;
     QToolButton *m_videoToggle = nullptr;
     QSlider *m_videoProgress = nullptr;
     QLabel *m_videoElapsed = nullptr;
