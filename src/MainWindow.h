@@ -473,6 +473,7 @@ private:
     qint64 m_lastSoundMs = 0;
     // catch-up state (see beginCatchUp)
     bool m_catchingUp = false;
+    bool m_backlogShown = false; // the title shows the backlog counter
     qint64 m_connectedAtMs = 0;
     QTimer m_catchUpTimer;       // single shot: fires when no envelope arrived for a while
     QTimer m_refreshListTimer;   // single shot: coalesced refreshList() during the catch-up

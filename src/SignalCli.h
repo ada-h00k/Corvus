@@ -86,6 +86,9 @@ public:
     bool isRunning() const { return m_proc != nullptr; }
     // Incoming messages that have arrived but are not processed yet (the backlog after a start).
     int pendingBacklog() const { return int(m_backlog.size()); }
+    // Handles all queued incoming messages right now. Call before quitting or replacing the
+    // backend: they were already read from it, so they must not be lost.
+    void flushBacklog();
     void call(const QString &method, const QJsonObject &params, Callback cb);
 
 signals:
@@ -122,7 +125,8 @@ private:
     QByteArray m_buf;
     qsizetype m_searchFrom = 0;   // m_buf holds no '\n' before this offset (do not rescan a long partial line)
     bool m_drainQueued = false;   // a continuation of drain() is already scheduled
-    QList<QByteArray> m_backlog;  // queued `receive` lines, oldest first
+    QList<QByteArray> m_backlog;  // queued `receive` lines, oldest first; survives stop()/start()
+    QList<QByteArray> m_foreground; // other lines of the current pass, not handled yet
     bool m_backlogQueued = false;
     bool m_backlogRunning = false;
     bool m_draining = false;      // drain() is running (a callback may spin a nested event loop)

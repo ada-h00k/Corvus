@@ -114,8 +114,32 @@ private slots:
         QVERIFY2(maxGapMs < 120, qPrintable(QStringLiteral("event loop was blocked for %1 ms").arg(maxGapMs)));
     }
 
-    // A callback may stop the backend in the middle of a slice: nothing is delivered afterwards.
-    void stopInsideACallbackDropsTheRest()
+    // Messages that were read from the backend but are still queued must survive stop() and
+    // are handled by flushBacklog() (this is what runs before the application quits).
+    void queuedMessagesSurviveStopAndFlush()
+    {
+        const int kEnvelopes = 3000;
+        SignalCli cli;
+        cli.setExecutable(writeBackend(kEnvelopes, 0));
+        int received = 0;
+        connect(&cli, &SignalCli::envelopeReceived, this, [&](const QJsonObject &) {
+            burnMicroseconds(300);
+            ++received;
+        });
+        cli.start(QStringLiteral("+49000"));
+        QTRY_VERIFY_WITH_TIMEOUT(cli.pendingBacklog() > 100, 10000);
+
+        const int queued = cli.pendingBacklog();
+        const int before = received;
+        cli.stop(); // e.g. a reconnect
+        QCOMPARE(cli.pendingBacklog(), queued); // nothing was thrown away
+        cli.flushBacklog();
+        QCOMPARE(cli.pendingBacklog(), 0);
+        QCOMPARE(received, before + queued);
+    }
+
+    // A callback may stop the backend in the middle of the backlog: the queue goes on.
+    void stopInsideACallbackKeepsTheQueue()
     {
         const int kEnvelopes = 2000;
         SignalCli cli;
@@ -127,10 +151,14 @@ private slots:
         });
         cli.start(QStringLiteral("+49000"));
         QTRY_VERIFY_WITH_TIMEOUT(received >= 50, 10000);
-        QTest::qWait(300);
-        QCOMPARE(received, 50);
+        const int queued = cli.pendingBacklog();
+        const int atStop = received;
+        cli.flushBacklog();
+        QCOMPARE(cli.pendingBacklog(), 0);
+        QCOMPARE(received, atStop + queued);
         QVERIFY(!cli.isRunning());
     }
+
     // The answer to a call sits behind the whole backlog on the pipe, but is handled at once:
     // the queued messages are worked off in the background afterwards.
     void answersDoNotWaitForTheBacklog()

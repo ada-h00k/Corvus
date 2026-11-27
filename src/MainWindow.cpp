@@ -1207,8 +1207,16 @@ MainWindow::MainWindow()
         else endCatchUp();
     });
     connect(&m_cli, &SignalCli::backlogChanged, this, [this](int pending) {
-        setWindowTitle(pending > 0 ? tr("Corvus – receiving messages (%1)").arg(pending) : QStringLiteral("Corvus"));
+        // Only a real backlog is shown: single messages and receipts must not make the title flicker.
+        constexpr int kShowFrom = 20;
+        if (pending >= kShowFrom) m_backlogShown = true;
+        else if (pending == 0) m_backlogShown = false;
+        setWindowTitle(m_backlogShown && pending > 0 ? tr("Corvus – receiving messages (%1)").arg(pending)
+                                                     : QStringLiteral("Corvus"));
     });
+    // Queued messages were already read from the backend: they are written to the history
+    // before the application ends, whichever way it ends.
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { m_cli.flushBacklog(); });
     m_refreshListTimer.setSingleShot(true);
     connect(&m_refreshListTimer, &QTimer::timeout, this, &MainWindow::rebuildList);
     m_downloadedScanTimer.setSingleShot(true);
@@ -1755,6 +1763,7 @@ void MainWindow::connectAccount()
     // starts. The version is read on every (re)connect, so an update of corvus-cli
     // is noticed without restarting the GUI.
     const int gen = ++m_connectGen;
+    m_cli.flushBacklog(); // nothing that was received may be lost by the restart
     m_cli.stop();
     setConnected(false);
 
@@ -1896,6 +1905,7 @@ void MainWindow::linkDevice()
         box.exec();
         if (box.clickedButton() != fresh) return;
     }
+    m_cli.flushBacklog();
     m_cli.stop();
     setConnected(false);
     LinkDialog dlg(m_cli.executable(), this);

@@ -267,8 +267,7 @@ void SignalCli::start(const QString &account)
     m_buf.clear();
     m_searchFrom = 0;
     m_drainQueued = false;
-    m_backlog.clear();
-    m_backlogQueued = false;
+    m_foreground.clear(); // answers of the old process; queued messages stay (see processBacklog)
     ++m_gen;
     m_lastErrLine.clear();
 
@@ -312,11 +311,8 @@ void SignalCli::stop()
     m_buf.clear();
     m_searchFrom = 0;
     m_drainQueued = false;
-    const bool hadBacklog = !m_backlog.isEmpty();
-    m_backlog.clear();
-    m_backlogQueued = false;
+    m_foreground.clear();
     ++m_gen;
-    if (hadBacklog) emit backlogChanged(0);
     p->disconnect(this);
     p->closeWriteChannel();
     p->terminate();
@@ -365,9 +361,10 @@ void SignalCli::drain()
     } reset{m_draining};
     m_drainQueued = false;
     const quint64 gen = m_gen;
-    QElapsedTimer slice;
-    slice.start();
 
+    // Pass 1, cheap (no JSON parsing): split off the complete lines. Incoming messages go into
+    // the backlog queue right here, before any callback runs, so that nothing a callback does
+    // (stop(), start()) can lose a message that was already read from the backend.
     qsizetype pos = 0;
     while (true) {
         // No '\n' exists before m_searchFrom: a long line that arrives in many chunks
@@ -376,19 +373,24 @@ void SignalCli::drain()
         if (nl < 0) break;
         const QByteArray line = m_buf.mid(pos, nl - pos).trimmed();
         pos = nl + 1;
-        if (!line.isEmpty()) {
-            if (isReceiveLine(line)) {
-                m_backlog.append(line);
-            } else {
-                handleLine(line);
-                // A callback may have stopped or restarted the process; the buffer is new then.
-                if (gen != m_gen) return;
-            }
-        }
-        if (slice.elapsed() >= kSliceMs && m_buf.indexOf('\n', pos) >= 0) {
-            m_buf.remove(0, pos); // one removal per slice instead of one per line
-            m_searchFrom = 0;
-            scheduleBacklog();
+        if (line.isEmpty()) continue;
+        if (isReceiveLine(line)) m_backlog.append(line);
+        else m_foreground.append(line);
+    }
+    m_buf.remove(0, pos); // one removal per pass instead of one per line
+    m_searchFrom = m_buf.size(); // the rest is one incomplete line
+    scheduleBacklog();
+
+    // Pass 2: answers, typing events, download notices: at once, in slices.
+    QElapsedTimer slice;
+    slice.start();
+    while (!m_foreground.isEmpty()) {
+        const QByteArray line = m_foreground.takeFirst();
+        handleLine(line);
+        // A callback may have stopped or restarted the backend: what is left belongs to the old
+        // process (answers to calls that were failed already). Queued messages are kept.
+        if (gen != m_gen) return;
+        if (slice.elapsed() >= kSliceMs && !m_foreground.isEmpty()) {
             m_drainQueued = true;
             QTimer::singleShot(0, this, [this, gen] {
                 if (gen == m_gen) drain();
@@ -396,9 +398,6 @@ void SignalCli::drain()
             return;
         }
     }
-    m_buf.remove(0, pos);
-    m_searchFrom = m_buf.size(); // the rest is one incomplete line
-    scheduleBacklog();
 }
 
 bool SignalCli::isReceiveLine(const QByteArray &line)
@@ -415,18 +414,15 @@ void SignalCli::scheduleBacklog()
     emit backlogChanged(int(m_backlog.size()));
     if (m_backlogQueued || m_backlogRunning) return;
     m_backlogQueued = true;
-    const quint64 gen = m_gen;
-    QTimer::singleShot(0, this, [this, gen] {
-        if (gen == m_gen) processBacklog();
-    });
+    QTimer::singleShot(0, this, &SignalCli::processBacklog);
 }
 
 void SignalCli::processBacklog()
 {
     // The share of the GUI thread the backlog may take: a slice of work, then a pause in which
     // painting, typing, opening chats and the answers handled in drain() come first.
-    constexpr qint64 kBacklogSliceMs = 8;
-    constexpr int kBacklogPauseMs = 8;
+    constexpr qint64 kBacklogSliceMs = 10;
+    constexpr int kBacklogPauseMs = 6;
     m_backlogQueued = false;
     if (m_backlogRunning) return;
     m_backlogRunning = true;
@@ -434,24 +430,37 @@ void SignalCli::processBacklog()
         bool &flag;
         ~Reset() { flag = false; }
     } reset{m_backlogRunning};
-    const quint64 gen = m_gen;
     QElapsedTimer slice;
     slice.start();
 
-    qsizetype done = 0;
-    while (done < m_backlog.size()) {
-        const QByteArray line = m_backlog.at(done++);
+    // The queue is independent of the backend process: a stop() or start() in a callback does
+    // not drop it. Messages that were read from the backend are always worked off.
+    while (!m_backlog.isEmpty()) {
+        const QByteArray line = m_backlog.takeFirst();
         handleLine(line);
-        if (gen != m_gen) return; // stop()/start() in a callback cleared the queue
         if (slice.elapsed() >= kBacklogSliceMs) break;
     }
-    m_backlog.remove(0, done);
     emit backlogChanged(int(m_backlog.size()));
     if (m_backlog.isEmpty() || m_backlogQueued) return;
     m_backlogQueued = true;
-    QTimer::singleShot(kBacklogPauseMs, this, [this, gen] {
-        if (gen == m_gen) processBacklog();
-    });
+    QTimer::singleShot(kBacklogPauseMs, this, &SignalCli::processBacklog);
+}
+
+void SignalCli::flushBacklog()
+{
+    // Everything that was received is handled now, without slices: before the application quits
+    // or the backend is replaced, queued messages must reach the history.
+    if (m_backlogRunning) return; // called from a callback of the backlog itself: the loop goes on
+    m_backlogRunning = true;
+    struct Reset {
+        bool &flag;
+        ~Reset() { flag = false; }
+    } reset{m_backlogRunning};
+    while (!m_backlog.isEmpty()) {
+        const QByteArray line = m_backlog.takeFirst();
+        handleLine(line);
+    }
+    emit backlogChanged(0);
 }
 
 QJsonObject SignalCli::envelopeFromNotification(const QJsonObject &notification)
