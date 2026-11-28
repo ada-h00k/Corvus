@@ -99,6 +99,7 @@
 #include <QUuid>
 #include <QVBoxLayout>
 #include <QVersionNumber>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QThreadPool>
 #include <algorithm>
@@ -120,6 +121,9 @@ static bool isSpecialKey(const QString &key)
 static const qint64 kMaxThumbSource = 30LL * 1024 * 1024;
 static constexpr int kCatchUpFirstMs = 8000; // wait for the first envelope of the backlog this long
 static constexpr int kCatchUpInlineAlerts = 3; // notifications shown one by one before the rest is summarised
+static constexpr int kStageQuietMs = 300;     // no new envelope for this long: processing starts
+static constexpr int kStageMaxWaitMs = 1500;  // ... or after this long even if more keep coming
+static constexpr int kStageOtherQuietMs = 1200; // reactions, deletes ... wait for this long without new arrivals
 static constexpr int kCatchUpIdleMs = 2500;  // no envelope for this long: the backlog is through
 static const qint64 kMaxAttachment = 100LL * 1024 * 1024; // Signal's upload limit
 static constexpr int kReadSyncBatchSize = 500; // corvus-cli rejects larger sync messages
@@ -1202,20 +1206,15 @@ MainWindow::MainWindow()
     m_catchUpTimer.setSingleShot(true); // started with kCatchUpFirstMs / kCatchUpIdleMs, see beginCatchUp()
     connect(&m_catchUpTimer, &QTimer::timeout, this, [this] {
         // Messages are still queued (they are worked off in the background): not through yet.
-        if (m_cli.pendingBacklog() > 0) m_catchUpTimer.start(kCatchUpIdleMs);
+        if (m_cli.pendingBacklog() > 0 || stagedCount() > 0) m_catchUpTimer.start(kCatchUpIdleMs);
         else endCatchUp();
     });
-    connect(&m_cli, &SignalCli::backlogChanged, this, [this](int pending) {
-        // Only a real backlog is shown: single messages and receipts must not make the title flicker.
-        constexpr int kShowFrom = 20;
-        if (pending >= kShowFrom) m_backlogShown = true;
-        else if (pending == 0) m_backlogShown = false;
-        setWindowTitle(m_backlogShown && pending > 0 ? tr("Corvus – receiving messages (%1)").arg(pending)
-                                                     : QStringLiteral("Corvus"));
-    });
+    connect(&m_cli, &SignalCli::backlogChanged, this, [this] { updateBacklogTitle(); });
+    m_stageTimer.setSingleShot(true);
+    connect(&m_stageTimer, &QTimer::timeout, this, &MainWindow::processStaged);
     // Queued messages were already read from the backend: they are written to the history
     // before the application ends, whichever way it ends.
-    connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { m_cli.flushBacklog(); });
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { flushStaged(); });
     m_refreshListTimer.setSingleShot(true);
     connect(&m_refreshListTimer, &QTimer::timeout, this, &MainWindow::rebuildList);
     m_downloadedScanTimer.setSingleShot(true);
@@ -1762,7 +1761,7 @@ void MainWindow::connectAccount()
     // starts. The version is read on every (re)connect, so an update of corvus-cli
     // is noticed without restarting the GUI.
     const int gen = ++m_connectGen;
-    m_cli.flushBacklog(); // nothing that was received may be lost by the restart
+    flushStaged(); // nothing that was received may be lost by the restart
     m_cli.stop();
     setConnected(false);
 
@@ -1904,7 +1903,7 @@ void MainWindow::linkDevice()
         box.exec();
         if (box.clickedButton() != fresh) return;
     }
-    m_cli.flushBacklog();
+    flushStaged();
     m_cli.stop();
     setConnected(false);
     LinkDialog dlg(m_cli.executable(), this);
@@ -3227,7 +3226,10 @@ bool MainWindow::addMessage(const QString &key, Message m, const QString &title,
     Conversation &c = conv(key, title, group);
     if (findMessage(c, m.ts(), QStringList{effectiveAuthor(c, m)}) >= 0) return false; // duplicate
     const qint64 previousOrder = c.msgs.isEmpty() ? 0 : c.msgs.last().sortTs();
-    m.orderTs = std::max({m.orderTs, QDateTime::currentMSecsSinceEpoch(), previousOrder + 1});
+    if (m_envArrivalMs > 0)
+        m.orderTs = std::max(m.orderTs, m_envArrivalMs); // replayed backlog: placed by arrival, whatever the processing order
+    else
+        m.orderTs = std::max({m.orderTs, QDateTime::currentMSecsSinceEpoch(), previousOrder + 1});
     if (!m.outgoing && m.expiresInSeconds > 0 && key == m_current && isVisible() && !isMinimized())
         m.expirationStartMs = QDateTime::currentMSecsSinceEpoch();
 
@@ -3245,6 +3247,8 @@ bool MainWindow::addMessage(const QString &key, Message m, const QString &title,
     if (key == m_current) {
         if (at == c.msgs.size() - 1)
             m_view->appendMessage(m);
+        else if (m_catchingUp)
+            scheduleConversationRefresh(key); // older messages land above: one re-render, not one per message
         else
             showConversation(true);
     }
@@ -5084,10 +5088,158 @@ void MainWindow::onEnvelope(const QJsonObject &env)
     if (m_catchingUp) {
         // Still receiving the backlog: stay in catch-up while envelopes keep coming, but never
         // longer than a minute, so a busy chat cannot hold back its notifications forever.
-        if (QDateTime::currentMSecsSinceEpoch() - m_connectedAtMs > 60 * 1000 && m_cli.pendingBacklog() == 0)
+        if (QDateTime::currentMSecsSinceEpoch() - m_connectedAtMs > 60 * 1000 && m_cli.pendingBacklog() == 0 &&
+            stagedCount() == 0)
             endCatchUp();
         else m_catchUpTimer.start(kCatchUpIdleMs);
+        if (stageEnvelope(env)) return;
     }
+    onEnvelopeNow(env);
+}
+
+void MainWindow::updateBacklogTitle()
+{
+    const int pending = m_cli.pendingBacklog() + stagedCount();
+    // Only a real backlog is shown: single messages and receipts must not make the title flicker.
+    constexpr int kShowFrom = 20;
+    if (pending >= kShowFrom) m_backlogShown = true;
+    else if (pending == 0) m_backlogShown = false;
+    setWindowTitle(m_backlogShown && pending > 0 ? tr("Corvus – receiving messages (%1)").arg(pending)
+                                                 : QStringLiteral("Corvus"));
+}
+
+bool MainWindow::stageEnvelope(const QJsonObject &env)
+{
+    const ParsedEnvelope pe = parseEnvelope(env);
+    if (pe.kind == ParsedEnvelope::None) return true; // nothing to do, as before
+    if (pe.kind == ParsedEnvelope::Typing) return false; // short-lived: handled right away
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_arrivalClock == 0) {
+        // Arrival stamps must lie after everything that is in the history already.
+        qint64 newest = 0;
+        for (auto it = m_convs.constBegin(); it != m_convs.constEnd(); ++it)
+            if (!it->msgs.isEmpty()) newest = std::max(newest, it->msgs.last().sortTs());
+        m_arrivalClock = std::max(now, newest + 1);
+    }
+    m_arrivalClock = std::max(m_arrivalClock + 1, now);
+    if (stagedCount() == 0) m_stageFirstMs = now;
+    m_stageLastMs = now;
+
+    const bool group = !pe.groupId.isEmpty();
+    StagedEnvelope staged;
+    staged.env = env;
+    staged.key = group ? QStringLiteral("g:") + pe.groupId : resolveKey(pe.outgoing ? pe.destination : pe.src);
+    staged.arrivalMs = m_arrivalClock;
+    if (pe.kind == ParsedEnvelope::Message_ && !pe.untrustedIdentity) {
+        m_stagedMessages.append(std::move(staged));
+        m_stageSortDirty = true;
+    } else {
+        m_stagedOther.append(std::move(staged));
+    }
+
+    if (!m_stageRunning) {
+        // Wait until the arrival has quieted down (the backlog is mostly through), so that
+        // "newest first" has something to choose from; but not for longer than kStageMaxWaitMs.
+        const bool waitedLongEnough = now - m_stageFirstMs >= kStageMaxWaitMs;
+        if (waitedLongEnough) m_stageRunning = true;
+        m_stageTimer.start(waitedLongEnough ? 0 : kStageQuietMs);
+    }
+    return true;
+}
+
+void MainWindow::processStaged()
+{
+    // A slice of work, then back to the event loop: painting, typing and opening chats go first.
+    constexpr qint64 kSliceMs = 10;
+    constexpr int kPauseMs = 6;
+    static bool running = false;
+    if (running) return;
+    running = true;
+    struct Reset {
+        ~Reset() { running = false; }
+    } reset;
+    m_stageRunning = true;
+
+    QElapsedTimer slice;
+    slice.start();
+    if (!m_stagedMessages.isEmpty()) {
+        if (m_stageSortDirty || m_stageSortedFor != m_current) {
+            const QString current = m_current;
+            std::stable_sort(m_stagedMessages.begin(), m_stagedMessages.end(),
+                             [&current](const StagedEnvelope &a, const StagedEnvelope &b) {
+                                 const bool ac = a.key == current;
+                                 const bool bc = b.key == current;
+                                 if (ac != bc) return ac; // the open chat first
+                                 return a.arrivalMs > b.arrivalMs; // newest first
+                             });
+            m_stageSortDirty = false;
+            m_stageSortedFor = current;
+        }
+        while (!m_stagedMessages.isEmpty() && slice.elapsed() < kSliceMs) {
+            const StagedEnvelope s = m_stagedMessages.takeFirst();
+            m_envArrivalMs = s.arrivalMs;
+            onEnvelopeNow(s.env);
+            m_envArrivalMs = 0;
+        }
+    } else if (!m_stagedOther.isEmpty()) {
+        // Reactions, edits, deletes, receipts ... refer to messages: only now, in original
+        // order, and once nothing more is arriving.
+        const bool arrivalQuiet = QDateTime::currentMSecsSinceEpoch() - m_stageLastMs >= kStageOtherQuietMs &&
+                                  m_cli.pendingBacklog() == 0;
+        if (!arrivalQuiet) {
+            updateBacklogTitle();
+            m_stageTimer.start(250);
+            return;
+        }
+        while (!m_stagedOther.isEmpty() && slice.elapsed() < kSliceMs) {
+            const StagedEnvelope s = m_stagedOther.takeFirst();
+            m_envArrivalMs = s.arrivalMs;
+            onEnvelopeNow(s.env);
+            m_envArrivalMs = 0;
+        }
+    }
+    updateBacklogTitle();
+    if (stagedCount() > 0) m_stageTimer.start(kPauseMs);
+    else m_stageRunning = false;
+}
+
+void MainWindow::flushStaged()
+{
+    m_cli.flushBacklog(); // what was read from the backend is staged first
+    m_stageTimer.stop();
+    static bool flushing = false;
+    if (flushing) return;
+    flushing = true;
+    struct Reset {
+        ~Reset() { flushing = false; }
+    } reset;
+    const QString current = m_current;
+    std::stable_sort(m_stagedMessages.begin(), m_stagedMessages.end(),
+                     [&current](const StagedEnvelope &a, const StagedEnvelope &b) {
+                         const bool ac = a.key == current;
+                         const bool bc = b.key == current;
+                         if (ac != bc) return ac;
+                         return a.arrivalMs > b.arrivalMs;
+                     });
+    while (!m_stagedMessages.isEmpty()) {
+        const StagedEnvelope s = m_stagedMessages.takeFirst();
+        m_envArrivalMs = s.arrivalMs;
+        onEnvelopeNow(s.env);
+        m_envArrivalMs = 0;
+    }
+    while (!m_stagedOther.isEmpty()) {
+        const StagedEnvelope s = m_stagedOther.takeFirst();
+        m_envArrivalMs = s.arrivalMs;
+        onEnvelopeNow(s.env);
+        m_envArrivalMs = 0;
+    }
+    m_stageRunning = false;
+    updateBacklogTitle();
+}
+
+void MainWindow::onEnvelopeNow(const QJsonObject &env)
+{
     ParsedEnvelope pe = parseEnvelope(env);
     if (pe.kind == ParsedEnvelope::None) return;
 
@@ -7829,6 +7981,7 @@ void MainWindow::beginCatchUp()
     m_catchingUp = true;
     m_connectedAtMs = QDateTime::currentMSecsSinceEpoch();
     m_catchUpAlerts = 0;
+    m_arrivalClock = 0;
     // The backend needs a moment to reach the server before the first envelope of the backlog
     // arrives (slow networks: several seconds). After that, a short pause means it is through.
     m_catchUpTimer.start(kCatchUpFirstMs);

@@ -200,7 +200,19 @@ struct Message {
     QString contactAvatarId; // attachment id of the card's avatar image (persisted)
     QString contactAvatar;   // avatar bytes (base64): runtime cache or own-card preview
 
-    qint64 ts() const { return time.toMSecsSinceEpoch(); }
+    // QDateTime::toMSecsSinceEpoch() of a local time costs about a microsecond (mktime, a system
+    // call for the time zone file) and ts() is called for every message in a loop over a whole
+    // conversation, for every incoming message: a backlog of a few thousand messages took
+    // half a minute. The value is cached; comparing two QDateTime is ~100x cheaper than converting.
+    qint64 ts() const
+    {
+        if (!time.isValid()) return time.toMSecsSinceEpoch();
+        if (m_tsKey != time) {
+            m_ts = time.toMSecsSinceEpoch();
+            m_tsKey = time;
+        }
+        return m_ts;
+    }
     qint64 sortTs() const { return orderTs > 0 ? orderTs : ts(); }
     qint64 latestTs() const { return editTs > 0 ? editTs : ts(); }
     bool isEdited() const { return editCount > 0; }
@@ -211,6 +223,9 @@ struct Message {
     {
         return outgoing && !deleted && !text.isEmpty() && editCount < kMaxEdits && nowMs - ts() <= kEditWindowMs;
     }
+    // cache of ts(): not part of the message, public only to keep Message a plain struct
+    mutable QDateTime m_tsKey; // `time` the cached m_ts belongs to
+    mutable qint64 m_ts = 0;
 };
 
 // A pinned message, like in the official clients: at most three per chat, shown in a

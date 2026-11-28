@@ -294,6 +294,16 @@ if(CORVUS_TESTS)
         add_test(NAME gui_integration COMMAND gui_integration_test)
     endif()
 
+    add_executable(catchup_order_test tests/catchup_order_test.cpp)
+    target_link_libraries(catchup_order_test PRIVATE app_core Qt6::Test)
+    target_compile_definitions(catchup_order_test PRIVATE
+        MOCK_CLI="${CMAKE_BINARY_DIR}/tests/mock-signal-cli.py")
+    add_test(NAME catchup_order COMMAND catchup_order_test)
+    set_tests_properties(catchup_order PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 180
+    )
+
     add_executable(safety_number_test tests/safety_number_test.cpp)
     target_link_libraries(safety_number_test PRIVATE app_core Qt6::Test)
     target_compile_definitions(safety_number_test PRIVATE

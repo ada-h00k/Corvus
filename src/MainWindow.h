@@ -95,6 +95,15 @@ protected:
 private slots:
     void initialise();
     void onEnvelope(const QJsonObject &env);
+    void onEnvelopeNow(const QJsonObject &env); // the actual handling of one envelope
+    // Catch-up staging: while the backlog arrives, incoming messages are collected and then
+    // processed newest first (the open chat first), so what is current shows up first. All other
+    // envelopes (reactions, edits, deletes, receipts ...) follow in their original order.
+    bool stageEnvelope(const QJsonObject &env); // true: taken over, false: handle it right away
+    void processStaged();
+    void flushStaged(); // everything staged and queued is handled now (before quitting / reconnecting)
+    int stagedCount() const { return int(m_stagedMessages.size() + m_stagedOther.size()); }
+    void updateBacklogTitle();
     void onSelectionChanged(QListWidgetItem *item);
     void sendMessage();
     void forwardMessage(int idx);
@@ -474,6 +483,21 @@ private:
     // catch-up state (see beginCatchUp)
     bool m_catchingUp = false;
     bool m_backlogShown = false; // the title shows the backlog counter
+    struct StagedEnvelope {
+        QJsonObject env;
+        QString key;          // conversation, only used to put the open chat first
+        qint64 arrivalMs = 0; // when it arrived; decides the position in the chat, not the processing order
+    };
+    QList<StagedEnvelope> m_stagedMessages;
+    QList<StagedEnvelope> m_stagedOther;
+    QTimer m_stageTimer;          // single shot: start / continue processing the staged envelopes
+    bool m_stageRunning = false;  // processing has begun (the arrival has quieted down)
+    bool m_stageSortDirty = false;
+    QString m_stageSortedFor;     // open chat the staged messages were sorted for
+    qint64 m_stageFirstMs = 0;    // arrival of the first staged envelope
+    qint64 m_stageLastMs = 0;     // arrival of the last one
+    qint64 m_arrivalClock = 0;    // strictly increasing arrival stamps (0: not initialised for this catch-up)
+    qint64 m_envArrivalMs = 0;    // set while a staged envelope is replayed: its stamp for addMessage()
     qint64 m_connectedAtMs = 0;
     QTimer m_catchUpTimer;       // single shot: fires when no envelope arrived for a while
     QTimer m_refreshListTimer;   // single shot: coalesced refreshList() during the catch-up
